@@ -1,0 +1,65 @@
+# =============================================================================
+# LMForge — .gitignore
+# =============================================================================
+
+# ── Rust build artifacts ───────────────────────────────────────────────────────
+/target/
+ui/src-tauri/target/
+
+# Keep Cargo.lock (single binary app — lock file aids reproducibility)
+# Cargo.lock   ← intentionally NOT ignored
+
+# ── LMForge runtime data (user-local, never committed) ────────────────────────
+# Model weights, engine binaries, logs, hardware cache
+.lmforge/
+
+# ── IDE / Editor ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.iml
+*.sublime-project
+*.sublime-workspace
+.claude/
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# ── Linux ─────────────────────────────────────────────────────────────────────
+*~
+.nfs*
+
+# ── Environment & Secrets ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.token
+
+# ── Test / Temp files ─────────────────────────────────────────────────────────
+*.tmp
+*.bak
+*.swp
+*.swo
+/tmp/
+scratch/
+
+# ── Tauri / Frontend build ────────────────────────────────────────────────────
+ui/node_modules/
+ui/.svelte-kit/
+ui/build/
+ui/dist/
+
+# ── Release artifacts (local packaging) ───────────────────────────────────────
+*.tar.gz
+*.zip
+dist/
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/

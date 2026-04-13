@@ -1,0 +1,77 @@
+[package]
+name = "lmforge"
+version = "0.1.0"
+edition = "2024"
+description = "Hardware-aware LLM inference orchestrator — from edge to server"
+license = "MIT"
+repository = "https://github.com/titasbiswas/lmforge"
+
+[[bin]]
+name = "lmforge"
+path = "src/main.rs"
+
+# Version pinning strategy:
+# - Cargo.toml uses minimum compatible versions (e.g., "0.8" or "1.0")
+# - Cargo.lock (checked into version control) pins exact versions for reproducibility
+# - `cargo update` is run intentionally, never automatically
+
+[dependencies]
+# CLI
+clap = { version = "4.6", features = ["derive"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "1.1"
+
+# Async runtime
+tokio = { version = "1.50", features = ["full"] }
+
+# HTTP server
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# HTTP client
+reqwest = { version = "0.13", features = ["json", "stream"] }
+
+# Logging / Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+
+# System info
+sysinfo = "0.38"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6.0"
+sha2 = "0.10"
+indicatif = "0.17"
+futures = "0.3"
+libc = "0.2"
+nix = { version = "0.30", features = ["signal", "process"] }
+bytes = "1.10"
+shellexpand = "3.1"
+rustyline = "14.0"
+tokio-stream = "0.1"
+
+[dev-dependencies]
+tempfile = "3.19"
+wiremock = "0.6"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1
+
+[workspace]
+members = [
+    ".",
+    "ui/src-tauri"
+]
