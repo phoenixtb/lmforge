@@ -30,8 +30,7 @@ pub async fn chat(
     debug!(model = ?ollama_req.get("model"), "Ollama /api/chat request");
 
     // Translate to OpenAI format
-    let openai_req = translate_ollama_to_openai(&ollama_req);
-    let openai_body = serde_json::to_vec(&openai_req).unwrap_or_default();
+    let mut openai_req = translate_ollama_to_openai(&ollama_req);
 
     let model_id = ollama_req.get("model").and_then(|v| v.as_str()).unwrap_or("default").to_string();
     let keep_alive = ollama_req.get("keep_alive").and_then(|v| {
@@ -44,6 +43,18 @@ pub async fn chat(
         Ok(p) => p,
         Err(resp) => return resp.into_response(),
     };
+
+    let index = crate::model::index::ModelIndex::load(&state.data_dir)
+        .unwrap_or_else(|_| crate::model::index::ModelIndex { schema_version: 1, models: vec![] });
+    if let Some(entry) = index.get(&model_id) {
+        if let Some(dir_name) = std::path::Path::new(&entry.path).file_name() {
+            if let Some(obj) = openai_req.as_object_mut() {
+                obj.insert("model".to_string(), serde_json::Value::String(dir_name.to_string_lossy().to_string()));
+            }
+        }
+    }
+
+    let openai_body = serde_json::to_vec(&openai_req).unwrap_or_default();
 
     let is_stream = ollama_req.get("stream").and_then(|v| v.as_bool()).unwrap_or(true);
     let client = proxy::build_proxy_client();
@@ -100,12 +111,23 @@ pub async fn generate(
         else { None }
     });
     if let Some(obj) = body_value.as_object_mut() { obj.remove("keep_alive"); }
-    let forwarded_body = Bytes::from(serde_json::to_vec(&body_value).unwrap_or_default());
 
     let engine_port = match state.ensure_model(&model_id, keep_alive).await {
         Ok(p) => p,
         Err(resp) => return resp.into_response(),
     };
+
+    let index = crate::model::index::ModelIndex::load(&state.data_dir)
+        .unwrap_or_else(|_| crate::model::index::ModelIndex { schema_version: 1, models: vec![] });
+    if let Some(entry) = index.get(&model_id) {
+        if let Some(dir_name) = std::path::Path::new(&entry.path).file_name() {
+            if let Some(obj) = body_value.as_object_mut() {
+                obj.insert("model".to_string(), serde_json::Value::String(dir_name.to_string_lossy().to_string()));
+            }
+        }
+    }
+
+    let forwarded_body = Bytes::from(serde_json::to_vec(&body_value).unwrap_or_default());
 
     let client = proxy::build_proxy_client();
     match proxy::proxy_request(&client, engine_port, "/v1/completions", forwarded_body).await {

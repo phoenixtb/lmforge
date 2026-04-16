@@ -20,6 +20,7 @@ pub struct LmForgeConfig {
     pub default_chat_model: String,
     pub default_embed_model: String,
     pub api_key: Option<String>,
+    pub catalogs_dir: Option<String>,
 
     #[serde(default)]
     pub resources: ResourceConfig,
@@ -82,6 +83,7 @@ impl Default for LmForgeConfig {
             default_chat_model: String::new(),
             default_embed_model: String::new(),
             api_key: None,
+            catalogs_dir: None,
             resources: ResourceConfig::default(),
             orchestrator: OrchestratorConfig::default(),
             data_dir_path: None,
@@ -99,6 +101,20 @@ impl LmForgeConfig {
                     .expect("Could not determine home directory")
                     .join(".lmforge")
             })
+    }
+
+    /// Get the catalogs directory path
+    pub fn catalogs_dir(&self) -> PathBuf {
+        self.catalogs_dir
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.data_dir().join("catalogs"))
+    }
+
+    /// Save current configuration globally mapping to ~/.lmforge/config.toml
+    pub fn save(&self) -> Result<()> {
+        let path = self.data_dir().join("config.toml");
+        crate::config::global::save(&path, self)
     }
 }
 
@@ -128,6 +144,9 @@ pub fn load(cli: &Cli) -> Result<LmForgeConfig> {
     }
 
     // Layer 3: CLI flag overrides
+    if let Some(ref cat_dir) = cli.catalogs_dir {
+        config.catalogs_dir = Some(cat_dir.clone());
+    }
     if let Some(ref level) = cli.log_level {
         config.log_level = level.clone();
     }
@@ -161,6 +180,7 @@ fn merge_config(base: LmForgeConfig, overlay: LmForgeConfig) -> LmForgeConfig {
             overlay.default_embed_model
         },
         api_key: overlay.api_key.or(base.api_key),
+        catalogs_dir: overlay.catalogs_dir.or(base.catalogs_dir),
         resources: overlay.resources,
         orchestrator: OrchestratorConfig {
             keep_alive: if overlay.orchestrator.keep_alive.is_empty() {

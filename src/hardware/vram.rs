@@ -1,6 +1,6 @@
 use tracing::debug;
 
-use super::probe::{GpuVendor, HardwareProfile, Os};
+use super::probe::{GpuVendor, HardwareProfile};
 
 /// Estimate usable VRAM based on hardware profile and platform heuristics.
 ///

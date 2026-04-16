@@ -25,6 +25,7 @@ pub struct AppState {
     pub data_dir: std::path::PathBuf,
     pub api_key: Option<String>,
     pub bind_address: String,
+    pub config: Arc<RwLock<crate::config::LmForgeConfig>>,
     pub command_tx: tokio::sync::mpsc::Sender<ManagerCommand>,
 }
 
@@ -84,6 +85,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/lf/model/pull", post(native::model_pull))
         .route("/lf/model/unload", post(native::model_unload))
         .route("/lf/model/delete/{name}", delete(native::model_delete))
+        .route("/lf/config", get(native::config_get).post(native::config_update))
         .route("/lf/shutdown", post(native::shutdown))
         // Health
         .route("/health", get(health::health))

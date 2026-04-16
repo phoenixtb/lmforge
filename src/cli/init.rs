@@ -18,6 +18,26 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
         info!("Created LMForge data directory at {}", data_dir.display());
     }
 
+    // Ensure catalogs directory exists and write default mlx.json
+    let catalogs_dir = config.catalogs_dir();
+    if !catalogs_dir.exists() {
+        std::fs::create_dir_all(&catalogs_dir)?;
+    }
+    
+    let default_mlx_json = catalogs_dir.join("mlx.json");
+    if !default_mlx_json.exists() {
+        let mlx_defaults = include_str!("../../data/catalogs/mlx.json");
+        std::fs::write(&default_mlx_json, mlx_defaults)?;
+        info!("Created default MLX catalog at {}", default_mlx_json.display());
+    }
+
+    let default_gguf_json = catalogs_dir.join("gguf.json");
+    if !default_gguf_json.exists() {
+        let gguf_defaults = include_str!("../../data/catalogs/gguf.json");
+        std::fs::write(&default_gguf_json, gguf_defaults)?;
+        info!("Created default GGUF catalog at {}", default_gguf_json.display());
+    }
+
     // Hardware probe
     println!("⚙ Detecting hardware...");
     let profile = hardware::detect()?;

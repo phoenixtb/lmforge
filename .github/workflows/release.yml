@@ -40,6 +40,11 @@ jobs:
             target: aarch64-unknown-linux-gnu
             cross: true   # requires cross-compilation
 
+          # Windows AMD64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            cross: false
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,16 +77,19 @@ jobs:
         if: matrix.cross == true
         run: cross build --release --target ${{ matrix.target }}
 
-      # ── Package into a .tar.gz ──────────────────────────────────────────────
+      # ── Package into a .tar.gz (works on all 3 OSes via bash shell) ──────────
       - name: Package binary
         shell: bash
         run: |
-          BIN_PATH="target/${{ matrix.target }}/release/${BINARY}"
+          # Windows builds produce lmforge.exe; Unix builds produce lmforge
+          EXT=""
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then EXT=".exe"; fi
+          BIN_PATH="target/${{ matrix.target }}/release/${BINARY}${EXT}"
           TARBALL="${BINARY}-${{ matrix.target }}.tar.gz"
           tar -czf "$TARBALL" -C "$(dirname $BIN_PATH)" "$(basename $BIN_PATH)"
           echo "TARBALL=$TARBALL" >> $GITHUB_ENV
 
-      # ── Upload artifact so the next job can attach it to the release ────────
+      # ── Upload artifact so the release job can attach it ──────────────────
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

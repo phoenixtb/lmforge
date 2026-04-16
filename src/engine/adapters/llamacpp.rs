@@ -30,11 +30,11 @@ impl EngineAdapter for LlamacppAdapter {
     async fn start(
         &self,
         model_id: &str,
+        model_dir: &Path,
         port: u16,
         data_dir: &Path,
         logs_dir: &Path,
     ) -> Result<ActiveEngine> {
-        let model_dir = data_dir.join("models").join(model_id);
 
         // llama-server requires a single .gguf file path, not a directory.
         // Find the largest .gguf file in the model directory.

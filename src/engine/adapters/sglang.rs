@@ -94,11 +94,11 @@ impl EngineAdapter for SglangAdapter {
     async fn start(
         &self,
         model_id: &str,
+        model_dir: &Path,
         port: u16,
         data_dir: &Path,
         logs_dir: &Path,
     ) -> Result<ActiveEngine> {
-        let model_dir = data_dir.join("models").join(model_id);
 
         info!(model_id = %model_id, port = port, "Spawning native SGLang python instance bound to model Radix KV Cache");
 

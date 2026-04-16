@@ -28,6 +28,10 @@ pub struct Cli {
     /// Path to config file (default: ~/.lmforge/config.toml)
     #[arg(long, global = true)]
     pub config: Option<String>,
+
+    /// Path to catalogs directory (default: ~/.lmforge/catalogs)
+    #[arg(long, global = true)]
+    pub catalogs_dir: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]

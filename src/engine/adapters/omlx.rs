@@ -30,6 +30,7 @@ impl EngineAdapter for OmlxAdapter {
     async fn start(
         &self,
         model_id: &str,
+        model_subdir: &Path,
         port: u16,
         data_dir: &Path,
         logs_dir: &Path,
@@ -38,10 +39,10 @@ impl EngineAdapter for OmlxAdapter {
         // e.g. ~/.lmforge/models/ (not ~/.lmforge/models/qwen3.5-27b-...).
         // oMLX discovers all valid models within that parent and serves them by subdirectory name.
         // The specific model is selected per-request via the "model" field.
-        let models_parent_dir = data_dir.join("models");
+        let models_parent_dir = model_subdir.parent()
+            .ok_or_else(|| anyhow::anyhow!("Invalid model directory structure"))?;
 
         // Verify the specific model subdirectory exists before starting.
-        let model_subdir = models_parent_dir.join(model_id);
         if !model_subdir.exists() {
             anyhow::bail!(
                 "Model directory not found: {}. Pull the model first with: lmforge pull {}",

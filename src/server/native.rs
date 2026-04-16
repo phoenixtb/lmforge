@@ -22,6 +22,7 @@ pub async fn status(
         },
         "running_models": running_models,
         "metrics": engine_state.metrics,
+        "catalogs_dir": state.config.read().await.catalogs_dir().to_string_lossy(),
     });
 
     Response::builder()
@@ -152,7 +153,8 @@ pub async fn model_pull(
     }
 
     let engine_format = state.engine_config.model_format.clone();
-    let resolved = match crate::model::resolver::resolve(model_id, &engine_format).await {
+    let catalogs_dir = state.config.read().await.catalogs_dir();
+    let resolved = match crate::model::resolver::resolve(model_id, &engine_format, &catalogs_dir).await {
         Ok(r) => r,
         Err(e) => return Response::builder()
             .status(StatusCode::BAD_REQUEST)
@@ -161,10 +163,10 @@ pub async fn model_pull(
     };
 
     let data_dir = state.data_dir.clone();
-    let model_dir = data_dir.join("models").join(&resolved.name);
+    let model_dir = data_dir.join("models").join(&resolved.dir_name);
     let (tx, rx) = tokio::sync::mpsc::channel(100);
 
-    let resolved_name = resolved.name.clone();
+    let resolved_id = resolved.id.clone();
     let format = resolved.format.clone();
     let engine_id = state.engine_config.id.clone();
     let adapter = state.adapter.clone();
@@ -183,7 +185,7 @@ pub async fn model_pull(
             if let Ok(mut idx) = crate::model::index::ModelIndex::load(&data_dir) {
                 let caps = crate::model::index::detect_capabilities(&model_dir);
                 idx.add(crate::model::index::ModelEntry {
-                    id: resolved_name,
+                    id: resolved_id,
                     path: model_dir.to_string_lossy().to_string(),
                     format: format.to_string(),
                     engine: engine_id,
@@ -340,5 +342,60 @@ pub async fn model_delete(
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(format!(r#"{{"status":"deleted","model":"{}"}}"#, name)))
+        .unwrap()
+}
+
+/// `GET /lf/config` — Get the current LMForge config
+pub async fn config_get(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let config = state.config.read().await;
+    let json = serde_json::to_string(&*config).unwrap_or_else(|_| "{}".to_string());
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json))
+        .unwrap()
+}
+
+/// `POST /lf/config` — Update the current LMForge config
+pub async fn config_update(
+    State(state): State<AppState>,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    let req: crate::config::LmForgeConfig = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(r#"{{"error":"Invalid config payload: {}"}}"#, e)))
+                .unwrap();
+        }
+    };
+
+    // Update in-memory state
+    {
+        let mut config = state.config.write().await;
+        *config = req.clone();
+        
+        // Persist to disk natively
+        if let Err(e) = config.save() {
+            error!(error = %e, "Failed to persist LMForgeConfig disk after update");
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(r#"{{"error":"Failed to save configuration: {}"}}"#, e)))
+                .unwrap();
+        }
+    }
+
+    info!("Configuration safely mutated via /lf/config API");
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"status":"updated"}"#))
         .unwrap()
 }

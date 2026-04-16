@@ -81,9 +81,16 @@ impl ModelIndex {
         }
     }
 
-    /// Get a model by ID
+    /// Get a model by ID (with fallback to hf_repo or dir boundary name)
     pub fn get(&self, id: &str) -> Option<&ModelEntry> {
-        self.models.iter().find(|m| m.id == id)
+        self.models.iter().find(|m| {
+            if m.id == id { return true; }
+            if let Some(repo) = &m.hf_repo {
+                if repo == id { return true; }
+            }
+            if m.path.ends_with(&format!("/{}", id)) { return true; }
+            false
+        })
     }
 
     /// List all models

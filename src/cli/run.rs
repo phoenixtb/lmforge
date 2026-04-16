@@ -1,9 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use serde_json::json;
 use std::io::Write;
-use tracing::info;
 
 use crate::config::LmForgeConfig;
 use crate::engine::daemon;
@@ -12,8 +11,9 @@ use crate::engine::daemon;
 pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
     // 1. Resolve model to get its exact ID
     let engine_format = detect_engine_format(&config.data_dir());
-    let resolved = crate::model::resolver::resolve(model_input, &engine_format).await?;
-    let model_id = resolved.name;
+    let catalogs_dir = config.catalogs_dir();
+    let resolved = crate::model::resolver::resolve(model_input, &engine_format, &catalogs_dir).await?;
+    let model_id = resolved.id;
 
     let mut idx = crate::model::index::ModelIndex::load(&config.data_dir())?;
     if idx.get(&model_id).is_none() {
@@ -26,8 +26,6 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
         if input.trim().eq_ignore_ascii_case("y") {
             println!();
             crate::cli::pull::run(config, model_input).await?;
-            // Reload index after pull
-            idx = crate::model::index::ModelIndex::load(&config.data_dir())?;
         } else {
             anyhow::bail!("Model required to start interactive session. Exiting.");
         }

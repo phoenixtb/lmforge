@@ -3,10 +3,10 @@ set -euo pipefail
 
 # =============================================================================
 # LMForge — One-Command Installer
-# Usage: curl -sSf https://raw.githubusercontent.com/titasbiswas/lmforge/main/install.sh | sh
+# Usage: curl -sSf https://raw.githubusercontent.com/phoenixtb/lmforge/main/install.sh | sh
 # =============================================================================
 
-REPO="titasbiswas/lmforge"
+REPO="phoenixtb/lmforge"
 BINARY="lmforge"
 INSTALL_DIR="${LMFORGE_INSTALL_DIR:-$HOME/.local/bin}"
 

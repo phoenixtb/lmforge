@@ -10,7 +10,7 @@ pub async fn run(
     model: Option<String>,
     port: Option<u16>,
     bind: Option<String>,
-    foreground: bool,
+    _foreground: bool,
 ) -> Result<()> {
     let api_port = port.unwrap_or(config.port);
     let bind_addr = bind.unwrap_or_else(|| config.bind_address.clone());
@@ -109,6 +109,7 @@ pub async fn run(
         data_dir: data_dir.clone(),
         api_key: None,
         bind_address: bind_addr.clone(),
+        config: std::sync::Arc::new(tokio::sync::RwLock::new(config.clone())),
         command_tx: cmd_tx.clone(),
     };
 

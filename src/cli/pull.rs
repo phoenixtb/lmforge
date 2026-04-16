@@ -1,5 +1,5 @@
 use anyhow::Result;
-use tracing::info;
+
 
 use crate::config::LmForgeConfig;
 use crate::model::{downloader, index, resolver};
@@ -14,8 +14,10 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
 
     // Resolve model input
     println!("⚙ Resolving model: {}", model_input);
-    let resolved = resolver::resolve(model_input, &engine_format).await?;
-    println!("  Name:   {}", resolved.name);
+    let catalogs_dir = config.catalogs_dir();
+    let resolved = resolver::resolve(model_input, &engine_format, &catalogs_dir).await?;
+    println!("  ID:     {}", resolved.id);
+    println!("  Dir:    {}", resolved.dir_name);
     println!("  Repo:   {}", resolved.hf_repo);
     println!("  Format: {}", resolved.format);
     println!("  Files:  {}", resolved.files.len());
@@ -31,12 +33,12 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
     }
 
     // Check if already downloaded
-    let model_dir = data_dir.join("models").join(&resolved.name);
+    let model_dir = data_dir.join("models").join(&resolved.dir_name);
     let mut idx = index::ModelIndex::load(&data_dir)?;
 
-    if let Some(existing) = idx.get(&resolved.name) {
-        println!("  Model '{}' already installed at {}", resolved.name, existing.path);
-        println!("  To re-download, remove it first: lmforge models remove {}", resolved.name);
+    if let Some(existing) = idx.get(&resolved.id) {
+        println!("  Model '{}' already installed at {}", resolved.id, existing.path);
+        println!("  To re-download, remove it first: lmforge models remove {}", resolved.id);
         return Ok(());
     }
 
@@ -107,7 +109,7 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
 
     // Add to index
     let entry = index::ModelEntry {
-        id: resolved.name.clone(),
+        id: resolved.id.clone(),
         path: model_dir.to_string_lossy().to_string(),
         format: resolved.format.to_string(),
         engine: engine_format.clone(),
@@ -120,8 +122,8 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
     idx.add(entry);
     idx.save(&data_dir)?;
 
-    println!("\n✓ Model '{}' is ready. Start with:", resolved.name);
-    println!("  lmforge start --model {}", resolved.name);
+    println!("\n✓ Model '{}' is ready. Start with:", resolved.id);
+    println!("  lmforge start --model {}", resolved.id);
 
     Ok(())
 }

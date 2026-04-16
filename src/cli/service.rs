@@ -1,8 +1,5 @@
 use anyhow::{Context, Result, bail};
-use std::path::{Path, PathBuf};
-use tracing::info;
-
-use crate::config::LmForgeConfig;
+use std::path::PathBuf;
 
 /// Generate and install the LMForge system service (Launchd / Systemd)
 pub fn install() -> Result<()> {

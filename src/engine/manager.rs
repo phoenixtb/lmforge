@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
@@ -183,15 +183,30 @@ impl EngineManager {
     }
 
     /// Dynamically spawn an adapter process for a model
-    async fn spawn_adapter_process(&self, model_id: &str, port: u16) -> Result<ActiveEngine> {
+    async fn spawn_adapter_process(&self, model_id: &str, model_dir: &Path, port: u16) -> Result<ActiveEngine> {
         let engine_pid_file = self.data_dir.join("engines").join(format!("{}_{}.pid", self.config.id, port));
         if tokio::net::TcpListener::bind(("127.0.0.1", port)).await.is_err() {
-            warn!("Port {} is held — attempting orphan engine cleanup", port);
+            warn!(port, "Port is held — attempting orphan engine cleanup via PID file then lsof");
+            // Step 1: PID-file based kill (fast path)
             kill_orphan_engine(&engine_pid_file);
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            // Step 2: lsof-based kill (catches orphans not tracked by a PID file)
+            kill_port_holder_via_lsof(port);
+            // Step 3: Wait up to 5s for the OS to release the port
+            let mut freed = false;
+            for _ in 0..10 {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if tokio::net::TcpListener::bind(("127.0.0.1", port)).await.is_ok() {
+                    freed = true;
+                    break;
+                }
+            }
+            if !freed {
+                bail!("Port {} is still held after cleanup. Cannot spawn engine on this port.", port);
+            }
+            info!(port, "Port freed — proceeding to spawn engine");
         }
 
-        let mut active = self.adapter.start(model_id, port, &self.data_dir, &self.logs_dir).await?;
+        let active = self.adapter.start(model_id, model_dir, port, &self.data_dir, &self.logs_dir).await?;
 
         if let Some(pid) = active.process.id() {
             let _ = std::fs::write(&engine_pid_file, pid.to_string());
@@ -215,11 +230,22 @@ impl EngineManager {
         }
     }
 
-    /// Get next available port
+    /// Get next available port — checks both active_slots AND whether the OS port is actually free.
     fn allocate_port(&self) -> u16 {
+        let used_ports: std::collections::HashSet<u16> = self.active_slots.values().map(|s| s.port).collect();
         let mut port = self.base_engine_port;
-        let mut used_ports: std::collections::HashSet<u16> = self.active_slots.values().map(|s| s.port).collect();
-        while used_ports.contains(&port) { port += 1; }
+        loop {
+            if used_ports.contains(&port) {
+                port += 1;
+                continue;
+            }
+            // Verify the port is truly free at the OS level (guards against un-tracked orphans)
+            if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+                break;
+            }
+            warn!(port, "Allocated port is held by an un-tracked process — skipping");
+            port += 1;
+        }
         port
     }
 
@@ -239,12 +265,35 @@ impl EngineManager {
             return Ok(slot.port);
         }
 
-        info!("Cold load request for model: {}", model_id);
+        info!(model_id, "Cold load request for model");
 
-        let index = crate::model::index::ModelIndex::load(&self.data_dir)
-            .unwrap_or_else(|_| crate::model::index::ModelIndex { schema_version: 1, models: vec![] });
+        let index = match crate::model::index::ModelIndex::load(&self.data_dir) {
+            Ok(idx) => idx,
+            Err(e) => {
+                warn!(error = %e, "Failed to load models.json — index will be empty");
+                crate::model::index::ModelIndex { schema_version: 1, models: vec![] }
+            }
+        };
         let size_bytes = index.get(model_id).map(|m| m.size_bytes).unwrap_or(0);
         let needed_vram_gb = crate::hardware::vram::estimate_model_vram(size_bytes);
+        let entry_path = match index.get(model_id).map(|m| m.path.clone()) {
+            Some(p) => p,
+            None => {
+                // Fallback: construct path from model_id. This will fail for logical IDs with
+                // characters invalid on the filesystem (e.g. colons). Log a clear warning.
+                let fallback = self.data_dir.join("models").join(model_id).to_string_lossy().to_string();
+                warn!(
+                    model_id,
+                    fallback_path = %fallback,
+                    "Model not found in index — using fallback path. \
+                     This will fail if the model ID contains characters invalid for filesystem paths (e.g. colons). \
+                     Pull the model first with: lmforge pull {}",
+                    model_id
+                );
+                fallback
+            }
+        };
+        let model_dir = PathBuf::from(entry_path);
 
         self.evict_for_vram(needed_vram_gb).await?;
 
@@ -261,22 +310,41 @@ impl EngineManager {
 
         let port = self.allocate_port();
         
-        let mut state = self.state.write().await;
-        state.running_models.insert(model_id.to_string(), ModelSlot {
-            model_id: model_id.to_string(), port, status: EngineStatus::Starting, idle_secs: 0, vram_est_gb: needed_vram_gb
-        });
-        drop(state);
+        {
+            let mut state = self.state.write().await;
+            state.running_models.insert(model_id.to_string(), ModelSlot {
+                model_id: model_id.to_string(), port, status: EngineStatus::Starting, idle_secs: 0, vram_est_gb: needed_vram_gb
+            });
+        }
 
-        let engine = self.spawn_adapter_process(model_id, port).await?;
-        self.wait_slot_health(port).await?;
+        // Spawn and wait for engine health. On any failure, clean up the dangling Starting slot
+        // so the next EnsureModel call can retry a clean cold load.
+        let engine = match self.spawn_adapter_process(model_id, &model_dir, port).await {
+            Ok(e) => e,
+            Err(e) => {
+                self.state.write().await.running_models.remove(model_id);
+                return Err(e);
+            }
+        };
+
+        if let Err(e) = self.wait_slot_health(port).await {
+            // Health timeout — kill the orphaned engine process and clean up state
+            warn!(model_id, port, error = %e, "Engine health check timed out — killing spawned process");
+            let mut orphan = engine;
+            let _ = self.adapter.stop(&mut orphan).await;
+            self.state.write().await.running_models.remove(model_id);
+            return Err(e);
+        }
 
         self.active_slots.insert(model_id.to_string(), ActiveSlot {
             engine, port, last_accessed: keepalive::now_secs(), keep_alive_secs, size_bytes, status: EngineStatus::Ready
         });
 
-        let mut state = self.state.write().await;
-        if let Some(slot) = state.running_models.get_mut(model_id) {
-            slot.status = EngineStatus::Ready;
+        {
+            let mut state = self.state.write().await;
+            if let Some(slot) = state.running_models.get_mut(model_id) {
+                slot.status = EngineStatus::Ready;
+            }
         }
 
         Ok(port)
@@ -298,7 +366,10 @@ impl EngineManager {
                             }
                         }
                         Some(ManagerCommand::UnloadAll) => {
-                            for (_, mut slot) in self.active_slots.drain() {
+                            // Collect first to release the mutable borrow on active_slots
+                            // before stop_slot() needs to borrow self immutably.
+                            let slots: Vec<_> = self.active_slots.drain().map(|(_, v)| v).collect();
+                            for mut slot in slots {
                                 let _ = self.stop_slot(&mut slot).await;
                             }
                             self.state.write().await.running_models.clear();
@@ -348,7 +419,44 @@ fn kill_orphan_engine(pid_file: &std::path::Path) {
                 use nix::unistd::Pid;
                 let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
             }
+            #[cfg(windows)]
+            {
+                // taskkill /F (force) /PID <pid> — equivalent of SIGKILL on Windows
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/PID", &pid.to_string()])
+                    .output();
+            }
             let _ = std::fs::remove_file(pid_file);
+        }
+    }
+}
+
+/// Use `lsof -ti :PORT` to find any process holding a port and send SIGKILL.
+/// This catches orphans that were never tracked in a PID file (e.g. engine processes
+/// that survived a daemon restart via a prior binary version).
+fn kill_port_holder_via_lsof(port: u16) {
+    let output = std::process::Command::new("lsof")
+        .args(["-ti", &format!(":{}", port)])
+        .output();
+
+    if let Ok(out) = output {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        for line in stdout.lines() {
+            if let Ok(pid) = line.trim().parse::<u32>() {
+                warn!(pid, port, "Sending SIGKILL to un-tracked port holder (via lsof)");
+                #[cfg(unix)]
+                {
+                    use nix::sys::signal::{kill, Signal};
+                    use nix::unistd::Pid;
+                    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
+                }
+                #[cfg(windows)]
+                {
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/F", "/PID", &pid.to_string()])
+                        .output();
+                }
+            }
         }
     }
 }

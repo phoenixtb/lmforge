@@ -59,6 +59,17 @@ pub async fn chat_completions(
         Err(resp) => return resp.into_response(),
     };
 
+    // Rewrite model_id to the exact filesystem directory name so engines don't panic
+    let index = crate::model::index::ModelIndex::load(&state.data_dir)
+        .unwrap_or_else(|_| crate::model::index::ModelIndex { schema_version: 1, models: vec![] });
+    if let Some(entry) = index.get(&model_id) {
+        if let Some(dir_name) = std::path::Path::new(&entry.path).file_name() {
+            if let Some(obj) = body_value.as_object_mut() {
+                obj.insert("model".to_string(), serde_json::Value::String(dir_name.to_string_lossy().to_string()));
+            }
+        }
+    }
+
     // Re-serialize with translations applied
     let forwarded_body = match serde_json::to_vec(&body_value) {
         Ok(b) => Bytes::from(b),
@@ -138,13 +149,22 @@ pub async fn completions(
         else if v.is_number() { Some(v.as_i64().unwrap().to_string()) }
         else { None }
     });
-    if let Some(obj) = body_value.as_object_mut() { obj.remove("keep_alive"); }
-    let forwarded_body = Bytes::from(serde_json::to_vec(&body_value).unwrap_or_default());
-
     let engine_port = match state.ensure_model(&model_id, keep_alive).await {
         Ok(port) => port,
         Err(resp) => return resp.into_response(),
     };
+
+    let index = crate::model::index::ModelIndex::load(&state.data_dir)
+        .unwrap_or_else(|_| crate::model::index::ModelIndex { schema_version: 1, models: vec![] });
+    if let Some(entry) = index.get(&model_id) {
+        if let Some(dir_name) = std::path::Path::new(&entry.path).file_name() {
+            if let Some(obj) = body_value.as_object_mut() {
+                obj.insert("model".to_string(), serde_json::Value::String(dir_name.to_string_lossy().to_string()));
+            }
+        }
+    }
+    
+    let forwarded_body = Bytes::from(serde_json::to_vec(&body_value).unwrap_or_default());
 
     let client = proxy::build_proxy_client();
     match proxy::proxy_request(&client, engine_port, "/v1/completions", forwarded_body).await {
@@ -178,13 +198,22 @@ pub async fn embeddings(
         else if v.is_number() { Some(v.as_i64().unwrap().to_string()) }
         else { None }
     });
-    if let Some(obj) = body_value.as_object_mut() { obj.remove("keep_alive"); }
-    let forwarded_body = Bytes::from(serde_json::to_vec(&body_value).unwrap_or_default());
-
     let engine_port = match state.ensure_model(&model_id, keep_alive).await {
         Ok(port) => port,
         Err(resp) => return resp.into_response(),
     };
+
+    let index = crate::model::index::ModelIndex::load(&state.data_dir)
+        .unwrap_or_else(|_| crate::model::index::ModelIndex { schema_version: 1, models: vec![] });
+    if let Some(entry) = index.get(&model_id) {
+        if let Some(dir_name) = std::path::Path::new(&entry.path).file_name() {
+            if let Some(obj) = body_value.as_object_mut() {
+                obj.insert("model".to_string(), serde_json::Value::String(dir_name.to_string_lossy().to_string()));
+            }
+        }
+    }
+
+    let forwarded_body = Bytes::from(serde_json::to_vec(&body_value).unwrap_or_default());
 
     let client = proxy::build_proxy_client();
     match proxy::proxy_request(&client, engine_port, "/v1/embeddings", forwarded_body).await {
