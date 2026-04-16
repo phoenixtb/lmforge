@@ -5,10 +5,10 @@ use tracing::{debug, warn};
 /// The bundled default MLX catalog — embedded at compile time.
 /// This is the authoritative fallback used when no runtime catalog file exists.
 /// This means `lmforge pull <shortcut>` works on a fresh install without running `lmforge init` first.
-const BUNDLED_MLX: &str = include_str!("../../../data/catalogs/mlx.json");
+pub const BUNDLED_MLX: &str = include_str!("../../../data/catalogs/mlx.json");
 
 /// The bundled default GGUF catalog — embedded at compile time.
-const BUNDLED_GGUF: &str = include_str!("../../../data/catalogs/gguf.json");
+pub const BUNDLED_GGUF: &str = include_str!("../../../data/catalogs/gguf.json");
 
 /// Dynamically resolves a model target shortcut from the JSON catalogs,
 /// according to the engine format.

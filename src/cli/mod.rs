@@ -1,3 +1,4 @@
+pub mod catalog;
 pub mod clean;
 pub mod init;
 pub mod logs;
@@ -88,6 +89,17 @@ pub enum Command {
         action: ModelsAction,
     },
 
+    /// List available model shortcuts from the bundled catalog
+    Catalog {
+        /// Engine format to list (mlx, gguf). Defaults to current platform format.
+        #[arg(long)]
+        format: Option<String>,
+
+        /// Filter shortcuts by keyword (searches shortcut name and repo)
+        #[arg(long)]
+        search: Option<String>,
+    },
+
     /// Disk usage audit and cleanup (orphans, logs, HuggingFace cache)
     Clean {
         /// Show what would be cleaned without making changes
@@ -171,6 +183,7 @@ pub async fn dispatch(cli: Cli, config: LmForgeConfig) -> Result<()> {
         Command::Status => status::run(&config).await,
         Command::Pull { model } => pull::run(&config, &model).await,
         Command::Models { action } => models::run(&config, action).await,
+        Command::Catalog { format, search } => catalog::run(&config, format, search).await,
         Command::Clean { dry_run, yes, all, partial, logs, hf_cache } => {
             clean::run(&config, clean::CleanOptions { dry_run, yes, all, partial, hf_cache, logs }).await
         }

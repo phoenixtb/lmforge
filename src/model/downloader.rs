@@ -20,6 +20,15 @@ pub async fn download_model(
 ) -> Result<u64> {
     std::fs::create_dir_all(dest_dir)?;
 
+    // Read HuggingFace token from env — supports both common names
+    let hf_token = std::env::var("HF_TOKEN")
+        .or_else(|_| std::env::var("HUGGING_FACE_HUB_TOKEN"))
+        .ok();
+
+    if hf_token.is_some() {
+        debug!("HF token found in environment — will authenticate download requests");
+    }
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(1800)) // 30 min max per file
         .build()?;
@@ -37,7 +46,7 @@ pub async fn download_model(
     if hf_repo.contains("://") {
         let filename = hf_repo.split('/').last().unwrap_or("model");
         let dest = dest_dir.join(filename);
-        total_bytes += download_file(&client, hf_repo, filename, &dest, progress_tx.clone()).await?;
+        total_bytes += download_file(&client, hf_repo, filename, &dest, progress_tx.clone(), hf_token.as_deref()).await?;
         
         if let Some(tx) = &progress_tx {
             let _ = tx.send(DownloadProgress::Completed { repo: hf_repo.to_string(), total_bytes }).await;
@@ -64,7 +73,7 @@ pub async fn download_model(
             // In a real system, we'd check sha256 or sizes from HF
         }
 
-        match download_file(&client, &url, file, &dest, progress_tx.clone()).await {
+        match download_file(&client, &url, file, &dest, progress_tx.clone(), hf_token.as_deref()).await {
             Ok(bytes) => {
                 total_bytes += bytes;
                 if let Some(tx) = &progress_tx {
@@ -100,11 +109,17 @@ async fn download_file(
     file_name: &str,
     dest: &std::path::Path,
     progress_tx: Option<mpsc::Sender<DownloadProgress>>,
+    hf_token: Option<&str>,
 ) -> Result<u64> {
     use futures::StreamExt;
 
     let mut downloaded: u64 = 0;
     let mut request = client.get(url);
+
+    // Inject HF token if available
+    if let Some(token) = hf_token {
+        request = request.bearer_auth(token);
+    }
 
     if dest.exists() {
         let existing = std::fs::metadata(dest)?.len();

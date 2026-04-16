@@ -238,7 +238,7 @@ pub async fn completions(
     }
 }
 
-/// `POST /v1/embeddings` — OpenAI-compatible embeddings
+/// `POST /v1/embeddings` — OpenAI-compatible embeddings with batch chunking and dim auto-detection
 pub async fn embeddings(
     State(state): State<AppState>,
     body: Bytes,
@@ -276,19 +276,45 @@ pub async fn embeddings(
         Err(resp) => return resp.into_response(),
     };
 
-    if let Some(entry) = index.get(&model_id) {
-        if let Some(dir_name) = std::path::Path::new(&entry.path).file_name() {
-            if let Some(obj) = body_value.as_object_mut() {
-                obj.insert("model".to_string(), serde_json::Value::String(dir_name.to_string_lossy().to_string()));
-            }
-        }
-    }
-
-    let forwarded_body = Bytes::from(serde_json::to_vec(&body_value).unwrap_or_default());
+    // Resolve the engine-facing model directory name (needed by oMLX)
+    let dir_name = index.get(&model_id)
+        .and_then(|e| std::path::Path::new(&e.path).file_name().map(|n| n.to_string_lossy().to_string()));
 
     let client = proxy::build_proxy_client();
-    match proxy::proxy_request(&client, engine_port, "/v1/embeddings", forwarded_body).await {
+    let batch_size = state.config.read().await.orchestrator.embed_batch_size;
+
+    // --- Batch chunking ---
+    // If `input` is an array with more than `batch_size` items, split into sub-batches,
+    // call the engine for each, merge `data[]` arrays and sum usage tokens.
+    let result: Result<(u16, String), (u16, String)> = {
+        let inputs_opt = body_value.get("input").and_then(|v| v.as_array()).map(|a| a.clone());
+
+        if let Some(inputs) = inputs_opt.filter(|a| a.len() > batch_size) {
+            proxy_embeddings_batched(
+                &client, engine_port, dir_name.as_deref(), inputs, batch_size, &body_value
+            ).await
+        } else {
+            // Single string or small array -- pass through unchanged
+            if let Some(ref name) = dir_name {
+                if let Some(obj) = body_value.as_object_mut() {
+                    obj.insert("model".to_string(), serde_json::Value::String(name.clone()));
+                }
+            }
+            let forwarded = Bytes::from(serde_json::to_vec(&body_value).unwrap_or_default());
+            proxy::proxy_request(&client, engine_port, "/v1/embeddings", forwarded).await
+        }
+    };
+
+    match result {
         Ok((status, text)) => {
+            // --- Dim auto-detection (fire-and-forget background task) ---
+            let data_dir = state.data_dir.clone();
+            let mid = model_id.clone();
+            let t = text.clone();
+            tokio::spawn(async move {
+                maybe_update_embedding_dims(&data_dir, &mid, &t).await;
+            });
+
             Response::builder()
                 .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
                 .header(header::CONTENT_TYPE, "application/json")
@@ -302,6 +328,109 @@ pub async fn embeddings(
                 .body(Body::from(text))
                 .unwrap()
         }
+    }
+}
+
+/// Split a large input array across multiple engine calls of at most `batch_size` items,
+/// merge the resulting `data[]` arrays (re-indexing `index` fields), and sum usage tokens.
+async fn proxy_embeddings_batched(
+    client: &reqwest::Client,
+    engine_port: u16,
+    dir_name: Option<&str>,
+    inputs: Vec<serde_json::Value>,
+    batch_size: usize,
+    template: &serde_json::Value,
+) -> Result<(u16, String), (u16, String)> {
+    let mut merged_data: Vec<serde_json::Value> = Vec::with_capacity(inputs.len());
+    let mut total_prompt_tokens: u64 = 0;
+    let mut total_tokens: u64 = 0;
+    let mut last_model = String::new();
+
+    for chunk in inputs.chunks(batch_size) {
+        let mut req = template.clone();
+        if let Some(obj) = req.as_object_mut() {
+            obj.insert("input".to_string(), serde_json::Value::Array(chunk.to_vec()));
+            if let Some(name) = dir_name {
+                obj.insert("model".to_string(), serde_json::Value::String(name.to_string()));
+            }
+        }
+        let body_bytes = Bytes::from(serde_json::to_vec(&req).unwrap_or_default());
+
+        match proxy::proxy_request(client, engine_port, "/v1/embeddings", body_bytes).await {
+            Ok((status, text)) => {
+                if status >= 400 {
+                    return Err((status, text));
+                }
+                if let Ok(resp) = serde_json::from_str::<serde_json::Value>(&text) {
+                    let offset = merged_data.len();
+                    if let Some(data) = resp.get("data").and_then(|d| d.as_array()) {
+                        for (i, item) in data.iter().enumerate() {
+                            let mut entry = item.clone();
+                            if let Some(obj) = entry.as_object_mut() {
+                                obj.insert("index".to_string(), serde_json::json!(offset + i));
+                            }
+                            merged_data.push(entry);
+                        }
+                    }
+                    if let Some(usage) = resp.get("usage") {
+                        total_prompt_tokens += usage.get("prompt_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+                        total_tokens += usage.get("total_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+                    }
+                    if let Some(m) = resp.get("model").and_then(|m| m.as_str()) {
+                        last_model = m.to_string();
+                    }
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    let merged = serde_json::json!({
+        "object": "list",
+        "data": merged_data,
+        "model": last_model,
+        "usage": {
+            "prompt_tokens": total_prompt_tokens,
+            "total_tokens": total_tokens,
+        }
+    });
+
+    Ok((200, serde_json::to_string(&merged).unwrap_or_default()))
+}
+
+/// Lazily update embedding_dims in models.json from the first successful /v1/embeddings response.
+/// Fire-and-forget background task -- errors are silently ignored.
+async fn maybe_update_embedding_dims(data_dir: &std::path::Path, model_id: &str, response_text: &str) {
+    let resp: serde_json::Value = match serde_json::from_str(response_text) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let dims = resp
+        .get("data")
+        .and_then(|d| d.as_array())
+        .and_then(|a| a.first())
+        .and_then(|item| item.get("embedding"))
+        .and_then(|e| e.as_array())
+        .map(|a| a.len() as u32);
+
+    let dims = match dims {
+        Some(d) => d,
+        None => return,
+    };
+
+    let mut index = match crate::model::index::ModelIndex::load(data_dir) {
+        Ok(idx) => idx,
+        Err(_) => return,
+    };
+
+    if let Some(entry) = index.models.iter_mut().find(|m| m.id == model_id) {
+        if entry.capabilities.embedding_dims == Some(dims) {
+            return; // Already correct -- skip write
+        }
+        debug!(model_id, dims, "Auto-detected embedding dims from response");
+        entry.capabilities.embedding_dims = Some(dims);
+        let _ = index.save(data_dir);
     }
 }
 

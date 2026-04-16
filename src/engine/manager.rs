@@ -67,6 +67,8 @@ pub struct ActiveSlot {
     pub keep_alive_secs: u64,
     pub size_bytes: u64,
     pub status: EngineStatus,
+    /// The role this engine process was started with. Used to detect role-mismatch conflicts.
+    pub role: ModelRole,
 }
 
 /// The engine manager — spawns, supervises, health-checks, and restarts the engine via Adapters
@@ -259,14 +261,12 @@ impl EngineManager {
             keepalive::parse_keepalive(&self.global_keep_alive)
         };
 
-        if let Some(slot) = self.active_slots.get_mut(model_id) {
-            slot.last_accessed = now;
-            slot.keep_alive_secs = keep_alive_secs;
-            return Ok(slot.port);
-        }
+        info!(model_id, "Model requested — checking active slots");
 
-        info!(model_id, "Cold load request for model");
-
+        // Derive the model's functional role from its capabilities up front.
+        // We need this before the early-return check so we can detect role mismatches on cached slots.
+        // Rerank takes priority (cross-encoders may also have chat=true for generative re-rankers).
+        // Unknown models (not in index) default to Chat for backward compatibility.
         let index = match crate::model::index::ModelIndex::load(&self.data_dir) {
             Ok(idx) => idx,
             Err(e) => {
@@ -274,12 +274,6 @@ impl EngineManager {
                 crate::model::index::ModelIndex { schema_version: 1, models: vec![] }
             }
         };
-        let size_bytes = index.get(model_id).map(|m| m.size_bytes).unwrap_or(0);
-        let needed_vram_gb = crate::hardware::vram::estimate_model_vram(size_bytes);
-
-        // Derive the model's functional role from its capabilities.
-        // Rerank takes priority (cross-encoders may also have chat=true for generative re-rankers).
-        // Unknown models (not in index) default to Chat for backward compatibility.
         let role = index.get(model_id)
             .map(|m| {
                 if m.capabilities.reranking {
@@ -291,6 +285,27 @@ impl EngineManager {
                 }
             })
             .unwrap_or(ModelRole::Chat);
+
+        if let Some(slot) = self.active_slots.get_mut(model_id) {
+            // Guard: if the same model is already loaded but in a different role (e.g. was loaded
+            // as Embed but caller wants Chat), refuse and surface a 409-style error. The user
+            // must explicitly unload the model first.
+            if slot.role != role {
+                bail!(
+                    "Model '{}' is already loaded as {:?} on port {}. \
+                     Unload it first: POST /lf/model/unload with {{\"model\":\"{}\"}}",
+                    model_id, slot.role, slot.port, model_id
+                );
+            }
+            slot.last_accessed = now;
+            slot.keep_alive_secs = keep_alive_secs;
+            return Ok(slot.port);
+        }
+
+        info!(model_id, "Cold load request for model");
+
+        let size_bytes = index.get(model_id).map(|m| m.size_bytes).unwrap_or(0);
+        let needed_vram_gb = crate::hardware::vram::estimate_model_vram(size_bytes);
 
         let entry_path = match index.get(model_id).map(|m| m.path.clone()) {
             Some(p) => p,
@@ -351,7 +366,9 @@ impl EngineManager {
         }
 
         self.active_slots.insert(model_id.to_string(), ActiveSlot {
-            engine, port, last_accessed: keepalive::now_secs(), keep_alive_secs, size_bytes, status: EngineStatus::Ready
+            engine, port, last_accessed: keepalive::now_secs(), keep_alive_secs, size_bytes,
+            status: EngineStatus::Ready,
+            role,
         });
 
         {

@@ -48,13 +48,20 @@ pub struct ResourceConfig {
 pub struct OrchestratorConfig {
     pub keep_alive: String,
     pub max_loaded_models: u32,
+    /// Maximum number of inputs per engine call for /v1/embeddings.
+    /// Larger batches may OOM or timeout on oMLX/SGLang. Default: 32.
+    #[serde(default = "default_embed_batch_size")]
+    pub embed_batch_size: usize,
 }
+
+fn default_embed_batch_size() -> usize { 32 }
 
 impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
             keep_alive: "5m".to_string(),
             max_loaded_models: 0,
+            embed_batch_size: default_embed_batch_size(),
         }
     }
 }
@@ -192,6 +199,12 @@ fn merge_config(base: LmForgeConfig, overlay: LmForgeConfig) -> LmForgeConfig {
                 base.orchestrator.max_loaded_models
             } else {
                 overlay.orchestrator.max_loaded_models
+            },
+            embed_batch_size: if overlay.orchestrator.embed_batch_size == default_embed_batch_size() {
+                // If overlay is at default, keep base (allows user to lower it)
+                base.orchestrator.embed_batch_size
+            } else {
+                overlay.orchestrator.embed_batch_size
             },
         },
         data_dir_path: overlay.data_dir_path.or(base.data_dir_path),

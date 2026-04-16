@@ -21,25 +21,30 @@ pub async fn run(config: &LmForgeConfig, action: ModelsAction) -> Result<()> {
                 return Ok(());
             }
 
-            println!("{:<42} {:<8} {:<8} {:<6} {:<6} {:<6} {:>9}",
-                "MODEL", "FORMAT", "ENGINE", "CHAT", "EMBED", "THINK", "SIZE");
-            println!("{}", "─".repeat(89));
+            println!("{:<42} {:<8} {:<8} {:<6} {:<6} {:<7} {:<6} {:<6} {:>9}",
+                "MODEL", "FORMAT", "ENGINE", "CHAT", "EMBED", "RERANK", "THINK", "DIMS", "SIZE");
+            println!("{}", "─".repeat(110));
 
             let mut total_bytes: u64 = 0;
             for m in models {
                 total_bytes += m.size_bytes;
-                println!("{:<42} {:<8} {:<8} {:<6} {:<6} {:<6} {:>9}",
+                let dims = m.capabilities.embedding_dims
+                    .map(|d| d.to_string())
+                    .unwrap_or_else(|| "–".to_string());
+                println!("{:<42} {:<8} {:<8} {:<6} {:<6} {:<7} {:<6} {:<6} {:>9}",
                     m.id,
                     m.format,
                     m.engine,
                     if m.capabilities.chat { "✓" } else { "–" },
                     if m.capabilities.embeddings { "✓" } else { "–" },
+                    if m.capabilities.reranking { "✓" } else { "–" },
                     if m.capabilities.thinking { "✓" } else { "–" },
+                    dims,
                     fmt_size(m.size_bytes),
                 );
             }
 
-            println!("{}", "─".repeat(89));
+            println!("{}", "─".repeat(110));
             println!("{:<42} {:>9}  ({} model(s))",
                 "Total", fmt_size(total_bytes), models.len());
         }
