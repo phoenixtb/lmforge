@@ -4,7 +4,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc::Sender;
 use tracing::{info, warn, debug};
 
-use crate::engine::adapter::{ActiveEngine, EngineAdapter};
+use crate::engine::adapter::{ActiveEngine, EngineAdapter, ModelRole};
 use crate::model::downloader::DownloadProgress;
 
 #[derive(Clone)]
@@ -32,31 +32,49 @@ impl EngineAdapter for OmlxAdapter {
         model_id: &str,
         model_subdir: &Path,
         port: u16,
-        data_dir: &Path,
+        _data_dir: &Path,
         logs_dir: &Path,
+        role: ModelRole,
     ) -> Result<ActiveEngine> {
-        // oMLX's --model-dir expects the PARENT directory whose subdirectories are models,
-        // e.g. ~/.lmforge/models/ (not ~/.lmforge/models/qwen3.5-27b-...).
-        // oMLX discovers all valid models within that parent and serves them by subdirectory name.
-        // The specific model is selected per-request via the "model" field.
-        let models_parent_dir = model_subdir.parent()
+        if role == ModelRole::Rerank {
+            anyhow::bail!(
+                "Re-ranking is not supported by oMLX v0.3.0. \
+                 It is available on platforms using llama.cpp."
+            );
+        }
+
+        // Chat and Embed: oMLX is a multi-model server — it discovers models from
+        // subdirectories of --model-dir and dispatches by subdir name. No extra flags needed.
+        // oMLX auto-detects embed vs chat from each model's own config.json.
+        let models_parent_dir = model_subdir
+            .parent()
             .ok_or_else(|| anyhow::anyhow!("Invalid model directory structure"))?;
 
         // Verify the specific model subdirectory exists before starting.
         if !model_subdir.exists() {
             anyhow::bail!(
                 "Model directory not found: {}. Pull the model first with: lmforge pull {}",
-                model_subdir.display(), model_id
+                model_subdir.display(),
+                model_id
             );
         }
 
-        info!(model_id = %model_id, port = port, models_dir = %models_parent_dir.display(),
-              "Spawning native oMLX engine with models parent directory");
+        info!(
+            model_id = %model_id,
+            port = port,
+            models_dir = %models_parent_dir.display(),
+            role = ?role,
+            "Spawning native oMLX engine with models parent directory"
+        );
 
         let stdout_file = std::fs::OpenOptions::new()
-            .create(true).append(true).open(logs_dir.join("engine-stdout.log"))?;
+            .create(true)
+            .append(true)
+            .open(logs_dir.join("engine-stdout.log"))?;
         let stderr_file = std::fs::OpenOptions::new()
-            .create(true).append(true).open(logs_dir.join("engine-stderr.log"))?;
+            .create(true)
+            .append(true)
+            .open(logs_dir.join("engine-stderr.log"))?;
 
         let child = Command::new(&self.executable)
             .args([
@@ -91,7 +109,7 @@ impl EngineAdapter for OmlxAdapter {
             {
                 let _ = active_engine.process.kill().await;
             }
-            
+
             // Wait for process to fully exit, definitively guaranteeing zero VRAM fragmentation
             match tokio::time::timeout(std::time::Duration::from_secs(5), active_engine.process.wait()).await {
                 Ok(_) => debug!("oMLX natively flush-exited"),

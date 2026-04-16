@@ -2,10 +2,8 @@
     "qwen3.5:27b:4bit:opus-distilled": "bartowski/Qwen3.5-27B-Claude-4.6-Opus-Distilled-GGUF",
     "deepseek_r1:8b:4bit:distill-qwen": "unsloth/DeepSeek-R1-Distill-Qwen-8B-GGUF",
     "qwen3:8b:4bit": "bartowski/Qwen3-8B-GGUF",
-    "nomic-embed-text:v1.5": "nomic-ai/nomic-embed-text-v1.5-GGUF",
-    "nomic-modernbert-embed:4bit": "nomic-ai/nomic-modernbert-embed-base-GGUF",
     "llama3.1:8b:4bit": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
-    
+
     "qwen3.5:2b:4bit": "Qwen/Qwen3.5-2B-GGUF",
     "qwen3.5:2b:6bit": "Qwen/Qwen3.5-2B-GGUF",
     "qwen3.5:4b:4bit": "Qwen/Qwen3.5-4B-GGUF",
@@ -16,7 +14,7 @@
     "gemma4:e2b:4bit": "bartowski/gemma-4-e2b-it-GGUF",
     "gemma4:e4b:4bit": "bartowski/gemma-4-e4b-it-GGUF",
     "gemma4:e4b:6bit": "bartowski/gemma-4-e4b-it-GGUF",
-    
+
     "gemma3:1b:4bit": "bartowski/gemma-3-1b-it-GGUF",
     "gemma3:4b:4bit": "bartowski/gemma-3-4b-it-GGUF",
     "gemma3:12b:4bit": "bartowski/gemma-3-12b-it-GGUF",
@@ -29,5 +27,20 @@
 
     "llama4:17b:4bit:scout": "bartowski/Llama-4-Scout-17B-16E-Instruct-GGUF",
     "qwencode3:8bit": "bartowski/Qwen3-Coder-Next-GGUF",
-    "qwencode3:4bit": "bartowski/Qwen3-Coder-Next-GGUF"
+    "qwencode3:4bit": "bartowski/Qwen3-Coder-Next-GGUF",
+
+    "_comment_embed": "--- Embedding models (GGUF format, served by llama.cpp with --embeddings) ---",
+    "nomic-embed-text:v1.5": "nomic-ai/nomic-embed-text-v1.5-GGUF",
+    "nomic-embed-text:v2": "nomic-ai/nomic-embed-text-v2-moe-GGUF",
+    "nomic-modernbert-embed": "nomic-ai/nomic-modernbert-embed-base-GGUF",
+    "bge-m3": "gpustack/bge-m3-GGUF",
+    "gte-qwen2.5:1.5b": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+
+    "_comment_rerank": "--- Re-ranking models (GGUF, llama.cpp only via --reranking; 501 on oMLX/SGLang) ---",
+    "bge-reranker-v2-m3": "gpustack/bge-reranker-v2-m3-GGUF",
+    "bge-reranker:large": "gpustack/bge-reranker-large-GGUF",
+    "jina-reranker-v2": "gpustack/jina-reranker-v2-base-multilingual-GGUF",
+    "qwen3-reranker:0.6b": "Qwen/Qwen3-Reranker-0.6B-GGUF",
+    "qwen3-reranker:1.7b": "Qwen/Qwen3-Reranker-1.7B-GGUF",
+    "qwen3-reranker:4b": "Qwen/Qwen3-Reranker-4B-GGUF"
 }

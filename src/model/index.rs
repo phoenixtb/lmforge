@@ -28,7 +28,16 @@ pub struct ModelEntry {
 pub struct ModelCapabilities {
     pub chat: bool,
     pub embeddings: bool,
+    #[serde(default)]
+    pub reranking: bool,
     pub thinking: bool,
+    /// Output vector dimensionality — populated for embedding models.
+    #[serde(default)]
+    pub embedding_dims: Option<u32>,
+    /// Pooling strategy detected from config.json ("mean" | "cls" | "last").
+    /// Used by SGLang to set --pooling-method. None means engine default.
+    #[serde(default)]
+    pub pooling: Option<String>,
 }
 
 impl ModelIndex {
@@ -122,44 +131,122 @@ pub fn dir_size(path: &std::path::Path) -> u64 {
     total
 }
 
-/// Detect model capabilities from its metadata files
+/// Detect model capabilities from its metadata files.
+///
+/// Detection strategy (applied in order, results accumulate):
+///
+/// **Chat**: model_type matches known generative families.
+/// **Re-ranker**: `architectures` contains `ForSequenceClassification` with `num_labels == 1`,
+///   OR the model directory name contains "reranker"/"rerank" (catches GGUF and generative re-rankers).
+/// **Embedding**: model_type matches retrieval families AND it is NOT a re-ranker.
+/// **Dims/Pooling**: parsed from `hidden_size` / `pooling_config` in config.json.
 pub fn detect_capabilities(model_dir: &std::path::Path) -> ModelCapabilities {
     let mut caps = ModelCapabilities {
         chat: false,
         embeddings: false,
+        reranking: false,
         thinking: false,
+        embedding_dims: None,
+        pooling: None,
     };
 
-    // Check config.json for model type
     let config_path = model_dir.join("config.json");
     if let Ok(content) = std::fs::read_to_string(&config_path) {
         if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
-            let model_type = config["model_type"].as_str().unwrap_or("");
+            let model_type = config["model_type"].as_str().unwrap_or("").to_lowercase();
+            let num_labels  = config["num_labels"].as_u64().unwrap_or(0);
 
-            // Chat models
-            if ["qwen3", "qwen3_5", "qwen2", "llama", "mistral", "deepseek"]
-                .iter()
-                .any(|t| model_type.contains(t))
+            // --- Re-ranker detection (highest priority — must precede embed check) ---
+            // Signal 1: architectures array contains a sequence-classification head
+            let is_seq_classifier = config["architectures"]
+                .as_array()
+                .map(|archs| archs.iter().any(|a| {
+                    a.as_str().unwrap_or("").contains("ForSequenceClassification")
+                }))
+                .unwrap_or(false);
+
+            // num_labels == 1 → binary relevance score (cross-encoder re-ranker)
+            if is_seq_classifier && num_labels == 1 {
+                caps.reranking = true;
+            }
+
+            // --- Chat model detection ---
+            // Generative re-rankers (Qwen3-Reranker etc.) intentionally set both flags so
+            // llama.cpp can load them with --reranking while still being a decoder model.
+            if [
+                "qwen3", "qwen2", "llama", "mistral", "deepseek",
+                "phi", "gemma", "granite", "starcoder", "falcon",
+            ]
+            .iter()
+            .any(|t| model_type.contains(t))
             {
                 caps.chat = true;
             }
 
-            // Embedding models
-            if model_type.contains("nomic") || model_type.contains("bert") || model_type.contains("embed") {
-                caps.embeddings = true;
+            // --- Embedding model detection (only when not a cross-encoder re-ranker) ---
+            if !caps.reranking {
+                if [
+                    "nomic", "bert", "embed", "gte", "e5",
+                    "xlm-roberta", "roberta", "distilbert",
+                ]
+                .iter()
+                .any(|t| model_type.contains(t))
+                {
+                    caps.embeddings = true;
+                    caps.chat = false; // pure embedding models do not support chat
+                }
+            }
+
+            // --- Embedding dimensions ---
+            if caps.embeddings {
+                // Standard field
+                if let Some(hidden_size) = config["hidden_size"].as_u64() {
+                    caps.embedding_dims = Some(hidden_size as u32);
+                }
+                // Nomic models use d_model instead
+                if caps.embedding_dims.is_none() {
+                    if let Some(d_model) = config["d_model"].as_u64() {
+                        caps.embedding_dims = Some(d_model as u32);
+                    }
+                }
+            }
+
+            // --- Pooling strategy ---
+            // Standard pooling_config (e.g. sentence-transformers, GTE)
+            if let Some(pt) = config["pooling_config"]["pooling_type"].as_str() {
+                caps.pooling = Some(pt.to_lowercase());
+            }
+            // Nomic models use a separate config block
+            if caps.pooling.is_none() {
+                if let Some(np) = config["nomic_embed_config"]["pooling"].as_str() {
+                    caps.pooling = Some(np.to_lowercase());
+                }
             }
         }
     }
 
-    // Check for thinking support via chat template
+    // --- Name heuristic (covers GGUF and generative re-rankers lacking config.json) ---
+    if let Some(dir_name) = model_dir.file_name().and_then(|n| n.to_str()) {
+        let lower = dir_name.to_lowercase();
+        if lower.contains("reranker") || lower.contains("rerank") {
+            caps.reranking = true;
+            caps.embeddings = false;
+            // Generative re-rankers (Qwen3-Reranker) are decoder models so caps.chat stays true
+            // if it was already set; pure cross-encoders won't have chat set.
+        }
+    }
+
+    // --- Thinking / reasoning detection ---
     let template_path = model_dir.join("tokenizer_config.json");
     if let Ok(content) = std::fs::read_to_string(&template_path) {
-        if content.contains("<think>") || content.contains("enable_thinking") || content.contains("reasoning_content") {
+        if content.contains("<think>")
+            || content.contains("enable_thinking")
+            || content.contains("reasoning_content")
+        {
             caps.thinking = true;
         }
     }
 
-    // Also check jinja template
     let jinja_path = model_dir.join("chat_template.jinja");
     if let Ok(content) = std::fs::read_to_string(&jinja_path) {
         if content.contains("<think>") || content.contains("enable_thinking") {

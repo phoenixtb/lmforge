@@ -143,11 +143,21 @@ async fn resolve_logical_name(name: &str, engine_format: &str, catalogs_dir: &st
         return Ok(rm);
     }
 
+    // Build a helpful suggestion list from the bundled catalog so it's always accurate.
+    let suggestions = crate::model::catalog::bundled_shortcuts(engine_format);
+    let suggestion_str = if suggestions.is_empty() {
+        "run 'lmforge models' to see available shortcuts".to_string()
+    } else {
+        suggestions.iter().take(6).cloned().collect::<Vec<_>>().join(", ")
+    };
+
     anyhow::bail!(
         "Unknown model '{}'. Try a HF repo like 'mlx-community/Qwen3.5-4B-OptiQ-4bit' \
-         or use a shortcut like: qwen3.5:4b:6bit, gemma4:9b:4bit, llama-3.1-8b, nomic-embed-text",
-        name
+         or use a shortcut like: {}",
+        name,
+        suggestion_str
     );
+
 }
 
 /// Determine which files to download based on format

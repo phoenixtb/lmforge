@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use crate::engine::adapter::{ActiveEngine, EngineAdapter, EngineAdapterInstance};
+use crate::engine::adapter::{ActiveEngine, EngineAdapter, EngineAdapterInstance, ModelRole};
 use crate::engine::registry::EngineConfig;
 use crate::engine::keepalive;
 
@@ -183,7 +183,7 @@ impl EngineManager {
     }
 
     /// Dynamically spawn an adapter process for a model
-    async fn spawn_adapter_process(&self, model_id: &str, model_dir: &Path, port: u16) -> Result<ActiveEngine> {
+    async fn spawn_adapter_process(&self, model_id: &str, model_dir: &Path, port: u16, role: ModelRole) -> Result<ActiveEngine> {
         let engine_pid_file = self.data_dir.join("engines").join(format!("{}_{}.pid", self.config.id, port));
         if tokio::net::TcpListener::bind(("127.0.0.1", port)).await.is_err() {
             warn!(port, "Port is held — attempting orphan engine cleanup via PID file then lsof");
@@ -206,7 +206,7 @@ impl EngineManager {
             info!(port, "Port freed — proceeding to spawn engine");
         }
 
-        let active = self.adapter.start(model_id, model_dir, port, &self.data_dir, &self.logs_dir).await?;
+        let active = self.adapter.start(model_id, model_dir, port, &self.data_dir, &self.logs_dir, role).await?;
 
         if let Some(pid) = active.process.id() {
             let _ = std::fs::write(&engine_pid_file, pid.to_string());
@@ -276,11 +276,25 @@ impl EngineManager {
         };
         let size_bytes = index.get(model_id).map(|m| m.size_bytes).unwrap_or(0);
         let needed_vram_gb = crate::hardware::vram::estimate_model_vram(size_bytes);
+
+        // Derive the model's functional role from its capabilities.
+        // Rerank takes priority (cross-encoders may also have chat=true for generative re-rankers).
+        // Unknown models (not in index) default to Chat for backward compatibility.
+        let role = index.get(model_id)
+            .map(|m| {
+                if m.capabilities.reranking {
+                    ModelRole::Rerank
+                } else if m.capabilities.embeddings {
+                    ModelRole::Embed
+                } else {
+                    ModelRole::Chat
+                }
+            })
+            .unwrap_or(ModelRole::Chat);
+
         let entry_path = match index.get(model_id).map(|m| m.path.clone()) {
             Some(p) => p,
             None => {
-                // Fallback: construct path from model_id. This will fail for logical IDs with
-                // characters invalid on the filesystem (e.g. colons). Log a clear warning.
                 let fallback = self.data_dir.join("models").join(model_id).to_string_lossy().to_string();
                 warn!(
                     model_id,
@@ -319,7 +333,7 @@ impl EngineManager {
 
         // Spawn and wait for engine health. On any failure, clean up the dangling Starting slot
         // so the next EnsureModel call can retry a clean cold load.
-        let engine = match self.spawn_adapter_process(model_id, &model_dir, port).await {
+        let engine = match self.spawn_adapter_process(model_id, &model_dir, port, role).await {
             Ok(e) => e,
             Err(e) => {
                 self.state.write().await.running_models.remove(model_id);

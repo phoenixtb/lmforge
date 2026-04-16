@@ -391,6 +391,22 @@ pub async fn config_update(
         }
     }
 
+    // If catalogs_dir changed, create the new directory and seed it with the bundled catalogs
+    // so the user gets a ready-to-customise starting point without running lmforge init.
+    let new_catalogs_dir = req.catalogs_dir().clone();
+    if let Err(e) = std::fs::create_dir_all(&new_catalogs_dir) {
+        tracing::warn!(error = %e, dir = %new_catalogs_dir.display(), "Could not create new catalogs directory");
+    } else {
+        let mlx_path = new_catalogs_dir.join("mlx.json");
+        if !mlx_path.exists() {
+            let _ = std::fs::write(&mlx_path, include_str!("../../data/catalogs/mlx.json"));
+        }
+        let gguf_path = new_catalogs_dir.join("gguf.json");
+        if !gguf_path.exists() {
+            let _ = std::fs::write(&gguf_path, include_str!("../../data/catalogs/gguf.json"));
+        }
+    }
+
     info!("Configuration safely mutated via /lf/config API");
 
     Response::builder()

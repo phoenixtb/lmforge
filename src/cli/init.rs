@@ -24,19 +24,14 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
         std::fs::create_dir_all(&catalogs_dir)?;
     }
     
-    let default_mlx_json = catalogs_dir.join("mlx.json");
-    if !default_mlx_json.exists() {
-        let mlx_defaults = include_str!("../../data/catalogs/mlx.json");
-        std::fs::write(&default_mlx_json, mlx_defaults)?;
-        info!("Created default MLX catalog at {}", default_mlx_json.display());
-    }
+    // Always write the bundled catalog files — the content is embedded at compile time via
+    // include_str!, so this binary always has the freshest version. Overwriting on each init
+    // ensures catalog entries added in newer releases are not silently absent.
+    let mlx_defaults = include_str!("../../data/catalogs/mlx.json");
+    std::fs::write(catalogs_dir.join("mlx.json"), mlx_defaults)?;
 
-    let default_gguf_json = catalogs_dir.join("gguf.json");
-    if !default_gguf_json.exists() {
-        let gguf_defaults = include_str!("../../data/catalogs/gguf.json");
-        std::fs::write(&default_gguf_json, gguf_defaults)?;
-        info!("Created default GGUF catalog at {}", default_gguf_json.display());
-    }
+    let gguf_defaults = include_str!("../../data/catalogs/gguf.json");
+    std::fs::write(catalogs_dir.join("gguf.json"), gguf_defaults)?;
 
     // Hardware probe
     println!("⚙ Detecting hardware...");

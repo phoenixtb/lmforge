@@ -55,6 +55,8 @@ pub struct EngineConfig {
     pub health_endpoint: String,
     #[serde(default)]
     pub supports_embeddings: bool,
+    #[serde(default)]
+    pub supports_reranking: bool,
 
     /// Lower number = higher priority
     #[serde(default = "default_priority")]

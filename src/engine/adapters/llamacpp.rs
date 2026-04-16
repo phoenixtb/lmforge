@@ -4,7 +4,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc::Sender;
 use tracing::{info, warn, debug};
 
-use crate::engine::adapter::{ActiveEngine, EngineAdapter};
+use crate::engine::adapter::{ActiveEngine, EngineAdapter, ModelRole};
 use crate::model::downloader::DownloadProgress;
 
 #[derive(Clone)]
@@ -32,32 +32,61 @@ impl EngineAdapter for LlamacppAdapter {
         model_id: &str,
         model_dir: &Path,
         port: u16,
-        data_dir: &Path,
+        _data_dir: &Path,
         logs_dir: &Path,
+        role: ModelRole,
     ) -> Result<ActiveEngine> {
-
         // llama-server requires a single .gguf file path, not a directory.
         // Find the largest .gguf file in the model directory.
-        let gguf_path = find_gguf_file(&model_dir)
+        let gguf_path = find_gguf_file(model_dir)
             .ok_or_else(|| anyhow::anyhow!(
                 "No .gguf file found in model directory: {}. \
                  Pull the model first with: lmforge pull {}",
                 model_dir.display(), model_id
             ))?;
 
-        info!(model_id = %model_id, port = port, gguf = %gguf_path.display(), "Spawning llama-server bound explicitly to mmap GGUF tensors");
+        info!(
+            model_id = %model_id,
+            port = port,
+            gguf = %gguf_path.display(),
+            role = ?role,
+            "Spawning llama-server"
+        );
 
         let stdout_file = std::fs::OpenOptions::new()
             .create(true).append(true).open(logs_dir.join("engine-stdout.log"))?;
         let stderr_file = std::fs::OpenOptions::new()
             .create(true).append(true).open(logs_dir.join("engine-stderr.log"))?;
 
+        let port_str = port.to_string();
+        let gguf_str = gguf_path.to_string_lossy().to_string();
+
+        let mut args: Vec<String> = vec![
+            "--port".to_string(), port_str,
+            "--model".to_string(), gguf_str,
+            "-ngl".to_string(), "99".to_string(), // Auto offload max layers to Metal/CUDA
+        ];
+
+        match role {
+            ModelRole::Chat => {
+                // Default chat behaviour — no extra flags needed.
+            }
+            ModelRole::Embed => {
+                // Enable embedding output mode.
+                // Omit --pooling to let llama.cpp use the model's default from GGUF metadata.
+                // This avoids second-guessing what the model was trained with.
+                args.push("--embeddings".to_string());
+            }
+            ModelRole::Rerank => {
+                // Enable cross-encoder / generative re-ranker mode.
+                // Both classic cross-encoders (BGE, Jina) and generative re-rankers
+                // (Qwen3-Reranker) work with this flag from llama.cpp b4355+.
+                args.push("--reranking".to_string());
+            }
+        }
+
         let child = Command::new(&self.executable)
-            .args([
-                "--port", &port.to_string(),
-                "--model", &gguf_path.to_string_lossy(),
-                "-ngl", "99", // Auto offload max layers to Metal/CUDA
-            ])
+            .args(&args)
             .stdout(std::process::Stdio::from(stdout_file))
             .stderr(std::process::Stdio::from(stderr_file))
             .kill_on_drop(true)
@@ -71,7 +100,6 @@ impl EngineAdapter for LlamacppAdapter {
     }
 
     async fn stop(&self, active_engine: &mut ActiveEngine) -> Result<()> {
-
         if let Some(pid) = active_engine.process.id() {
             info!(pid, model = %active_engine.model_id, "Sending SIGTERM to release llama-server mmap memory footprint");
             #[cfg(unix)]
@@ -84,7 +112,7 @@ impl EngineAdapter for LlamacppAdapter {
             {
                 let _ = active_engine.process.kill().await;
             }
-            
+
             match tokio::time::timeout(std::time::Duration::from_secs(5), active_engine.process.wait()).await {
                 Ok(_) => debug!("llama-server universally flushed"),
                 Err(_) => {

@@ -122,7 +122,34 @@ async fn download_file(
     }
 
     if !resp.status().is_success() && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-        anyhow::bail!("Download failed: HTTP {}", resp.status());
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            // HuggingFace returns 401 in two very different situations:
+            // 1. The repo does not exist (body: "Invalid username or password.")
+            // 2. The repo is gated and requires access approval (body: "Access to model ... is restricted")
+            // Read the body to tell the user which one it is.
+            let body = resp.text().await.unwrap_or_default();
+            if body.contains("Invalid username") || body.contains("password") {
+                anyhow::bail!(
+                    "Model '{}' not found on HuggingFace. \
+                     The repository does not exist or the model ID is misspelled.",
+                    url.split("/resolve/").next().unwrap_or(url)
+                        .trim_start_matches("https://huggingface.co/")
+                );
+            } else {
+                // Gated model — needs HF token
+                anyhow::bail!(
+                    "Model '{}' is gated on HuggingFace and requires access approval. \
+                     Visit https://huggingface.co/{} to request access, \
+                     then set HF_TOKEN=your_hf_token in your environment.",
+                    url.split("/resolve/").next().unwrap_or(url)
+                        .trim_start_matches("https://huggingface.co/"),
+                    url.split("/resolve/").next().unwrap_or(url)
+                        .trim_start_matches("https://huggingface.co/")
+                );
+            }
+        }
+        anyhow::bail!("Download failed: HTTP {}", status);
     }
 
     let total_size = if resp.status() == reqwest::StatusCode::PARTIAL_CONTENT {

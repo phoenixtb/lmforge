@@ -9,6 +9,55 @@ use super::proxy;
 use super::thinking;
 use super::AppState;
 
+/// Load the model index, returning an empty index on failure.
+fn load_index(data_dir: &std::path::Path) -> crate::model::index::ModelIndex {
+    crate::model::index::ModelIndex::load(data_dir)
+        .unwrap_or_else(|_| crate::model::index::ModelIndex { schema_version: 1, models: vec![] })
+}
+
+/// Check that a model's capabilities are appropriate for the requested role.
+///
+/// Returns `Ok(())` if the model is suitable, or an `Err(Response)` with a 400 body
+/// describing why the model cannot be used for this purpose.
+/// Models not found in the index are allowed through — the engine will handle the error.
+fn check_model_role(
+    index: &crate::model::index::ModelIndex,
+    model_id: &str,
+    require_chat: bool,
+    require_embed: bool,
+) -> Result<(), Response<Body>> {
+    let Some(entry) = index.get(model_id) else {
+        return Ok(()); // unknown model: let the engine surface the error
+    };
+
+    if require_chat && !entry.capabilities.chat {
+        let kind = if entry.capabilities.reranking { "re-ranking" } else { "embedding" };
+        let body = format!(
+            r#"{{"error":{{"message":"Model '{}' is an {} model and cannot be used for chat completions.","type":"invalid_request_error"}}}}"#,
+            model_id, kind
+        );
+        return Err(Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .unwrap());
+    }
+
+    if require_embed && !entry.capabilities.embeddings {
+        let body = format!(
+            r#"{{"error":{{"message":"Model '{}' does not support embeddings. Use an embedding model such as 'nomic-embed-text:v1.5'.","type":"invalid_request_error"}}}}"#,
+            model_id
+        );
+        return Err(Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .unwrap());
+    }
+
+    Ok(())
+}
+
 /// `POST /v1/chat/completions` — OpenAI-compatible chat completions
 pub async fn chat_completions(
     State(state): State<AppState>,
@@ -54,14 +103,18 @@ pub async fn chat_completions(
 
     debug!(stream = is_stream, think = has_think, model = %model_id, "Chat completion request");
 
+    // Capability gate: reject embedding and re-ranking models sent to the chat endpoint.
+    let index = load_index(&state.data_dir);
+    if let Err(resp) = check_model_role(&index, &model_id, true, false) {
+        return resp.into_response();
+    }
+
     let engine_port = match state.ensure_model(&model_id, keep_alive).await {
         Ok(port) => port,
         Err(resp) => return resp.into_response(),
     };
 
     // Rewrite model_id to the exact filesystem directory name so engines don't panic
-    let index = crate::model::index::ModelIndex::load(&state.data_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex { schema_version: 1, models: vec![] });
     if let Some(entry) = index.get(&model_id) {
         if let Some(dir_name) = std::path::Path::new(&entry.path).file_name() {
             if let Some(obj) = body_value.as_object_mut() {
@@ -192,19 +245,37 @@ pub async fn embeddings(
 ) -> impl IntoResponse {
     let mut body_value: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
     let model_id = body_value.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    
+
     let keep_alive = body_value.get("keep_alive").and_then(|v| {
         if v.is_string() { Some(v.as_str().unwrap().to_string()) }
         else if v.is_number() { Some(v.as_i64().unwrap().to_string()) }
         else { None }
     });
+
+    // Engine-level gate: does this engine support embeddings at all?
+    if !state.engine_config.supports_embeddings {
+        return Response::builder()
+            .status(StatusCode::NOT_IMPLEMENTED)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(format!(
+                r#"{{"error":{{"message":"Embeddings are not supported by {} v{}. This capability is available on oMLX (macOS), SGLang (Linux/NVIDIA), and llama.cpp platforms.","type":"not_supported_error"}}}}"#,
+                state.engine_config.name, state.engine_config.version
+            )))
+            .unwrap()
+            .into_response();
+    }
+
+    // Model-level gate: does this specific model support embeddings?
+    let index = load_index(&state.data_dir);
+    if let Err(resp) = check_model_role(&index, &model_id, false, true) {
+        return resp.into_response();
+    }
+
     let engine_port = match state.ensure_model(&model_id, keep_alive).await {
         Ok(port) => port,
         Err(resp) => return resp.into_response(),
     };
 
-    let index = crate::model::index::ModelIndex::load(&state.data_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex { schema_version: 1, models: vec![] });
     if let Some(entry) = index.get(&model_id) {
         if let Some(dir_name) = std::path::Path::new(&entry.path).file_name() {
             if let Some(obj) = body_value.as_object_mut() {
@@ -250,7 +321,9 @@ pub async fn models(
             "capabilities": {
                 "chat": m.capabilities.chat,
                 "embeddings": m.capabilities.embeddings,
+                "reranking": m.capabilities.reranking,
                 "thinking": m.capabilities.thinking,
+                "embedding_dims": m.capabilities.embedding_dims,
             }
         })
     }).collect();

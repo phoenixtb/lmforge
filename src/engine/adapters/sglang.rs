@@ -4,7 +4,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc::Sender;
 use tracing::{info, warn, debug, error};
 
-use crate::engine::adapter::{ActiveEngine, EngineAdapter};
+use crate::engine::adapter::{ActiveEngine, EngineAdapter, ModelRole};
 use crate::model::downloader::DownloadProgress;
 
 #[derive(Clone)]
@@ -96,23 +96,49 @@ impl EngineAdapter for SglangAdapter {
         model_id: &str,
         model_dir: &Path,
         port: u16,
-        data_dir: &Path,
+        _data_dir: &Path,
         logs_dir: &Path,
+        role: ModelRole,
     ) -> Result<ActiveEngine> {
+        if role == ModelRole::Rerank {
+            anyhow::bail!(
+                "Re-ranking is not supported by SGLang v0.5.9 \
+                 (cross-encoder support is experimental). \
+                 It is available on platforms using llama.cpp."
+            );
+        }
 
-        info!(model_id = %model_id, port = port, "Spawning native SGLang python instance bound to model Radix KV Cache");
+        info!(model_id = %model_id, port = port, role = ?role, "Spawning native SGLang python instance");
 
         let stdout_file = std::fs::OpenOptions::new()
             .create(true).append(true).open(logs_dir.join("engine-stdout.log"))?;
         let stderr_file = std::fs::OpenOptions::new()
             .create(true).append(true).open(logs_dir.join("engine-stderr.log"))?;
 
+        let port_str = port.to_string();
+        let model_path = model_dir.to_string_lossy().to_string();
+
+        // Build args dynamically based on role
+        let mut args: Vec<String> = vec![
+            "-m".to_string(),
+            "sglang.launch_server".to_string(),
+            "--port".to_string(),
+            port_str,
+            "--model-path".to_string(),
+            model_path,
+        ];
+
+        if role == ModelRole::Embed {
+            args.push("--is-embedding".to_string());
+            // Detect pooling from model config.json; default to "mean" (correct for most
+            // retrieval models: e5-mistral, nomic, GTE families).
+            let pooling = read_pooling_from_config(model_dir).unwrap_or_else(|| "mean".to_string());
+            args.push("--pooling-method".to_string());
+            args.push(pooling);
+        }
+
         let child = Command::new(&self.executable)
-            .args([
-                "-m", "sglang.launch_server",
-                "--port", &port.to_string(),
-                "--model-path", &model_dir.to_string_lossy(),
-            ])
+            .args(&args)
             // Future parity params: --tp 2 --gpu-memory-utilization 0.9 --chunked-prefill-size
             .stdout(std::process::Stdio::from(stdout_file))
             .stderr(std::process::Stdio::from(stderr_file))
@@ -167,6 +193,23 @@ fn dir_size(path: &Path) -> u64 {
         }
     }
     total
+}
+
+/// Read the pooling strategy from the model's config.json.
+/// Checks `pooling_config.pooling_type` (sentence-transformers / GTE convention),
+/// then `nomic_embed_config.pooling` (nomic convention).
+/// Returns None if the config is absent or the field is not present.
+fn read_pooling_from_config(model_dir: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(model_dir.join("config.json")).ok()?;
+    let config: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    if let Some(pt) = config["pooling_config"]["pooling_type"].as_str() {
+        return Some(pt.to_lowercase());
+    }
+    if let Some(np) = config["nomic_embed_config"]["pooling"].as_str() {
+        return Some(np.to_lowercase());
+    }
+    None
 }
 
 /// Extract the last meaningful line from a Python traceback for a clean user-facing error.

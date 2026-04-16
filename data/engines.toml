@@ -18,6 +18,7 @@ start_cmd       = "omlx"
 start_args      = ["serve", "--port", "{port}", "--model-dir", "{data_dir}/models"]
 health_endpoint = "/v1/models"
 supports_embeddings = true
+supports_reranking  = false   # Not in oMLX v0.3.0; enable when version supports it
 priority        = 10
 
 [[engine]]
@@ -37,7 +38,8 @@ hf_org          = "{original}"
 start_cmd       = "python3"
 start_args      = ["-m", "sglang.launch_server", "--port", "{port}", "--model-path", "{model_path}"]
 health_endpoint = "/health"
-supports_embeddings = false
+supports_embeddings = true    # via --is-embedding flag; LMForge injects automatically
+supports_reranking  = false   # Cross-encoder support experimental in v0.5.9; skip
 priority        = 20
 
 [[engine]]
@@ -54,5 +56,6 @@ hf_org          = "bartowski"
 start_cmd       = "llama-server"
 start_args      = ["--port", "{port}", "--model", "{model_path}", "-ngl", "{gpu_layers}"]
 health_endpoint = "/health"
-supports_embeddings = false
+supports_embeddings = true    # via --embeddings flag; LMForge injects automatically
+supports_reranking  = true    # via --reranking flag; stable from b4355+
 priority        = 100

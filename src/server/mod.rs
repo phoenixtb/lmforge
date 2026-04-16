@@ -4,6 +4,7 @@ pub mod native;
 pub mod ollama;
 pub mod openai;
 pub mod proxy;
+pub mod rerank;
 pub mod thinking;
 
 use std::sync::Arc;
@@ -72,6 +73,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/chat/completions", post(openai::chat_completions))
         .route("/v1/completions", post(openai::completions))
         .route("/v1/embeddings", post(openai::embeddings))
+        .route("/v1/rerank", post(rerank::rerank))
         .route("/v1/models", get(openai::models))
         // Ollama-compatible endpoints
         .route("/api/chat", post(ollama::chat))
