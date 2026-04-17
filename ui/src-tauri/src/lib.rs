@@ -1,6 +1,6 @@
 mod tray;
 
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -54,9 +54,15 @@ pub fn run() {
         .expect("error while running LMForge");
 }
 
-/// Poll /lf/status every 2 s and emit "lf:status" Tauri events.
-/// Also emits "lf:health" with { online: bool } so the UI can show the
-/// "Engine not running" screen.
+/// Poll /lf/status every 2 s and emit "lf:status" / "lf:health" Tauri events.
+///
+/// Key design decisions:
+///  1. 800 ms startup delay — gives the WebView time to mount and register
+///     its listen() handlers before the first event fires. Without this there
+///     is a race: the event fires before Svelte attaches its listener, the UI
+///     never receives it, and daemonOnline stays null → stuck "connecting".
+///  2. Emit lf:health EVERY cycle — not just on state change — so any
+///     late-registering listener is caught on the next tick.
 async fn status_bridge(app: tauri::AppHandle) {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
@@ -64,10 +70,12 @@ async fn status_bridge(app: tauri::AppHandle) {
         .unwrap_or_default();
 
     let base_url = "http://127.0.0.1:11430";
-    let mut was_online = false;
+
+    // Let the WebView mount and register listen() before the first event.
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
 
     loop {
-        // 1. Health check
+        // 1. Health check — emit every cycle; the store handles idempotent updates.
         let health_ok = client
             .get(format!("{}/health", base_url))
             .send()
@@ -75,38 +83,34 @@ async fn status_bridge(app: tauri::AppHandle) {
             .map(|r| r.status().is_success())
             .unwrap_or(false);
 
-        if health_ok != was_online {
-            was_online = health_ok;
-            let _ = app.emit("lf:health", serde_json::json!({ "online": health_ok }));
+        let _ = app.emit("lf:health", serde_json::json!({ "online": health_ok }));
 
-            if !health_ok {
-                // Daemon went offline — emit a stopped state to clear the UI
-                let _ = app.emit("lf:status", serde_json::json!({
-                    "overall_status": "stopped",
-                    "engine_id": "—",
-                    "engine_version": "—",
-                    "running_models": {},
-                    "metrics": {
-                        "requests_total": 0,
-                        "ttft_avg_ms": 0.0,
-                        "uptime_secs": 0,
-                        "restart_count": 0
-                    }
-                }));
-            }
+        if !health_ok {
+            let _ = app.emit("lf:status", serde_json::json!({
+                "overall_status": "stopped",
+                "engine_id": "—",
+                "engine_version": "—",
+                "running_models": {},
+                "metrics": {
+                    "requests_total": 0,
+                    "ttft_avg_ms": 0.0,
+                    "uptime_secs": 0,
+                    "restart_count": 0
+                }
+            }));
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            continue;
         }
 
-        // 2. Fetch status snapshot when online
-        if health_ok {
-            if let Ok(resp) = client
-                .get(format!("{}/lf/status", base_url))
-                .send()
-                .await
-            {
-                if let Ok(body) = resp.text().await {
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
-                        let _ = app.emit("lf:status", &json);
-                    }
+        // 2. Fetch full status snapshot when online.
+        if let Ok(resp) = client
+            .get(format!("{}/lf/status", base_url))
+            .send()
+            .await
+        {
+            if let Ok(body) = resp.text().await {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+                    let _ = app.emit("lf:status", &json);
                 }
             }
         }
