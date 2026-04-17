@@ -137,13 +137,10 @@
 
     <!-- ── Metrics strip ─────────────────────────────────────────────────────── -->
     <div class="metrics">
-      <div class="metric"><span class="mv mono">{ttft}</span><span class="ml">Avg TTFT</span><span class="ms">{ttftSub}</span></div>
-      <div class="metric"><span class="mv mono">{fmtSecs(clientUptime)}</span><span class="ml">Uptime</span><span class="ms">since last start</span></div>
-      <div class="metric"><span class="mv mono">{reqs}</span><span class="ml">Requests</span><span class="ms">total served</span></div>
-      <div class="metric" class:warn={metrics.restart_count > 0}>
-        <span class="mv mono">{metrics.restart_count}</span><span class="ml">Restarts</span>
-        <span class="ms">{metrics.restart_count === 0 ? 'clean run' : 'check logs'}</span>
-      </div>
+      <div class="metric metric--dim"><span class="mv mono">—</span><span class="ml">Avg TTFT</span><span class="ms">coming soon</span></div>
+      <div class="metric metric--dim"><span class="mv mono">—</span><span class="ml">Uptime</span><span class="ms">coming soon</span></div>
+      <div class="metric metric--dim"><span class="mv mono">—</span><span class="ml">Requests</span><span class="ms">coming soon</span></div>
+      <div class="metric metric--dim"><span class="mv mono">—</span><span class="ml">Restarts</span><span class="ms">coming soon</span></div>
     </div>
 
     <!-- ── Main panels ────────────────────────────────────────────────────────── -->
@@ -401,6 +398,8 @@
   .mv { font-size: 20px; font-weight: 600; color: var(--text); letter-spacing: -0.6px; line-height: 1.1; }
   .ml { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
   .ms { font-size: 9.5px; color: var(--text-3); opacity: 0.7; }
+  .metric--dim { opacity: 0.4; pointer-events: none; }
+  .metric--dim .mv { color: var(--text-3); }
 
   /* ── Layout panels ───────────────────────────────────────────────────────── */
   .panels { display: flex; gap: 12px; flex: 1; min-height: 0; overflow: hidden; }
