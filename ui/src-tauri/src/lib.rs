@@ -17,9 +17,11 @@ pub fn run() {
             }
         })
         .setup(move |app| {
-            // ── macOS: prevent did_finish_launching panic with visible:false ──
-            #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+        // ── macOS: use Regular policy so the app owns the menu bar when focused.
+        // Accessory would prevent the menu bar from updating, leaving the previous
+        // app's menu visible. We still hide to tray on close (on_window_event above).
+        #[cfg(target_os = "macos")]
+        app.set_activation_policy(tauri::ActivationPolicy::Regular);
 
             let app_handle = app.handle().clone();
 

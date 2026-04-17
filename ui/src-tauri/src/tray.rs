@@ -107,16 +107,15 @@ async fn tray_poll_loop(app: AppHandle) {
             continue;
         }
 
-        // Fetch engine state for model count
-        let state = client
-            .get("http://127.0.0.1:11430/lf/status")
-            .send()
-            .await
-            .ok()
-            .and_then(|r| {
-                // blocking parse in async context is fine for a small payload
-                tauri::async_runtime::block_on(r.json::<serde_json::Value>()).ok()
-            });
+        // Properly await the JSON parse — block_on inside async panics.
+        let state: Option<serde_json::Value> = async {
+            let resp = client
+                .get("http://127.0.0.1:11430/lf/status")
+                .send()
+                .await
+                .ok()?;
+            resp.json::<serde_json::Value>().await.ok()
+        }.await;
 
         update_tray_from_json(&app, state.as_ref());
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
