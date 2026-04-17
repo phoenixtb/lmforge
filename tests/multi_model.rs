@@ -21,7 +21,7 @@ use std::time::Instant;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use futures::future::join_all;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{RwLock, broadcast, mpsc};
 use tower::ServiceExt; // for `oneshot`
 use wiremock::matchers::{method, path};
@@ -98,7 +98,11 @@ fn write_model_index(
         .iter()
         .map(|(id, suffix, chat, embeddings)| ModelEntry {
             id: id.to_string(),
-            path: dir.join("models").join(suffix).to_string_lossy().to_string(),
+            path: dir
+                .join("models")
+                .join(suffix)
+                .to_string_lossy()
+                .to_string(),
             format: "mlx".to_string(),
             engine: "omlx".to_string(),
             hf_repo: None,
@@ -131,10 +135,7 @@ fn write_model_index(
 /// Instead of loading real models, it resolves `EnsureModel` commands by
 /// looking up the model ID in a pre-configured `port_map`. This lets tests
 /// route requests to wiremock servers without any subprocess spawning.
-fn spawn_fake_manager(
-    port_map: HashMap<String, u16>,
-    mut cmd_rx: mpsc::Receiver<ManagerCommand>,
-) {
+fn spawn_fake_manager(port_map: HashMap<String, u16>, mut cmd_rx: mpsc::Receiver<ManagerCommand>) {
     tokio::spawn(async move {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
@@ -196,11 +197,7 @@ fn build_app_state(
 }
 
 /// Fire a `POST` request through the axum router as a `tower::Service`.
-async fn post(
-    router: &axum::Router,
-    uri: &str,
-    body: Value,
-) -> (StatusCode, Value) {
+async fn post(router: &axum::Router, uri: &str, body: Value) -> (StatusCode, Value) {
     let req = Request::builder()
         .method("POST")
         .uri(uri)
@@ -209,7 +206,9 @@ async fn post(
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, json)
 }
@@ -222,12 +221,7 @@ async fn tc01_embed_model_rejected_at_chat_endpoint() {
     let tmp = tempfile::tempdir().unwrap();
     let embed = embed_model();
 
-    write_model_index(
-        tmp.path(),
-        &[
-            (embed.as_str(), "embed", false, true),
-        ],
-    );
+    write_model_index(tmp.path(), &[(embed.as_str(), "embed", false, true)]);
 
     let (router, _) = build_app_state(tmp.path().to_owned(), HashMap::new(), 128);
 
@@ -259,12 +253,7 @@ async fn tc02_chat_model_rejected_at_embeddings_endpoint() {
     let tmp = tempfile::tempdir().unwrap();
     let chat = chat_model();
 
-    write_model_index(
-        tmp.path(),
-        &[
-            (chat.as_str(), "chat", true, false),
-        ],
-    );
+    write_model_index(tmp.path(), &[(chat.as_str(), "chat", true, false)]);
 
     let (router, _) = build_app_state(tmp.path().to_owned(), HashMap::new(), 128);
 
@@ -352,8 +341,16 @@ async fn tc03_correct_port_dispatch_two_models() {
     assert_eq!(s2, StatusCode::OK, "Chat failed: {b2}");
 
     // Validate each landed on its own server
-    assert_eq!(embed_server.received_requests().await.unwrap().len(), 1, "Embed server should have 1 request");
-    assert_eq!(chat_server.received_requests().await.unwrap().len(), 1, "Chat server should have 1 request");
+    assert_eq!(
+        embed_server.received_requests().await.unwrap().len(),
+        1,
+        "Embed server should have 1 request"
+    );
+    assert_eq!(
+        chat_server.received_requests().await.unwrap().len(),
+        1,
+        "Chat server should have 1 request"
+    );
 
     println!("✓ TC-03 passed — embed and chat requests correctly dispatched to separate ports");
 }
@@ -408,7 +405,10 @@ async fn tc04_concurrent_10_embed_requests() {
     for (i, r) in results.iter().enumerate() {
         let (status, body) = r.as_ref().unwrap();
         assert_eq!(*status, StatusCode::OK, "Request {i} failed: {body}");
-        assert!(body["data"].is_array(), "Request {i} response missing 'data': {body}");
+        assert!(
+            body["data"].is_array(),
+            "Request {i} response missing 'data': {body}"
+        );
         ok_count += 1;
     }
 
@@ -458,7 +458,9 @@ async fn tc05_sequential_10_chat_completions() {
         .await;
         latencies.push(t.elapsed());
         assert_eq!(status, StatusCode::OK, "Request {i} failed: {body}");
-        let content = body["choices"][0]["message"]["content"].as_str().unwrap_or("");
+        let content = body["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("");
         assert!(!content.is_empty(), "Request {i} returned empty content");
     }
 
@@ -544,8 +546,11 @@ async fn tc06_interleaved_embed_and_chat_requests() {
     embed_server.verify().await;
     chat_server.verify().await;
 
-    println!("✓ TC-06 passed — {N} interleaved embed+chat pairs, all routed correctly (embed→port:{}, chat→port:{})",
-        embed_server.address().port(), chat_server.address().port());
+    println!(
+        "✓ TC-06 passed — {N} interleaved embed+chat pairs, all routed correctly (embed→port:{}, chat→port:{})",
+        embed_server.address().port(),
+        chat_server.address().port()
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -636,7 +641,9 @@ async fn tc08_batch_embedding_chunking() {
 
     assert_eq!(status, StatusCode::OK, "Batch embed failed: {body}");
 
-    let data = body["data"].as_array().expect("Response should have 'data' array");
+    let data = body["data"]
+        .as_array()
+        .expect("Response should have 'data' array");
     assert_eq!(
         data.len(),
         TOTAL_INPUTS,
@@ -646,7 +653,9 @@ async fn tc08_batch_embedding_chunking() {
 
     // Verify index fields are re-numbered sequentially 0..29
     for (i, item) in data.iter().enumerate() {
-        let idx = item["index"].as_u64().expect("each item should have an 'index'");
+        let idx = item["index"]
+            .as_u64()
+            .expect("each item should have an 'index'");
         assert_eq!(idx, i as u64, "Item {i} has wrong index: {idx}");
     }
 

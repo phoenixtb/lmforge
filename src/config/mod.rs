@@ -54,7 +54,9 @@ pub struct OrchestratorConfig {
     pub embed_batch_size: usize,
 }
 
-fn default_embed_batch_size() -> usize { 32 }
+fn default_embed_batch_size() -> usize {
+    32
+}
 
 impl Default for OrchestratorConfig {
     fn default() -> Self {
@@ -101,13 +103,11 @@ impl Default for LmForgeConfig {
 impl LmForgeConfig {
     /// Get the LMForge data directory path (~/.lmforge/)
     pub fn data_dir(&self) -> PathBuf {
-        self.data_dir_path
-            .clone()
-            .unwrap_or_else(|| {
-                dirs::home_dir()
-                    .expect("Could not determine home directory")
-                    .join(".lmforge")
-            })
+        self.data_dir_path.clone().unwrap_or_else(|| {
+            dirs::home_dir()
+                .expect("Could not determine home directory")
+                .join(".lmforge")
+        })
     }
 
     /// Get the catalogs directory path
@@ -200,7 +200,8 @@ fn merge_config(base: LmForgeConfig, overlay: LmForgeConfig) -> LmForgeConfig {
             } else {
                 overlay.orchestrator.max_loaded_models
             },
-            embed_batch_size: if overlay.orchestrator.embed_batch_size == default_embed_batch_size() {
+            embed_batch_size: if overlay.orchestrator.embed_batch_size == default_embed_batch_size()
+            {
                 // If overlay is at default, keep base (allows user to lower it)
                 base.orchestrator.embed_batch_size
             } else {
@@ -221,7 +222,7 @@ mod tests {
         assert_eq!(config.port, 11430);
         assert_eq!(config.bind_address, "127.0.0.1");
         assert_eq!(config.log_level, "info");
-        assert_eq!(config.schema_version, 1);
+        assert_eq!(config.schema_version, 2);
         assert_eq!(config.resources.max_gpu_memory_fraction, 0.75);
         assert_eq!(config.resources.max_concurrent_requests, 4);
     }
