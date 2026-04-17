@@ -33,13 +33,8 @@ pub fn run() {
                 if let Err(e) = tray::setup_tray(&app_handle) {
                     eprintln!("⚠ Tray unavailable: {}. Running in window-only mode.", e);
                 }
-                // With Regular activation policy + visible:false in tauri.conf.json
-                // the window is created but hidden. Show it now so the frontend renders
-                // and can receive lf:health / lf:status events.
-                if let Some(win) = app_handle.get_webview_window("main") {
-                    let _ = win.show();
-                    let _ = win.set_focus();
-                }
+                // Window is shown by visible:true in tauri.conf.json.
+                // The on_window_event close handler hides it to tray instead of quitting.
             }
 
             // ── Status bridge: HTTP → Tauri IPC events ───────────────────────
