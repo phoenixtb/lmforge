@@ -54,7 +54,7 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 
 - **Multi-model orchestration** — run inference *and* embedding models simultaneously, independently managed
 - **Hardware-aware engine selection** — automatically picks the best engine for your hardware:
-  - 🍎 **Apple Silicon** → [oMLX](https://github.com/ml-explore/mlx) (native Metal via MLX, maximum throughput on M-series)
+  - 🍎 **Apple Silicon** → [oMLX](https://github.com/jundot/omlx) (OpenAI-compatible server for M-series, runs natively on Metal via MLX)
   - 🖥️ **NVIDIA GPU (Linux/Windows)** → [SGLang](https://github.com/sgl-project/sglang) (CUDA, high-concurrency)
   - 💻 **CPU / any hardware** → [llama.cpp](https://github.com/ggerganov/llama.cpp) (universal fallback)
 - **VRAM-aware LRU eviction** — loads models up to the detected VRAM budget; evicts least-recently-used when full
@@ -72,7 +72,7 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 
 | Platform | Architecture | Engine | Core | Desktop UI |
 |---|---|---|---|---|
-| macOS 13+ | Apple Silicon (arm64) | oMLX | ✅ | ✅ DMG |
+| macOS 13+ | Apple Silicon (arm64) | [oMLX](https://github.com/jundot/omlx) | ✅ | ✅ DMG |
 | macOS 13+ | Intel (x86_64) | llama.cpp | ✅ | ✅ DMG |
 | Ubuntu 22.04+ | x86_64 | SGLang / llama.cpp | ✅ | ✅ AppImage |
 | Ubuntu 22.04+ | arm64 | llama.cpp | ✅ | 🔜 Planned |
