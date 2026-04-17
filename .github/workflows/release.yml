@@ -153,6 +153,8 @@ jobs:
         run: npm ci
 
       - name: Build Tauri app
+        # Must run from ui/ so tauri.conf.json and frontendDist paths resolve correctly.
+        # With --target, Tauri places output in the repo-root target/<target>/release/bundle/
         working-directory: ui
         run: npm run tauri build -- --target ${{ matrix.target }}
 
@@ -161,7 +163,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: LMForge-UI-${{ matrix.platform }}.dmg
-          path: ui/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          # Tauri places bundles in the repo-root target/ when --target is specified
+          path: target/${{ matrix.target }}/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 1
 
@@ -170,7 +173,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: LMForge-UI-${{ matrix.platform }}.AppImage
-          path: ui/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+          path: target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
           if-no-files-found: error
           retention-days: 1
 

@@ -54,7 +54,7 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 
 - **Multi-model orchestration** — run inference *and* embedding models simultaneously, independently managed
 - **Hardware-aware engine selection** — automatically picks the best engine for your hardware:
-  - 🍎 **Apple Silicon** → [MLX](https://github.com/ml-explore/mlx) (native Metal, maximum throughput)
+  - 🍎 **Apple Silicon** → [oMLX](https://github.com/ml-explore/mlx) (native Metal via MLX, maximum throughput on M-series)
   - 🖥️ **NVIDIA GPU (Linux/Windows)** → [SGLang](https://github.com/sgl-project/sglang) (CUDA, high-concurrency)
   - 💻 **CPU / any hardware** → [llama.cpp](https://github.com/ggerganov/llama.cpp) (universal fallback)
 - **VRAM-aware LRU eviction** — loads models up to the detected VRAM budget; evicts least-recently-used when full
@@ -70,13 +70,13 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 
 ## Supported Platforms
 
-| Platform | Architecture | Engine | Status |
-|---|---|---|---|
-| macOS 13+ | Apple Silicon (arm64) | MLX | ✅ Primary |
-| macOS 13+ | Intel (x86_64) | llama.cpp | ✅ Supported |
-| Ubuntu 22.04+ | x86_64 | SGLang / llama.cpp | ✅ Supported |
-| Ubuntu 22.04+ | arm64 | llama.cpp | ✅ Supported |
-| Windows 11 | x86_64 | llama.cpp | 🔜 Beta |
+| Platform | Architecture | Engine | Core | Desktop UI |
+|---|---|---|---|---|
+| macOS 13+ | Apple Silicon (arm64) | oMLX | ✅ | ✅ DMG |
+| macOS 13+ | Intel (x86_64) | llama.cpp | ✅ | ✅ DMG |
+| Ubuntu 22.04+ | x86_64 | SGLang / llama.cpp | ✅ | ✅ AppImage |
+| Ubuntu 22.04+ | arm64 | llama.cpp | ✅ | 🔜 Planned |
+| Windows 11 | x86_64 | llama.cpp | ✅ | 🔜 Planned |
 
 ---
 
@@ -91,7 +91,12 @@ The daemon runs as a system service. Install it once; it starts automatically on
 curl -fsSL https://github.com/phoenixtb/lmforge/releases/latest/download/install-core.sh | bash
 ```
 
-**Windows:** Download `lmforge-windows-x86_64.exe` from [GitHub Releases](https://github.com/phoenixtb/lmforge/releases/latest).
+**Windows:** Download `lmforge-windows-x86_64.exe` from [GitHub Releases](https://github.com/phoenixtb/lmforge/releases/latest) and run:
+```powershell
+# Add to PATH then run:
+lmforge init
+lmforge start
+```
 
 What the install script does:
 1. Downloads the pre-built binary for your platform/arch
@@ -108,9 +113,13 @@ LMFORGE_VERSION=v0.3.0 curl -fsSL https://github.com/phoenixtb/lmforge/releases/
 ### Desktop UI (optional)
 
 After installing the core:
+
+**macOS / Linux:**
 ```bash
 curl -fsSL https://github.com/phoenixtb/lmforge/releases/latest/download/install-ui.sh | bash
 ```
+
+**Windows:** The desktop UI for Windows is planned for a future release. The full REST API works on Windows via the core CLI today — any OpenAI-compatible client (Open WebUI, LibreChat, etc.) will work against `http://127.0.0.1:11430`.
 
 Downloads the `.dmg` (macOS) or `.AppImage` (Linux), installs it, and opens the app. The UI is a pure client — closing it never affects the daemon or running models.
 
