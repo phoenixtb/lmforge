@@ -157,6 +157,12 @@ pub enum ServiceAction {
     Install,
     /// Uninstall the LMForge service
     Uninstall,
+    /// Start the LMForge service (if service-managed)
+    Start,
+    /// Stop the LMForge service (daemon process; models will be unloaded)
+    Stop,
+    /// Show current service status
+    Status,
 }
 
 #[derive(Subcommand, Debug)]
@@ -178,7 +184,7 @@ pub enum ModelsAction {
 pub async fn dispatch(cli: Cli, config: LmForgeConfig) -> Result<()> {
     match cli.command {
         Command::Init => init::run(&config).await,
-        Command::Start { model, port, bind, foreground } => start::run(&config, model, port, bind, foreground).await,
+        Command::Start { model, port, bind, foreground } => start::run(&config, model, port, bind, foreground, None).await,
         Command::Stop => stop::run(&config).await,
         Command::Status => status::run(&config).await,
         Command::Pull { model } => pull::run(&config, &model).await,
@@ -189,8 +195,11 @@ pub async fn dispatch(cli: Cli, config: LmForgeConfig) -> Result<()> {
         }
         Command::Run { model } => run::run(&config, &model).await,
         Command::Service { action } => match action {
-            ServiceAction::Install => service::install(),
+            ServiceAction::Install   => service::install(),
             ServiceAction::Uninstall => service::uninstall(),
+            ServiceAction::Start     => service::service_start(),
+            ServiceAction::Stop      => service::service_stop(),
+            ServiceAction::Status    => service::service_status(),
         },
         Command::Logs {
             follow,

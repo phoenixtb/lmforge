@@ -84,6 +84,9 @@ pub struct EngineManager {
     active_slots: std::collections::HashMap<String, ActiveSlot>,
     global_keep_alive: String,
     max_loaded_models: u32,
+    /// Broadcast channel sender — fires a full EngineState snapshot whenever state changes.
+    /// Receivers: tray icon (in-process), SSE `/lf/status/stream` (external).
+    status_tx: tokio::sync::broadcast::Sender<EngineState>,
 }
 
 pub enum ManagerCommand {
@@ -104,6 +107,7 @@ impl EngineManager {
         data_dir: PathBuf,
         global_keep_alive: String,
         max_loaded_models: u32,
+        status_tx: tokio::sync::broadcast::Sender<EngineState>,
     ) -> Self {
         let logs_dir = data_dir.join("logs");
         let state = Arc::new(RwLock::new(EngineState {
@@ -126,7 +130,16 @@ impl EngineManager {
             active_slots: std::collections::HashMap::new(),
             global_keep_alive,
             max_loaded_models,
+            status_tx,
         }
+    }
+
+    /// Broadcast current state snapshot to all subscribers (tray, SSE, Tauri events).
+    /// Call this after every mutation to `self.state`.
+    async fn notify(&self) {
+        let snapshot = self.state.read().await.clone();
+        // Ignore send errors — no subscribers is fine, lagged is fine.
+        let _ = self.status_tx.send(snapshot);
     }
 
     pub fn state(&self) -> Arc<RwLock<EngineState>> {
@@ -378,6 +391,9 @@ impl EngineManager {
             }
         }
 
+        // Notify all status subscribers that a new model is ready.
+        self.notify().await;
+
         Ok(port)
     }
 
@@ -394,6 +410,7 @@ impl EngineManager {
                             if let Some(mut slot) = self.active_slots.remove(&model_id) {
                                 let _ = self.stop_slot(&mut slot).await;
                                 self.state.write().await.running_models.remove(&model_id);
+                                self.notify().await;
                             }
                         }
                         Some(ManagerCommand::UnloadAll) => {
@@ -404,6 +421,7 @@ impl EngineManager {
                                 let _ = self.stop_slot(&mut slot).await;
                             }
                             self.state.write().await.running_models.clear();
+                            self.notify().await;
                         }
                         None => break,
                     }
@@ -435,6 +453,10 @@ impl EngineManager {
                             public_slot.idle_secs = now.saturating_sub(slot.last_accessed);
                         }
                     }
+                    // Notify after every heartbeat tick so idle_secs stays fresh
+                    // in the tray / SSE stream without requiring a state-change event.
+                    drop(state);
+                    self.notify().await;
                 }
             }
         }

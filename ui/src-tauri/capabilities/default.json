@@ -1,10 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "LMForge main window capabilities",
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:default"
+    "opener:default",
+    "os:default",
+    "dialog:default",
+    "dialog:allow-open",
+    "core:window:allow-start-dragging"
   ]
 }

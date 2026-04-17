@@ -104,8 +104,13 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
     println!("\n  ✓ Downloaded {} MB", size_mb);
 
     // Detect capabilities
-    let caps = index::detect_capabilities(&model_dir);
-    println!("  Capabilities: chat={} embeddings={} thinking={}", caps.chat, caps.embeddings, caps.thinking);
+    let caps = index::detect_capabilities(
+        &model_dir,
+        Some(&resolved.id),
+        Some(&resolved.hf_repo),
+    );
+    println!("  Capabilities: chat={} embeddings={} reranking={} thinking={} dims={:?}",
+        caps.chat, caps.embeddings, caps.reranking, caps.thinking, caps.embedding_dims);
 
     // Add to index
     let entry = index::ModelEntry {

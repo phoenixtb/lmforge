@@ -5,6 +5,7 @@ pub mod ollama;
 pub mod openai;
 pub mod proxy;
 pub mod rerank;
+pub mod sysinfo;
 pub mod thinking;
 
 use std::sync::Arc;
@@ -28,9 +29,37 @@ pub struct AppState {
     pub bind_address: String,
     pub config: Arc<RwLock<crate::config::LmForgeConfig>>,
     pub command_tx: tokio::sync::mpsc::Sender<ManagerCommand>,
+    /// Broadcast channel — subscribers receive a full `EngineState` snapshot on every state change.
+    /// The tray icon (in-process) subscribes via `status_tx.subscribe()`.
+    /// The SSE endpoint `/lf/status/stream` also subscribes for external consumers.
+    pub status_tx: tokio::sync::broadcast::Sender<EngineState>,
+    /// Optional Tauri AppHandle — `Some` when running embedded inside the Tauri UI process.
+    /// Used to emit `"lf:status"` events directly to the Svelte frontend (zero HTTP).
+    /// `None` when LMForge runs as a standalone CLI daemon.
+    #[cfg(feature = "tauri-embed")]
+    pub app_handle: Option<tauri::AppHandle>,
 }
 
 impl AppState {
+    /// Fire a state-change notification to all subscribers:
+    /// - `status_tx` broadcast channel → tray icon receiver (in-process)
+    /// - `app_handle.emit("lf:status")` → Svelte frontend via Tauri IPC (in-process, zero HTTP)
+    /// - SSE `/lf/status/stream` clients also receive via their `broadcast::Receiver`
+    ///
+    /// This is the single send site for all status updates. Call it after any mutation
+    /// to `engine_state`.
+    pub fn notify_state(&self, snapshot: EngineState) {
+        // Broadcast to tray + SSE subscribers. Ignore errors — lagged receivers are fine,
+        // they'll catch up on next change. SendError means no subscribers, also fine.
+        let _ = self.status_tx.send(snapshot.clone());
+
+        // Emit to the embedded Tauri frontend (no-op when running headless).
+        #[cfg(feature = "tauri-embed")]
+        if let Some(handle) = &self.app_handle {
+            let _ = handle.emit("lf:status", &snapshot);
+        }
+    }
+
     pub async fn ensure_model(&self, model_id: &str, keep_alive: Option<String>) -> Result<u16, axum::http::Response<axum::body::Body>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let cmd = ManagerCommand::EnsureModel {
@@ -81,7 +110,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/tags", get(ollama::tags))
         // LMForge native endpoints
         .route("/lf/status", get(native::status))
+        .route("/lf/status/stream", get(native::status_stream))
         .route("/lf/hardware", get(native::hardware))
+        .route("/lf/sysinfo", get(sysinfo::sysinfo))
         .route("/lf/model/list", get(native::model_list))
         .route("/lf/model/switch", post(native::model_switch))
         .route("/lf/model/pull", post(native::model_pull))

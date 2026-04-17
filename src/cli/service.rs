@@ -201,3 +201,112 @@ fn uninstall_systemd() -> Result<()> {
     println!("✓ LMForge service uninstalled.");
     Ok(())
 }
+
+// ── Service control (start / stop / status) ───────────────────────────────────
+
+pub fn service_start() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let plist_path = launchd_plist_path()?;
+        if !plist_path.exists() {
+            bail!("Service not installed. Run `lmforge service install` first.");
+        }
+        let out = std::process::Command::new("launchctl")
+            .args(["start", LAUNCHD_LABEL])
+            .output()?;
+        if out.status.success() {
+            println!("✓ LMForge service started.");
+        } else {
+            bail!("{}", String::from_utf8_lossy(&out.stderr));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let unit_path = systemd_unit_path()?;
+        if !unit_path.exists() {
+            bail!("Service not installed. Run `lmforge service install` first.");
+        }
+        std::process::Command::new("systemctl")
+            .args(["--user", "start", SYSTEMD_SERVICE])
+            .status()?;
+        println!("✓ LMForge service started.");
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    bail!("Service control is only supported on macOS and Linux.");
+
+    Ok(())
+}
+
+pub fn service_stop() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("launchctl")
+            .args(["stop", LAUNCHD_LABEL])
+            .output()?;
+        println!("✓ LMForge service stopped.");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("systemctl")
+            .args(["--user", "stop", SYSTEMD_SERVICE])
+            .status()?;
+        println!("✓ LMForge service stopped.");
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    bail!("Service control is only supported on macOS and Linux.");
+
+    Ok(())
+}
+
+pub fn service_status() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let installed = launchd_plist_path().map(|p| p.exists()).unwrap_or(false);
+        println!("  Service file : {}",
+            if installed { "installed ✓" } else { "not installed" });
+
+        if installed {
+            let out = std::process::Command::new("launchctl")
+                .args(["list", LAUNCHD_LABEL])
+                .output()?;
+            let info = String::from_utf8_lossy(&out.stdout);
+            let running = info.contains("\"PID\"") && !info.contains("\"PID\" = 0;");
+            println!("  launchd      : {}", if running { "running ✓" } else { "not running" });
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let installed = systemd_unit_path().map(|p| p.exists()).unwrap_or(false);
+        println!("  Service file : {}",
+            if installed { "installed ✓" } else { "not installed" });
+
+        if installed {
+            let out = std::process::Command::new("systemctl")
+                .args(["--user", "is-active", SYSTEMD_SERVICE])
+                .output()?;
+            let active = String::from_utf8_lossy(&out.stdout).trim() == "active";
+            println!("  systemd      : {}", if active { "active (running) ✓" } else { "inactive" });
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    println!("  Service management not available on this platform.");
+
+    // Always show live daemon health regardless of service mode
+    println!();
+    let health_ok = std::process::Command::new("sh")
+        .args(["-c", "curl -sf http://127.0.0.1:11430/health > /dev/null 2>&1"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    println!("  Daemon API   : {}",
+        if health_ok { "reachable at http://127.0.0.1:11430 ✓" } else { "not reachable" });
+
+    Ok(())
+}
+

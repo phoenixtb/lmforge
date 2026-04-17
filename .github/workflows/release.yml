@@ -3,129 +3,231 @@ name: Release
 on:
   push:
     tags:
-      - "v*.*.*"   # Triggers on: git tag v0.2.0 && git push --tags
+      - "v*"
+
+permissions:
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
-  BINARY: lmforge
+  RUST_BACKTRACE: 1
+  REPO: phoenixtb/lmforge
 
 jobs:
-  # ────────────────────────────────────────────────────────────────────────────
-  # Build matrix — one job per target platform
-  # ────────────────────────────────────────────────────────────────────────────
-  build:
-    name: Build ${{ matrix.target }}
+  # ─────────────────────────────────────────────────────────────────────────────
+  #  Core binary — one job per platform/arch
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-core:
+    name: Core — ${{ matrix.asset_name }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # macOS Apple Silicon (M-series)
-          - os: macos-latest
+          - os: macos-14           # Apple Silicon runner
             target: aarch64-apple-darwin
-            cross: false
+            asset_name: lmforge-macos-arm64
 
-          # macOS Intel (older Macs)
-          - os: macos-13
+          - os: macos-13           # Intel runner
             target: x86_64-apple-darwin
-            cross: false
+            asset_name: lmforge-macos-x86_64
 
-          # Linux AMD64 (most servers, workstations)
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            cross: false
+            asset_name: lmforge-linux-x86_64
 
-          # Linux ARM64 (Raspberry Pi 5, AWS Graviton, Jetson)
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
-            cross: true   # requires cross-compilation
+            asset_name: lmforge-linux-arm64
+            cross: true
 
-          # Windows AMD64
-          - os: windows-latest
+          - os: windows-2022
             target: x86_64-pc-windows-msvc
-            cross: false
+            asset_name: lmforge-windows-x86_64.exe
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross (ARM64 Linux only)
-        if: matrix.cross == true
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-cargo-
+          key: ${{ runner.os }}-${{ matrix.target }}-core-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-core-
 
-      - name: Build release binary (native)
-        if: matrix.cross == false
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y pkg-config libssl-dev
 
-      - name: Build release binary (cross)
+      - name: Install cross (for Linux ARM64)
         if: matrix.cross == true
-        run: cross build --release --target ${{ matrix.target }}
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
-      # ── Package into a .tar.gz (works on all 3 OSes via bash shell) ──────────
-      - name: Package binary
-        shell: bash
+      - name: Build (native)
+        if: matrix.cross != true
+        run: cargo build --release --bin lmforge --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.cross == true
+        run: cross build --release --bin lmforge --target ${{ matrix.target }}
+
+      - name: Rename artifact (Unix)
+        if: runner.os != 'Windows'
         run: |
-          # Windows builds produce lmforge.exe; Unix builds produce lmforge
-          EXT=""
-          if [[ "${{ matrix.target }}" == *"windows"* ]]; then EXT=".exe"; fi
-          BIN_PATH="target/${{ matrix.target }}/release/${BINARY}${EXT}"
-          TARBALL="${BINARY}-${{ matrix.target }}.tar.gz"
-          tar -czf "$TARBALL" -C "$(dirname $BIN_PATH)" "$(basename $BIN_PATH)"
-          echo "TARBALL=$TARBALL" >> $GITHUB_ENV
+          cp target/${{ matrix.target }}/release/lmforge ${{ matrix.asset_name }}
+          chmod +x ${{ matrix.asset_name }}
 
-      # ── Upload artifact so the release job can attach it ──────────────────
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Rename artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Copy-Item "target/${{ matrix.target }}/release/lmforge.exe" "${{ matrix.asset_name }}"
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.BINARY }}-${{ matrix.target }}
-          path: ${{ env.TARBALL }}
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}
           retention-days: 1
 
-  # ────────────────────────────────────────────────────────────────────────────
-  # Create GitHub Release and attach all binaries
-  # ────────────────────────────────────────────────────────────────────────────
-  release:
-    name: Create GitHub Release
-    runs-on: ubuntu-latest
-    needs: build
-    permissions:
-      contents: write   # required to create releases and upload assets
+  # ─────────────────────────────────────────────────────────────────────────────
+  #  Tauri UI — macOS DMG + Linux AppImage
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-ui:
+    name: UI — ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: macos-arm64
+            target: aarch64-apple-darwin
+
+          - os: macos-13
+            platform: macos-x86_64
+            target: x86_64-apple-darwin
+
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+            target: x86_64-unknown-linux-gnu
 
     steps:
-      - name: Checkout (for release notes)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Download all build artifacts
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: ui/package-lock.json
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ui/src-tauri/target
+          key: ${{ runner.os }}-${{ matrix.target }}-ui-${{ hashFiles('ui/src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-ui-
+
+      - name: Install Linux deps (Tauri)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            pkg-config libssl-dev \
+            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libappindicator3-dev librsvg2-dev \
+            patchelf libxdo-dev
+
+      - name: Install npm deps
+        working-directory: ui
+        run: npm ci
+
+      - name: Build Tauri app
+        working-directory: ui
+        run: npm run tauri build -- --target ${{ matrix.target }}
+
+      - name: Upload macOS DMG
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: LMForge-UI-${{ matrix.platform }}.dmg
+          path: ui/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload Linux AppImage
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: LMForge-UI-${{ matrix.platform }}.AppImage
+          path: ui/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 1
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  #  Create GitHub Release with all artifacts + install scripts
+  # ─────────────────────────────────────────────────────────────────────────────
+  release:
+    name: Publish Release
+    needs: [build-core, build-ui]
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
           merge-multiple: true
 
       - name: List artifacts
-        run: ls -lh artifacts/
+        run: ls -lah artifacts/
 
-      - name: Create Release and upload assets
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
           name: "LMForge ${{ github.ref_name }}"
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}   # e.g. v0.2.0-beta is pre-release
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
-          files: artifacts/**/*.tar.gz
+          body: |
+            ## Install
+
+            ### Core (daemon + CLI)
+            ```bash
+            curl -fsSL https://github.com/${{ env.REPO }}/releases/latest/download/install-core.sh | bash
+            ```
+
+            ### UI (desktop app) — install Core first
+            ```bash
+            curl -fsSL https://github.com/${{ env.REPO }}/releases/latest/download/install-ui.sh | bash
+            ```
+
+            ### Uninstall
+            ```bash
+            # Remove UI only (daemon keeps running)
+            curl -fsSL https://github.com/${{ env.REPO }}/releases/latest/download/uninstall-ui.sh | bash
+
+            # Remove Core (stops daemon; keeps models)
+            curl -fsSL https://github.com/${{ env.REPO }}/releases/latest/download/uninstall-core.sh | bash
+
+            # Remove everything including models
+            curl -fsSL https://github.com/${{ env.REPO }}/releases/latest/download/uninstall-core.sh | bash -s -- --purge
+            ```
+          files: |
+            artifacts/*
+            scripts/install-core.sh
+            scripts/uninstall-core.sh
+            scripts/install-ui.sh
+            scripts/uninstall-ui.sh

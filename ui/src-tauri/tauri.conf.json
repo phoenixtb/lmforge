@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ui",
+  "productName": "LMForge",
   "version": "0.1.0",
-  "identifier": "com.titasbiswas.ui",
+  "identifier": "com.lmforge.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,9 +12,20 @@
   "app": {
     "windows": [
       {
-        "title": "ui",
-        "width": 800,
-        "height": 600
+        "title": "",
+        "width": 960,
+        "height": 660,
+        "minWidth": 780,
+        "minHeight": 540,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "visible": false,
+        "resizable": true,
+        "center": true,
+        "windowEffects": {
+          "effects": ["sidebar"],
+          "state": "followsWindowActiveState"
+        }
       }
     ],
     "security": {
@@ -30,6 +41,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "infoPlist": "Info.plist"
+    }
   }
 }

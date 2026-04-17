@@ -1,0 +1,138 @@
+# LMForge Multi-Model Integration Test Inputs
+# =============================================
+# Edit this file to change what gets tested without touching the runner.
+#
+# config:       connection + model settings (can all be overridden via env / CLI)
+# embed_suite:  texts sent to POST /v1/embeddings — each gets a vector back
+# chat_suite:   prompts sent to POST /v1/chat/completions — each gets a response back
+#
+# Evaluation fields (all optional):
+#   expect_dims:         assert embedding vector has exactly this many dimensions
+#   expect_keywords:     soft check — warn if response doesn't contain these words
+#   expect_max_latency:  warn if request takes longer than this many ms
+
+config:
+  host: "http://127.0.0.1:11430"
+  embed_model: "qwen3-embed:0.6b:4bit"
+  chat_model:  "qwen3.5:4b:4bit"
+
+  # How many of each type to fire concurrently in the burst tests
+  burst_n: 10
+
+  # Request timeout in seconds — generous to accommodate cold model loading
+  # on shared / dev hardware. CI with pre-warmed models will be much faster.
+  timeout_seconds: 300
+
+# ---------------------------------------------------------------------------
+# Embedding suite — texts to embed
+# ---------------------------------------------------------------------------
+embed_suite:
+
+  - name: "factual sentence"
+    text: "Natural language processing enables computers to understand human language."
+    expect_dims: 1024
+    expect_max_latency_ms: 5000
+
+  - name: "short phrase"
+    text: "machine learning"
+    expect_dims: 1024
+    expect_max_latency_ms: 3000
+
+  - name: "code snippet"
+    text: "fn main() { println!(\"hello world\"); }"
+    expect_dims: 1024
+    expect_max_latency_ms: 5000
+
+  - name: "long paragraph"
+    text: >
+      Large language models are trained on vast amounts of text data and can generate
+      coherent, contextually relevant text. They are used in a wide range of applications
+      including question answering, summarisation, code generation, and translation.
+      The quality of embeddings depends heavily on the model architecture and training corpus.
+    expect_dims: 1024
+    expect_max_latency_ms: 8000
+
+  - name: "multilingual"
+    text: "La inteligencia artificial está transformando la industria tecnológica."
+    expect_dims: 1024
+    expect_max_latency_ms: 5000
+
+  - name: "special characters"
+    text: "Temperature=0.7, top_p=0.9, max_tokens=512 → greedy vs. sampling"
+    expect_dims: 1024
+    expect_max_latency_ms: 5000
+
+  - name: "empty-ish input"
+    text: "ok"
+    expect_dims: 1024
+    expect_max_latency_ms: 3000
+
+  - name: "technical domain"
+    text: "Transformer attention mechanisms use query, key, value projections to compute weighted sums."
+    expect_dims: 1024
+    expect_max_latency_ms: 5000
+
+  - name: "numeric heavy"
+    text: "The model achieved 94.2% accuracy on the GLUE benchmark with batch size 32 and lr 2e-5."
+    expect_dims: 1024
+    expect_max_latency_ms: 5000
+
+  - name: "question form"
+    text: "What is the capital of France?"
+    expect_dims: 1024
+    expect_max_latency_ms: 3000
+
+# ---------------------------------------------------------------------------
+# Chat / inference suite — prompts to send to the chat model
+# ---------------------------------------------------------------------------
+chat_suite:
+
+  - name: "one-word answer"
+    prompt: "Answer with only one word: what is the capital of France?"
+    expect_keywords: ["Paris"]
+    expect_max_latency_ms: 300000
+
+  - name: "arithmetic"
+    prompt: "What is 17 multiplied by 6? Answer with only the number."
+    expect_keywords: ["102"]
+    expect_max_latency_ms: 300000
+
+  - name: "sentiment"
+    prompt: "Is the sentence 'I love sunny days' positive or negative? One word answer."
+    expect_keywords: ["positive"]
+    expect_max_latency_ms: 300000
+
+  - name: "code generation"
+    prompt: "Write a Python one-liner that prints numbers 1 to 5."
+    expect_keywords: ["print", "range"]
+    expect_max_latency_ms: 300000
+
+  - name: "list format"
+    prompt: "Name exactly three programming languages. Use a numbered list."
+    expect_keywords: ["1.", "2.", "3."]
+    expect_max_latency_ms: 300000
+
+  - name: "definition"
+    prompt: "In one sentence, define what an API is."
+    expect_keywords: ["interface"]
+    expect_max_latency_ms: 300000
+
+  - name: "comparison"
+    prompt: "In one sentence, what is the main difference between RAM and storage?"
+    expect_keywords: ["memory", "storage"]
+    expect_max_latency_ms: 300000
+
+  - name: "yes/no question"
+    prompt: "Is Python an interpreted language? Answer only yes or no."
+    expect_keywords: ["yes"]
+    expect_max_latency_ms: 300000
+
+  - name: "creative"
+    prompt: "Write a haiku about artificial intelligence."
+    expect_keywords: []
+    expect_max_latency_ms: 300000
+
+  - name: "instruction following"
+    prompt: "Repeat the word 'echo' exactly three times, space-separated."
+    expect_keywords: ["echo echo echo"]
+    expect_max_latency_ms: 300000

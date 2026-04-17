@@ -3,8 +3,69 @@ use axum::extract::{Path, State};
 use axum::http::{Response, StatusCode, header};
 use axum::response::IntoResponse;
 use tracing::{info, warn, error};
+use tokio_stream::StreamExt;
 
 use super::AppState;
+
+/// `GET /lf/status/stream` — Persistent SSE stream of EngineState snapshots.
+///
+/// Transport role: external consumers only (CLI watchers, DocIntel health checks, dev tools).
+/// Embedded Tauri frontend uses Tauri Events instead (zero HTTP, in-process).
+/// The tray icon uses the broadcast channel directly (also in-process).
+///
+/// Protocol: `text/event-stream`
+///   - Sends the current snapshot immediately on connect.
+///   - Sends a new snapshot on every state change (model load/unload/health change).
+///   - Sends a heartbeat `event: ping` every 15 s to survive TCP/proxy timeouts.
+pub async fn status_stream(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let mut rx = state.status_tx.subscribe();
+
+    // Capture the current snapshot to emit immediately on connect.
+    let initial = state.engine_state.read().await.clone();
+
+    let stream = async_stream::stream! {
+        // 1. Immediate snapshot so clients have data right away.
+        let json = serde_json::to_string(&initial).unwrap_or_default();
+        yield Ok::<_, std::convert::Infallible>(
+            axum::body::Bytes::from(format!("data: {}\n\n", json))
+        );
+
+        // 2. Live updates + heartbeat.
+        loop {
+            tokio::select! {
+                result = rx.recv() => match result {
+                    Ok(snapshot) => {
+                        let json = serde_json::to_string(&snapshot).unwrap_or_default();
+                        yield Ok(axum::body::Bytes::from(format!("data: {}\n\n", json)));
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("SSE /lf/status/stream: client lagged by {} messages", n);
+                        // Send current state to re-sync the client.
+                        let snap = state.engine_state.read().await.clone();
+                        let json = serde_json::to_string(&snap).unwrap_or_default();
+                        yield Ok(axum::body::Bytes::from(format!("data: {}\n\n", json)));
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
+                _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {
+                    // Heartbeat — keeps the connection alive through proxies.
+                    yield Ok(axum::body::Bytes::from("event: ping\ndata: {}\n\n"));
+                }
+            }
+        }
+    };
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .header("X-Accel-Buffering", "no") // disables nginx response buffering
+        .body(Body::from_stream(stream))
+        .unwrap()
+}
+
 
 /// `GET /lf/status` — LMForge native status endpoint
 pub async fn status(
@@ -183,7 +244,11 @@ pub async fn model_pull(
         if succeeded {
             // Update ModelIndex now that weights are on disk
             if let Ok(mut idx) = crate::model::index::ModelIndex::load(&data_dir) {
-                let caps = crate::model::index::detect_capabilities(&model_dir);
+                let caps = crate::model::index::detect_capabilities(
+                    &model_dir,
+                    Some(&resolved_id),
+                    Some(&resolved.hf_repo),
+                );
                 idx.add(crate::model::index::ModelEntry {
                     id: resolved_id,
                     path: model_dir.to_string_lossy().to_string(),

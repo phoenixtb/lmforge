@@ -5,12 +5,17 @@ use crate::config::LmForgeConfig;
 use crate::engine;
 
 /// `lmforge start` — Start the inference engine and API server
+///
+/// `external_status_tx`: when running embedded inside Tauri, the caller provides
+/// a broadcast::Sender so it can subscribe a receiver for Tauri IPC event bridging.
+/// When `None` (standalone CLI / daemon mode), an internal channel is created.
 pub async fn run(
     config: &LmForgeConfig,
     model: Option<String>,
     port: Option<u16>,
     bind: Option<String>,
     _foreground: bool,
+    external_status_tx: Option<tokio::sync::broadcast::Sender<crate::engine::manager::EngineState>>,
 ) -> Result<()> {
     let api_port = port.unwrap_or(config.port);
     let bind_addr = bind.unwrap_or_else(|| config.bind_address.clone());
@@ -18,6 +23,16 @@ pub async fn run(
     let data_dir = config.data_dir();
 
     info!(port = api_port, bind = %bind_addr, "Starting LMForge...");
+
+    // ── Idempotency guard ─────────────────────────────────────────────────────
+    // If a daemon is already responding on this port, exit cleanly.
+    // This makes `lmforge start` safe to call unconditionally from consumer apps,
+    // install scripts, and alongside a running system service.
+    if is_daemon_running(api_port).await {
+        println!("✓ LMForge already running at http://{}:{}", bind_addr, api_port);
+        println!("  Use `lmforge status` to see running models.");
+        return Ok(());
+    }
 
     // 1. Ensure data directory exists
     std::fs::create_dir_all(data_dir.join("engines"))?;
@@ -28,6 +43,7 @@ pub async fn run(
     //    and verify both ports are free BEFORE we do anything expensive.
     //    This must happen before hardware probe, engine spawn, or model load.
     startup_cleanup(&data_dir, api_port, engine_port).await?;
+
 
     // 3. Load or probe hardware
     let profile = if data_dir.join("hardware.json").exists() {
@@ -68,6 +84,20 @@ pub async fn run(
     // 7. Write PID file
     engine::daemon::write_pid_file(&data_dir)?;
 
+    let (status_tx, _status_rx0) = match external_status_tx {
+        Some(tx) => {
+            // Tauri embed mode — use the externally-provided sender so lib.rs
+            // can subscribe and bridge state changes to app_handle.emit().
+            let _dummy_rx = tx.subscribe(); // keep channel alive
+            (tx, None)
+        }
+        None => {
+            // Standalone CLI mode — create our own channel.
+            let (tx, rx) = tokio::sync::broadcast::channel::<crate::engine::manager::EngineState>(16);
+            (tx, Some(rx))
+        }
+    };
+
     // 8. Extract the specialized adapter and start the unified manager constraint
     let adapter = engine::EngineRegistry::create_adapter(&engine_config)?;
     let shared_adapter = std::sync::Arc::new(adapter.clone());
@@ -78,6 +108,7 @@ pub async fn run(
         data_dir.clone(),
         config.orchestrator.keep_alive.clone(),
         config.orchestrator.max_loaded_models,
+        status_tx.clone(),
     );
 
     println!("⚙ Starting {} v{} Orchestrator...", engine_config.name, engine_config.version);
@@ -111,6 +142,7 @@ pub async fn run(
         bind_address: bind_addr.clone(),
         config: std::sync::Arc::new(tokio::sync::RwLock::new(config.clone())),
         command_tx: cmd_tx.clone(),
+        status_tx,
     };
 
     // Pre-warm the requested model if provided
@@ -242,6 +274,42 @@ async fn ensure_port_free(port: u16) -> anyhow::Result<()> {
         "Port {} is still occupied after cleanup. Kill it manually:\n  lsof -ti :{} | xargs kill -9",
         port, port
     )
+}
+
+/// Check if a LMForge daemon is already listening and healthy on this port.
+/// Performs a raw TCP GET /health with short timeouts — no extra HTTP deps.
+/// Returns true only if the /health endpoint responds with a 2xx status.
+async fn is_daemon_running(port: u16) -> bool {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let connect = tokio::time::timeout(
+        std::time::Duration::from_millis(400),
+        tokio::net::TcpStream::connect(("127.0.0.1", port)),
+    ).await;
+
+    let mut stream: tokio::net::TcpStream = match connect {
+        Ok(Ok(s)) => s,
+        _ => return false,
+    };
+
+    let req = format!("GET /health HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+    if stream.write_all(req.as_bytes()).await.is_err() {
+        return false;
+    }
+
+    let mut buf = [0u8; 32];
+    let read = tokio::time::timeout(
+        std::time::Duration::from_millis(400),
+        stream.read(&mut buf),
+    ).await;
+
+    let n = match read {
+        Ok(Ok(n)) if n > 0 => n,
+        _ => return false,
+    };
+
+    let resp = std::str::from_utf8(&buf[..n]).unwrap_or("");
+    resp.starts_with("HTTP/1") && resp.contains(" 2")
 }
 
 async fn is_port_free(port: u16) -> bool {

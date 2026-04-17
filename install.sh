@@ -125,6 +125,45 @@ else
     install_from_source
 fi
 
+# ── Linux: install UI tray dependency ──────────────────────────────────────────
+# The LMForge system tray icon requires libayatana-appindicator3-1 on Linux.
+# We install it at install-time so the first launch works correctly.
+# If the package manager is not recognised we warn but do NOT abort (the CLI
+# works fine without the tray; the UI falls back to window-only mode).
+if [ "$OS" = "Linux" ]; then
+    TRAY_PKG="libayatana-appindicator3-1"
+    info "Checking for Linux tray dependency (${TRAY_PKG})..."
+
+    if dpkg -s "$TRAY_PKG" &>/dev/null 2>&1; then
+        success "${TRAY_PKG} is already installed."
+    elif command -v apt-get &>/dev/null; then
+        info "Installing ${TRAY_PKG} via apt-get..."
+        if sudo apt-get install -y "$TRAY_PKG" 2>/dev/null; then
+            success "${TRAY_PKG} installed."
+        else
+            warn "Could not install ${TRAY_PKG}. UI system tray will be unavailable — window-only mode."
+        fi
+    elif command -v dnf &>/dev/null; then
+        info "Installing libayatana-appindicator3 via dnf..."
+        if sudo dnf install -y libayatana-appindicator3 2>/dev/null; then
+            success "libayatana-appindicator3 installed."
+        else
+            warn "Could not install tray dependency. UI will use window-only mode."
+        fi
+    elif command -v pacman &>/dev/null; then
+        info "Installing libayatana-appindicator via pacman..."
+        if sudo pacman -S --noconfirm libayatana-appindicator 2>/dev/null; then
+            success "libayatana-appindicator installed."
+        else
+            warn "Could not install tray dependency. UI will use window-only mode."
+        fi
+    else
+        warn "Unknown package manager. Install '${TRAY_PKG}' manually for system tray support."
+        warn "The UI will start in window-only mode until the library is present."
+    fi
+fi
+
+
 # ── Post-install setup ─────────────────────────────────────────────────────────
 info "Creating LMForge data directories..."
 mkdir -p "$HOME/.lmforge/models"

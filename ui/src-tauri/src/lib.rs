@@ -1,35 +1,169 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
+mod tray;
+
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .setup(|_app| {
-            tauri::async_runtime::spawn(async move {
-                // Initialize background process exactly like `lmforge start --foreground`
-                use clap::Parser;
-                let args = lmforge::cli::Cli::parse_from(["lmforge", "start", "--foreground"]);
-                
-                // Initialize logging for the background daemon
-                // Skip if it fails (sometimes Tauri setups init logs already)
-                let _ = lmforge::logging::init(&args);
-                
-                if let Ok(config) = lmforge::config::load(&args) {
-                    println!("🚀 Starting LMForge Orchestrator embedded in Tauri...");
-                    if let Err(e) = lmforge::cli::dispatch(args, config).await {
-                        eprintln!("❌ Embedded LMForge crashed: {}", e);
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_dialog::init())
+        // Window close button → hide to tray. "Stop Engine" in tray menu is the
+        // only way to stop the daemon. Closing the window never kills the service.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        .setup(move |app| {
+            // ── macOS: prevent did_finish_launching panic with visible:false ──
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            let app_handle = app.handle().clone();
+
+            // ── System tray ──────────────────────────────────────────────────
+            // The tray now drives its own HTTP polling loop internally.
+            // Gracefully degrade when tray is unavailable.
+            #[cfg(not(target_os = "android"))]
+            {
+                if let Err(e) = tray::setup_tray(&app_handle) {
+                    eprintln!("⚠ Tray unavailable: {}. Running in window-only mode.", e);
+                    if let Some(win) = app_handle.get_webview_window("main") {
+                        let _ = win.show();
                     }
-                } else {
-                    eprintln!("❌ Failed to load LMForge config from Tauri.");
                 }
-            });
+            }
+
+            // ── Status bridge: HTTP → Tauri IPC events ───────────────────────
+            // Polls /lf/status every 2 s and emits "lf:status" Tauri events to
+            // Svelte. Falls back to polling when SSE is not available.
+            // The daemon is NOT started here — it must be running independently
+            // (via `lmforge start`, `lmforge service`, or the user's shell).
+            {
+                let app_handle = app_handle.clone();
+                tauri::async_runtime::spawn(status_bridge(app_handle));
+            }
+
             Ok(())
         })
-        .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![start_engine, stop_engine])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .expect("error while running LMForge");
+}
+
+/// Poll /lf/status every 2 s and emit "lf:status" Tauri events.
+/// Also emits "lf:health" with { online: bool } so the UI can show the
+/// "Engine not running" screen.
+async fn status_bridge(app: tauri::AppHandle) {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .unwrap_or_default();
+
+    let base_url = "http://127.0.0.1:11430";
+    let mut was_online = false;
+
+    loop {
+        // 1. Health check
+        let health_ok = client
+            .get(format!("{}/health", base_url))
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false);
+
+        if health_ok != was_online {
+            was_online = health_ok;
+            let _ = app.emit("lf:health", serde_json::json!({ "online": health_ok }));
+
+            if !health_ok {
+                // Daemon went offline — emit a stopped state to clear the UI
+                let _ = app.emit("lf:status", serde_json::json!({
+                    "overall_status": "stopped",
+                    "engine_id": "—",
+                    "engine_version": "—",
+                    "running_models": {},
+                    "metrics": {
+                        "requests_total": 0,
+                        "ttft_avg_ms": 0.0,
+                        "uptime_secs": 0,
+                        "restart_count": 0
+                    }
+                }));
+            }
+        }
+
+        // 2. Fetch status snapshot when online
+        if health_ok {
+            if let Ok(resp) = client
+                .get(format!("{}/lf/status", base_url))
+                .send()
+                .await
+            {
+                if let Ok(body) = resp.text().await {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+                        let _ = app.emit("lf:status", &json);
+                    }
+                }
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+}
+
+/// Tauri command: start the LMForge engine (called from the "Engine offline" screen).
+/// Uses `lmforge start` which is idempotent — safe to call even if already running.
+#[tauri::command]
+async fn start_engine() -> Result<String, String> {
+    let lmforge_bin = find_lmforge_binary();
+    let output = tokio::process::Command::new(&lmforge_bin)
+        .arg("start")
+        .output()
+        .await
+        .map_err(|e| format!("Failed to spawn lmforge: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() || stdout.contains("already running") {
+        Ok(stdout)
+    } else {
+        Err(format!("{stdout}{stderr}"))
+    }
+}
+
+/// Tauri command: stop the LMForge engine via the shutdown API.
+/// Only called from the explicit "Stop Engine" tray menu item.
+#[tauri::command]
+async fn stop_engine() -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
+
+    client
+        .post("http://127.0.0.1:11430/lf/shutdown")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+
+    Ok(())
+}
+
+/// Find the `lmforge` binary. Checks:
+/// 1. Next to the current executable (production install)
+/// 2. PATH (developer install via `cargo install`)
+fn find_lmforge_binary() -> String {
+    // 1. Sibling of the current exe (bundled install)
+    if let Ok(exe) = std::env::current_exe() {
+        let sibling = exe.with_file_name("lmforge");
+        if sibling.exists() {
+            return sibling.to_string_lossy().to_string();
+        }
+    }
+    // 2. Rely on PATH
+    "lmforge".to_string()
 }

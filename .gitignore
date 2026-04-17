@@ -63,3 +63,8 @@ dist/
 # ── Logs ──────────────────────────────────────────────────────────────────────
 *.log
 logs/
+
+# ── Integration test reports (generated per-run, never committed) ──────────────
+# inputs.yaml and .gitkeep are tracked; timestamped result files are not.
+tests/integration/reports/*.json
+tests/integration/reports/*.md
