@@ -25,7 +25,11 @@ pub fn extract_think_tags(content: &str) -> (Option<String>, String) {
             );
 
             return (
-                if reasoning.is_empty() { None } else { Some(reasoning) },
+                if reasoning.is_empty() {
+                    None
+                } else {
+                    Some(reasoning)
+                },
                 clean,
             );
         }
@@ -140,7 +144,10 @@ pub fn translate_think_field(body: &mut serde_json::Value) {
             .entry("chat_template_kwargs")
             .or_insert_with(|| serde_json::json!({}));
         if let Some(map) = kwargs.as_object_mut() {
-            map.insert("enable_thinking".to_string(), serde_json::Value::Bool(think_bool));
+            map.insert(
+                "enable_thinking".to_string(),
+                serde_json::Value::Bool(think_bool),
+            );
         }
     }
 }
@@ -179,7 +186,10 @@ mod tests {
         let result = inject_reasoning_content(response);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["choices"][0]["message"]["content"], "The answer.");
-        assert_eq!(parsed["choices"][0]["message"]["reasoning_content"], "step 1");
+        assert_eq!(
+            parsed["choices"][0]["message"]["reasoning_content"],
+            "step 1"
+        );
     }
 
     #[test]
@@ -193,12 +203,16 @@ mod tests {
 
     #[test]
     fn test_inject_reasoning_delta() {
-        let line = r#"data: {"choices":[{"delta":{"content":"<think>reasoning here</think>answer"}}]}"#;
+        let line =
+            r#"data: {"choices":[{"delta":{"content":"<think>reasoning here</think>answer"}}]}"#;
         let result = inject_reasoning_content_delta(line);
         let data = result.strip_prefix("data: ").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(data).unwrap();
         assert_eq!(parsed["choices"][0]["delta"]["content"], "answer");
-        assert_eq!(parsed["choices"][0]["delta"]["reasoning_content"], "reasoning here");
+        assert_eq!(
+            parsed["choices"][0]["delta"]["reasoning_content"],
+            "reasoning here"
+        );
     }
 
     #[test]
@@ -221,7 +235,8 @@ mod tests {
 
     #[test]
     fn test_request_has_think_via_kwargs() {
-        let body = serde_json::json!({"model": "test", "chat_template_kwargs": {"enable_thinking": true}});
+        let body =
+            serde_json::json!({"model": "test", "chat_template_kwargs": {"enable_thinking": true}});
         assert!(request_has_think(&body));
 
         // chat_template_kwargs takes precedence over think

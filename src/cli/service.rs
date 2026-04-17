@@ -3,15 +3,14 @@ use std::path::PathBuf;
 
 /// Generate and install the LMForge system service (Launchd / Systemd)
 pub fn install() -> Result<()> {
-    let exe = std::env::current_exe()
-        .unwrap_or_else(|_| PathBuf::from("lmforge"));
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("lmforge"));
     let exe_path = exe.to_string_lossy().to_string();
 
     #[cfg(target_os = "macos")]
     {
         install_launchd(&exe_path)?;
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         install_systemd(&exe_path)?;
@@ -30,7 +29,7 @@ pub fn uninstall() -> Result<()> {
     {
         uninstall_launchd()?;
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         uninstall_systemd()?;
@@ -53,12 +52,15 @@ fn home_dir() -> Result<PathBuf> {
 static LAUNCHD_LABEL: &str = "com.lmforge.daemon";
 
 fn launchd_plist_path() -> Result<PathBuf> {
-    Ok(home_dir()?.join("Library").join("LaunchAgents").join(format!("{}.plist", LAUNCHD_LABEL)))
+    Ok(home_dir()?
+        .join("Library")
+        .join("LaunchAgents")
+        .join(format!("{}.plist", LAUNCHD_LABEL)))
 }
 
 fn install_launchd(exe_path: &str) -> Result<()> {
     let plist_path = launchd_plist_path()?;
-    
+
     if let Some(parent) = plist_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -98,18 +100,21 @@ fn install_launchd(exe_path: &str) -> Result<()> {
     );
 
     std::fs::write(&plist_path, plist_content)?;
-    
+
     println!("⚙ Loading macOS Launch Agent...");
     let _ = std::process::Command::new("launchctl")
         .args(["unload", plist_path.to_str().unwrap()])
         .output();
-        
+
     let output = std::process::Command::new("launchctl")
         .args(["load", plist_path.to_str().unwrap()])
         .output()?;
-        
+
     if !output.status.success() {
-        bail!("Failed to load launchd agent: {}", String::from_utf8_lossy(&output.stderr));
+        bail!(
+            "Failed to load launchd agent: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     println!("✓ LMForge service installed and started.");
@@ -135,12 +140,16 @@ fn uninstall_launchd() -> Result<()> {
 static SYSTEMD_SERVICE: &str = "lmforge.service";
 
 fn systemd_unit_path() -> Result<PathBuf> {
-    Ok(home_dir()?.join(".config").join("systemd").join("user").join(SYSTEMD_SERVICE))
+    Ok(home_dir()?
+        .join(".config")
+        .join("systemd")
+        .join("user")
+        .join(SYSTEMD_SERVICE))
 }
 
 fn install_systemd(exe_path: &str) -> Result<()> {
     let unit_path = systemd_unit_path()?;
-    
+
     if let Some(parent) = unit_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -266,8 +275,14 @@ pub fn service_status() -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let installed = launchd_plist_path().map(|p| p.exists()).unwrap_or(false);
-        println!("  Service file : {}",
-            if installed { "installed ✓" } else { "not installed" });
+        println!(
+            "  Service file : {}",
+            if installed {
+                "installed ✓"
+            } else {
+                "not installed"
+            }
+        );
 
         if installed {
             let out = std::process::Command::new("launchctl")
@@ -275,22 +290,42 @@ pub fn service_status() -> Result<()> {
                 .output()?;
             let info = String::from_utf8_lossy(&out.stdout);
             let running = info.contains("\"PID\"") && !info.contains("\"PID\" = 0;");
-            println!("  launchd      : {}", if running { "running ✓" } else { "not running" });
+            println!(
+                "  launchd      : {}",
+                if running {
+                    "running ✓"
+                } else {
+                    "not running"
+                }
+            );
         }
     }
 
     #[cfg(target_os = "linux")]
     {
         let installed = systemd_unit_path().map(|p| p.exists()).unwrap_or(false);
-        println!("  Service file : {}",
-            if installed { "installed ✓" } else { "not installed" });
+        println!(
+            "  Service file : {}",
+            if installed {
+                "installed ✓"
+            } else {
+                "not installed"
+            }
+        );
 
         if installed {
             let out = std::process::Command::new("systemctl")
                 .args(["--user", "is-active", SYSTEMD_SERVICE])
                 .output()?;
             let active = String::from_utf8_lossy(&out.stdout).trim() == "active";
-            println!("  systemd      : {}", if active { "active (running) ✓" } else { "inactive" });
+            println!(
+                "  systemd      : {}",
+                if active {
+                    "active (running) ✓"
+                } else {
+                    "inactive"
+                }
+            );
         }
     }
 
@@ -300,13 +335,21 @@ pub fn service_status() -> Result<()> {
     // Always show live daemon health regardless of service mode
     println!();
     let health_ok = std::process::Command::new("sh")
-        .args(["-c", "curl -sf http://127.0.0.1:11430/health > /dev/null 2>&1"])
+        .args([
+            "-c",
+            "curl -sf http://127.0.0.1:11430/health > /dev/null 2>&1",
+        ])
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
-    println!("  Daemon API   : {}",
-        if health_ok { "reachable at http://127.0.0.1:11430 ✓" } else { "not reachable" });
+    println!(
+        "  Daemon API   : {}",
+        if health_ok {
+            "reachable at http://127.0.0.1:11430 ✓"
+        } else {
+            "not reachable"
+        }
+    );
 
     Ok(())
 }
-

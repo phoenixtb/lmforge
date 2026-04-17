@@ -18,7 +18,11 @@ pub const BUNDLED_GGUF: &str = include_str!("../../../data/catalogs/gguf.json");
 /// 1. Runtime file at `catalogs_dir/{format}.json` (allows user overrides)
 /// 2. Bundled catalog embedded in the binary at compile time (always fresh)
 /// 3. Legacy hard-coded curations (minimal safety net for very old configs)
-pub async fn load_catalog_and_resolve(name: &str, format: &str, catalogs_dir: &Path) -> Option<String> {
+pub async fn load_catalog_and_resolve(
+    name: &str,
+    format: &str,
+    catalogs_dir: &Path,
+) -> Option<String> {
     let normalized = name.to_lowercase();
     let format_str = format.to_lowercase();
 

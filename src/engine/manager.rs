@@ -5,8 +5,8 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::engine::adapter::{ActiveEngine, EngineAdapter, EngineAdapterInstance, ModelRole};
-use crate::engine::registry::EngineConfig;
 use crate::engine::keepalive;
+use crate::engine::registry::EngineConfig;
 
 /// Engine runtime status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -165,15 +165,28 @@ impl EngineManager {
     /// Stop one specific active slot
     async fn stop_slot(&self, active: &mut ActiveSlot) -> Result<()> {
         let _ = self.adapter.stop(&mut active.engine).await;
-        let pid_file = self.data_dir.join("engines").join(format!("{}_{}.pid", self.config.id, active.port));
+        let pid_file = self
+            .data_dir
+            .join("engines")
+            .join(format!("{}_{}.pid", self.config.id, active.port));
         let _ = std::fs::remove_file(pid_file);
         Ok(())
     }
 
     /// Evict least recently used models until needed VRAM is free
     async fn evict_for_vram(&mut self, needed_vram_gb: f32) -> Result<()> {
-        let profile = crate::hardware::probe::detect_platform().unwrap_or_else(|_| crate::hardware::probe::HardwareProfile {
-            os: crate::hardware::probe::Os::Unknown, arch: crate::hardware::probe::Arch::Unknown, is_tegra: false, gpu_vendor: crate::hardware::probe::GpuVendor::None, vram_gb: 0.0, unified_mem: false, total_ram_gb: 0.0, cpu_cores: 0, cpu_model: String::new()
+        let profile = crate::hardware::probe::detect_platform().unwrap_or_else(|_| {
+            crate::hardware::probe::HardwareProfile {
+                os: crate::hardware::probe::Os::Unknown,
+                arch: crate::hardware::probe::Arch::Unknown,
+                is_tegra: false,
+                gpu_vendor: crate::hardware::probe::GpuVendor::None,
+                vram_gb: 0.0,
+                unified_mem: false,
+                total_ram_gb: 0.0,
+                cpu_cores: 0,
+                cpu_model: String::new(),
+            }
         });
 
         loop {
@@ -183,11 +196,16 @@ impl EngineManager {
             }
 
             // Find oldest accessed
-            if let Some((oldest_id, _)) = self.active_slots.iter()
+            if let Some((oldest_id, _)) = self
+                .active_slots
+                .iter()
                 .min_by_key(|(_, slot)| slot.last_accessed)
-                .map(|(k, v)| (k.clone(), v.last_accessed)) {
-                
-                info!("VRAM starved (free: {:.2}GB, need: {:.2}GB). Evicting LRU model: {}", free_vram, needed_vram_gb, oldest_id);
+                .map(|(k, v)| (k.clone(), v.last_accessed))
+            {
+                info!(
+                    "VRAM starved (free: {:.2}GB, need: {:.2}GB). Evicting LRU model: {}",
+                    free_vram, needed_vram_gb, oldest_id
+                );
                 if let Some(mut slot) = self.active_slots.remove(&oldest_id) {
                     let _ = self.stop_slot(&mut slot).await;
                     self.state.write().await.running_models.remove(&oldest_id);
@@ -198,10 +216,25 @@ impl EngineManager {
     }
 
     /// Dynamically spawn an adapter process for a model
-    async fn spawn_adapter_process(&self, model_id: &str, model_dir: &Path, port: u16, role: ModelRole) -> Result<ActiveEngine> {
-        let engine_pid_file = self.data_dir.join("engines").join(format!("{}_{}.pid", self.config.id, port));
-        if tokio::net::TcpListener::bind(("127.0.0.1", port)).await.is_err() {
-            warn!(port, "Port is held — attempting orphan engine cleanup via PID file then lsof");
+    async fn spawn_adapter_process(
+        &self,
+        model_id: &str,
+        model_dir: &Path,
+        port: u16,
+        role: ModelRole,
+    ) -> Result<ActiveEngine> {
+        let engine_pid_file = self
+            .data_dir
+            .join("engines")
+            .join(format!("{}_{}.pid", self.config.id, port));
+        if tokio::net::TcpListener::bind(("127.0.0.1", port))
+            .await
+            .is_err()
+        {
+            warn!(
+                port,
+                "Port is held — attempting orphan engine cleanup via PID file then lsof"
+            );
             // Step 1: PID-file based kill (fast path)
             kill_orphan_engine(&engine_pid_file);
             // Step 2: lsof-based kill (catches orphans not tracked by a PID file)
@@ -210,18 +243,34 @@ impl EngineManager {
             let mut freed = false;
             for _ in 0..10 {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                if tokio::net::TcpListener::bind(("127.0.0.1", port)).await.is_ok() {
+                if tokio::net::TcpListener::bind(("127.0.0.1", port))
+                    .await
+                    .is_ok()
+                {
                     freed = true;
                     break;
                 }
             }
             if !freed {
-                bail!("Port {} is still held after cleanup. Cannot spawn engine on this port.", port);
+                bail!(
+                    "Port {} is still held after cleanup. Cannot spawn engine on this port.",
+                    port
+                );
             }
             info!(port, "Port freed — proceeding to spawn engine");
         }
 
-        let active = self.adapter.start(model_id, model_dir, port, &self.data_dir, &self.logs_dir, role).await?;
+        let active = self
+            .adapter
+            .start(
+                model_id,
+                model_dir,
+                port,
+                &self.data_dir,
+                &self.logs_dir,
+                role,
+            )
+            .await?;
 
         if let Some(pid) = active.process.id() {
             let _ = std::fs::write(&engine_pid_file, pid.to_string());
@@ -232,14 +281,18 @@ impl EngineManager {
     /// Wait for health check of a dynamically assigned port
     async fn wait_slot_health(&self, port: u16) -> Result<()> {
         let health_url = format!("http://127.0.0.1:{}{}", port, self.config.health_endpoint);
-        let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(3)).build()?;
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()?;
         let start = std::time::Instant::now();
         loop {
             if start.elapsed() > std::time::Duration::from_secs(120) {
                 bail!("Engine Adapter failed health verify on port {}", port);
             }
             if let Ok(resp) = client.get(&health_url).send().await {
-                if resp.status().is_success() { return Ok(()); }
+                if resp.status().is_success() {
+                    return Ok(());
+                }
             }
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
@@ -247,7 +300,8 @@ impl EngineManager {
 
     /// Get next available port — checks both active_slots AND whether the OS port is actually free.
     fn allocate_port(&self) -> u16 {
-        let used_ports: std::collections::HashSet<u16> = self.active_slots.values().map(|s| s.port).collect();
+        let used_ports: std::collections::HashSet<u16> =
+            self.active_slots.values().map(|s| s.port).collect();
         let mut port = self.base_engine_port;
         loop {
             if used_ports.contains(&port) {
@@ -258,16 +312,23 @@ impl EngineManager {
             if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
                 break;
             }
-            warn!(port, "Allocated port is held by an un-tracked process — skipping");
+            warn!(
+                port,
+                "Allocated port is held by an un-tracked process — skipping"
+            );
             port += 1;
         }
         port
     }
 
     /// Process ensure model logic
-    async fn handle_ensure_model(&mut self, model_id: &str, keep_alive_override: &Option<String>) -> Result<u16> {
+    async fn handle_ensure_model(
+        &mut self,
+        model_id: &str,
+        keep_alive_override: &Option<String>,
+    ) -> Result<u16> {
         let now = keepalive::now_secs();
-        
+
         let keep_alive_secs = if let Some(ov) = keep_alive_override {
             keepalive::parse_keepalive(ov)
         } else {
@@ -284,10 +345,14 @@ impl EngineManager {
             Ok(idx) => idx,
             Err(e) => {
                 warn!(error = %e, "Failed to load models.json — index will be empty");
-                crate::model::index::ModelIndex { schema_version: 1, models: vec![] }
+                crate::model::index::ModelIndex {
+                    schema_version: 1,
+                    models: vec![],
+                }
             }
         };
-        let role = index.get(model_id)
+        let role = index
+            .get(model_id)
             .map(|m| {
                 if m.capabilities.reranking {
                     ModelRole::Rerank
@@ -307,7 +372,10 @@ impl EngineManager {
                 bail!(
                     "Model '{}' is already loaded as {:?} on port {}. \
                      Unload it first: POST /lf/model/unload with {{\"model\":\"{}\"}}",
-                    model_id, slot.role, slot.port, model_id
+                    model_id,
+                    slot.role,
+                    slot.port,
+                    model_id
                 );
             }
             slot.last_accessed = now;
@@ -323,7 +391,12 @@ impl EngineManager {
         let entry_path = match index.get(model_id).map(|m| m.path.clone()) {
             Some(p) => p,
             None => {
-                let fallback = self.data_dir.join("models").join(model_id).to_string_lossy().to_string();
+                let fallback = self
+                    .data_dir
+                    .join("models")
+                    .join(model_id)
+                    .to_string_lossy()
+                    .to_string();
                 warn!(
                     model_id,
                     fallback_path = %fallback,
@@ -339,10 +412,14 @@ impl EngineManager {
 
         self.evict_for_vram(needed_vram_gb).await?;
 
-        if self.max_loaded_models > 0 && self.active_slots.len() >= self.max_loaded_models as usize {
-            if let Some((oldest_id, _)) = self.active_slots.iter()
+        if self.max_loaded_models > 0 && self.active_slots.len() >= self.max_loaded_models as usize
+        {
+            if let Some((oldest_id, _)) = self
+                .active_slots
+                .iter()
                 .min_by_key(|(_, slot)| slot.last_accessed)
-                .map(|(k, v)| (k.clone(), v.last_accessed)) {
+                .map(|(k, v)| (k.clone(), v.last_accessed))
+            {
                 if let Some(mut slot) = self.active_slots.remove(&oldest_id) {
                     let _ = self.stop_slot(&mut slot).await;
                     self.state.write().await.running_models.remove(&oldest_id);
@@ -351,17 +428,27 @@ impl EngineManager {
         }
 
         let port = self.allocate_port();
-        
+
         {
             let mut state = self.state.write().await;
-            state.running_models.insert(model_id.to_string(), ModelSlot {
-                model_id: model_id.to_string(), port, status: EngineStatus::Starting, idle_secs: 0, vram_est_gb: needed_vram_gb
-            });
+            state.running_models.insert(
+                model_id.to_string(),
+                ModelSlot {
+                    model_id: model_id.to_string(),
+                    port,
+                    status: EngineStatus::Starting,
+                    idle_secs: 0,
+                    vram_est_gb: needed_vram_gb,
+                },
+            );
         }
 
         // Spawn and wait for engine health. On any failure, clean up the dangling Starting slot
         // so the next EnsureModel call can retry a clean cold load.
-        let engine = match self.spawn_adapter_process(model_id, &model_dir, port, role).await {
+        let engine = match self
+            .spawn_adapter_process(model_id, &model_dir, port, role)
+            .await
+        {
             Ok(e) => e,
             Err(e) => {
                 self.state.write().await.running_models.remove(model_id);
@@ -378,11 +465,18 @@ impl EngineManager {
             return Err(e);
         }
 
-        self.active_slots.insert(model_id.to_string(), ActiveSlot {
-            engine, port, last_accessed: keepalive::now_secs(), keep_alive_secs, size_bytes,
-            status: EngineStatus::Ready,
-            role,
-        });
+        self.active_slots.insert(
+            model_id.to_string(),
+            ActiveSlot {
+                engine,
+                port,
+                last_accessed: keepalive::now_secs(),
+                keep_alive_secs,
+                size_bytes,
+                status: EngineStatus::Ready,
+                role,
+            },
+        );
 
         {
             let mut state = self.state.write().await;
@@ -468,7 +562,7 @@ fn kill_orphan_engine(pid_file: &std::path::Path) {
         if let Ok(pid) = content.trim().parse::<u32>() {
             #[cfg(unix)]
             {
-                use nix::sys::signal::{kill, Signal};
+                use nix::sys::signal::{Signal, kill};
                 use nix::unistd::Pid;
                 let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
             }
@@ -496,10 +590,13 @@ fn kill_port_holder_via_lsof(port: u16) {
         let stdout = String::from_utf8_lossy(&out.stdout);
         for line in stdout.lines() {
             if let Ok(pid) = line.trim().parse::<u32>() {
-                warn!(pid, port, "Sending SIGKILL to un-tracked port holder (via lsof)");
+                warn!(
+                    pid,
+                    port, "Sending SIGKILL to un-tracked port holder (via lsof)"
+                );
                 #[cfg(unix)]
                 {
-                    use nix::sys::signal::{kill, Signal};
+                    use nix::sys::signal::{Signal, kill};
                     use nix::unistd::Pid;
                     let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
                 }

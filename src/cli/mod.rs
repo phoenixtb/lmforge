@@ -184,22 +184,45 @@ pub enum ModelsAction {
 pub async fn dispatch(cli: Cli, config: LmForgeConfig) -> Result<()> {
     match cli.command {
         Command::Init => init::run(&config).await,
-        Command::Start { model, port, bind, foreground } => start::run(&config, model, port, bind, foreground, None).await,
+        Command::Start {
+            model,
+            port,
+            bind,
+            foreground,
+        } => start::run(&config, model, port, bind, foreground, None).await,
         Command::Stop => stop::run(&config).await,
         Command::Status => status::run(&config).await,
         Command::Pull { model } => pull::run(&config, &model).await,
         Command::Models { action } => models::run(&config, action).await,
         Command::Catalog { format, search } => catalog::run(&config, format, search).await,
-        Command::Clean { dry_run, yes, all, partial, logs, hf_cache } => {
-            clean::run(&config, clean::CleanOptions { dry_run, yes, all, partial, hf_cache, logs }).await
+        Command::Clean {
+            dry_run,
+            yes,
+            all,
+            partial,
+            logs,
+            hf_cache,
+        } => {
+            clean::run(
+                &config,
+                clean::CleanOptions {
+                    dry_run,
+                    yes,
+                    all,
+                    partial,
+                    hf_cache,
+                    logs,
+                },
+            )
+            .await
         }
         Command::Run { model } => run::run(&config, &model).await,
         Command::Service { action } => match action {
-            ServiceAction::Install   => service::install(),
+            ServiceAction::Install => service::install(),
             ServiceAction::Uninstall => service::uninstall(),
-            ServiceAction::Start     => service::service_start(),
-            ServiceAction::Stop      => service::service_stop(),
-            ServiceAction::Status    => service::service_status(),
+            ServiceAction::Start => service::service_start(),
+            ServiceAction::Stop => service::service_stop(),
+            ServiceAction::Status => service::service_status(),
         },
         Command::Logs {
             follow,

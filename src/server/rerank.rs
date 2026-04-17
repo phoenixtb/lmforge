@@ -5,8 +5,8 @@ use axum::response::IntoResponse;
 use bytes::Bytes;
 use tracing::debug;
 
-use super::proxy;
 use super::AppState;
+use super::proxy;
 
 /// `POST /v1/rerank` — Re-ranking endpoint compatible with the Cohere / Jina rerank schema.
 ///
@@ -37,10 +37,7 @@ use super::AppState;
 ///
 /// Scores are normalised to [0, 1] via sigmoid so downstream clients get consistent values
 /// regardless of whether the engine returns raw logits or probabilities.
-pub async fn rerank(
-    State(state): State<AppState>,
-    body: Bytes,
-) -> impl IntoResponse {
+pub async fn rerank(State(state): State<AppState>, body: Bytes) -> impl IntoResponse {
     // --- Parse request ---
     let req: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
@@ -81,11 +78,10 @@ pub async fn rerank(
     };
 
     let documents: Vec<String> = match req.get("documents").and_then(|v| v.as_array()) {
-        Some(docs) if !docs.is_empty() => {
-            docs.iter()
-                .map(|d| d.as_str().unwrap_or("").to_string())
-                .collect()
-        }
+        Some(docs) if !docs.is_empty() => docs
+            .iter()
+            .map(|d| d.as_str().unwrap_or("").to_string())
+            .collect(),
         Some(_) => {
             return Response::builder()
                 .status(StatusCode::BAD_REQUEST)
@@ -104,13 +100,23 @@ pub async fn rerank(
         }
     };
 
-    let top_n = req.get("top_n").and_then(|v| v.as_u64()).map(|n| n as usize);
-    let return_documents = req.get("return_documents").and_then(|v| v.as_bool()).unwrap_or(false);
+    let top_n = req
+        .get("top_n")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
+    let return_documents = req
+        .get("return_documents")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let keep_alive = req.get("keep_alive").and_then(|v| {
-        if v.is_string() { Some(v.as_str().unwrap().to_string()) }
-        else if v.is_number() { Some(v.as_i64().unwrap().to_string()) }
-        else { None }
+        if v.is_string() {
+            Some(v.as_str().unwrap().to_string())
+        } else if v.is_number() {
+            Some(v.as_i64().unwrap().to_string())
+        } else {
+            None
+        }
     });
 
     debug!(model = %model_id, docs = documents.len(), "Re-rank request");
@@ -129,8 +135,12 @@ pub async fn rerank(
     }
 
     // --- Model-level gate: does this model support re-ranking? ---
-    let index = crate::model::index::ModelIndex::load(&state.data_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex { schema_version: 1, models: vec![] });
+    let index = crate::model::index::ModelIndex::load(&state.data_dir).unwrap_or_else(|_| {
+        crate::model::index::ModelIndex {
+            schema_version: 1,
+            models: vec![],
+        }
+    });
 
     if let Some(entry) = index.get(&model_id) {
         if !entry.capabilities.reranking {
@@ -153,8 +163,13 @@ pub async fn rerank(
     };
 
     // Resolve physical directory name for the model field
-    let model_dir_name = index.get(&model_id)
-        .and_then(|e| std::path::Path::new(&e.path).file_name().map(|n| n.to_string_lossy().to_string()))
+    let model_dir_name = index
+        .get(&model_id)
+        .and_then(|e| {
+            std::path::Path::new(&e.path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+        })
         .unwrap_or_else(|| model_id.clone());
 
     // --- Build the request body for llama.cpp /v1/rerank ---
@@ -168,17 +183,18 @@ pub async fn rerank(
     let forwarded_body = Bytes::from(serde_json::to_vec(&engine_req).unwrap_or_default());
     let client = proxy::build_proxy_client();
 
-    let (status, text) = match proxy::proxy_request(&client, engine_port, "/v1/rerank", forwarded_body).await {
-        Ok(r) => r,
-        Err((status, text)) => {
-            return Response::builder()
-                .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(text))
-                .unwrap()
-                .into_response();
-        }
-    };
+    let (status, text) =
+        match proxy::proxy_request(&client, engine_port, "/v1/rerank", forwarded_body).await {
+            Ok(r) => r,
+            Err((status, text)) => {
+                return Response::builder()
+                    .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(text))
+                    .unwrap()
+                    .into_response();
+            }
+        };
 
     if status != 200 {
         return Response::builder()
@@ -190,7 +206,13 @@ pub async fn rerank(
     }
 
     // --- Normalize and format the response ---
-    let normalized = match normalize_rerank_response(&text, &model_id, &documents, top_n, return_documents) {
+    let normalized = match normalize_rerank_response(
+        &text,
+        &model_id,
+        &documents,
+        top_n,
+        return_documents,
+    ) {
         Ok(body) => body,
         Err(e) => {
             // Engine response was valid but parsing failed — return raw response
@@ -220,8 +242,8 @@ fn normalize_rerank_response(
     top_n: Option<usize>,
     return_documents: bool,
 ) -> Result<String, String> {
-    let engine_resp: serde_json::Value = serde_json::from_str(raw)
-        .map_err(|e| format!("Failed to parse engine response: {e}"))?;
+    let engine_resp: serde_json::Value =
+        serde_json::from_str(raw).map_err(|e| format!("Failed to parse engine response: {e}"))?;
 
     let results = engine_resp["results"]
         .as_array()
@@ -266,7 +288,10 @@ fn normalize_rerank_response(
         .collect();
 
     // Propagate usage if present
-    let usage = engine_resp.get("usage").cloned().unwrap_or(serde_json::Value::Null);
+    let usage = engine_resp
+        .get("usage")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
 
     let response = serde_json::json!({
         "model": model_id,
@@ -336,7 +361,10 @@ mod tests {
         let docs = vec!["hello world".to_string()];
         let result = normalize_rerank_response(raw, "m", &docs, None, true).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(parsed["results"][0]["document"]["text"].as_str().unwrap(), "hello world");
+        assert_eq!(
+            parsed["results"][0]["document"]["text"].as_str().unwrap(),
+            "hello world"
+        );
     }
 
     #[test]

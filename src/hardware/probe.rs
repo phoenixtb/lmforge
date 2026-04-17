@@ -72,7 +72,11 @@ pub fn detect_platform() -> Result<HardwareProfile> {
     let (total_ram_gb, cpu_cores, cpu_model) = detect_system_info();
 
     debug!(
-        ?os, ?arch, ?gpu_vendor, unified_mem, total_ram_gb,
+        ?os,
+        ?arch,
+        ?gpu_vendor,
+        unified_mem,
+        total_ram_gb,
         "Hardware detected"
     );
 

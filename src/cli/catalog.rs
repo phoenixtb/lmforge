@@ -4,7 +4,11 @@ use std::collections::HashMap;
 use crate::config::LmForgeConfig;
 
 /// `lmforge catalog list` — List available model shortcuts from the bundled catalog
-pub async fn run(config: &LmForgeConfig, format: Option<String>, search: Option<String>) -> Result<()> {
+pub async fn run(
+    config: &LmForgeConfig,
+    format: Option<String>,
+    search: Option<String>,
+) -> Result<()> {
     // Determine engine format for this platform if not specified
     let format_str = match format {
         Some(f) => f.to_lowercase(),
@@ -16,7 +20,8 @@ pub async fn run(config: &LmForgeConfig, format: Option<String>, search: Option<
     let runtime_file = catalogs_dir.join(format!("{}.json", format_str));
 
     let raw = if runtime_file.exists() {
-        tokio::fs::read_to_string(&runtime_file).await
+        tokio::fs::read_to_string(&runtime_file)
+            .await
             .ok()
             .filter(|s| !s.is_empty())
     } else {
@@ -54,10 +59,7 @@ pub async fn run(config: &LmForgeConfig, format: Option<String>, search: Option<
                 sections.push((current_section.take(), std::mem::take(&mut current_items)));
             }
             // Strip the marker prefix from the human-readable label
-            let label = value
-                .trim_matches('-')
-                .trim()
-                .to_string();
+            let label = value.trim_matches('-').trim().to_string();
             current_section = Some(label);
         } else {
             // Apply search filter
@@ -76,7 +78,11 @@ pub async fn run(config: &LmForgeConfig, format: Option<String>, search: Option<
     let total: usize = sections.iter().map(|(_, items)| items.len()).sum();
     if total == 0 {
         if let Some(ref q) = search {
-            println!("No shortcuts matching '{}' in {} catalog.", q, format_str.to_uppercase());
+            println!(
+                "No shortcuts matching '{}' in {} catalog.",
+                q,
+                format_str.to_uppercase()
+            );
         } else {
             println!("No shortcuts found.");
         }
@@ -84,9 +90,18 @@ pub async fn run(config: &LmForgeConfig, format: Option<String>, search: Option<
     }
 
     println!();
-    println!("  Catalog: {}  ({})", format_str.to_uppercase(), runtime_file.display());
+    println!(
+        "  Catalog: {}  ({})",
+        format_str.to_uppercase(),
+        runtime_file.display()
+    );
     if let Some(ref q) = search {
-        println!("  Filter:  \"{}\"  ({} result{})", q, total, if total == 1 { "" } else { "s" });
+        println!(
+            "  Filter:  \"{}\"  ({} result{})",
+            q,
+            total,
+            if total == 1 { "" } else { "s" }
+        );
     }
     println!();
 
@@ -133,7 +148,11 @@ fn detect_platform_format() -> String {
     #[cfg(target_os = "macos")]
     {
         // Check if oMLX is available (installed by lmforge init on Apple Silicon)
-        if std::process::Command::new("omlx").arg("--version").output().is_ok() {
+        if std::process::Command::new("omlx")
+            .arg("--version")
+            .output()
+            .is_ok()
+        {
             return "mlx".to_string();
         }
     }

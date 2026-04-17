@@ -33,7 +33,9 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
 
             #[cfg(unix)]
             {
-                unsafe { libc::kill(pid as i32, libc::SIGTERM); }
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGTERM);
+                }
             }
 
             // Wait a bit then check
@@ -43,7 +45,9 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
                 println!("Force killing (PID {})...", pid);
                 #[cfg(unix)]
                 {
-                    unsafe { libc::kill(pid as i32, libc::SIGKILL); }
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGKILL);
+                    }
                 }
             }
 
@@ -54,7 +58,10 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
             println!("No running LMForge instance found (stale PID file removed).");
         }
     } else {
-        println!("No running LMForge instance found (no PID file at {})", pid_path.display());
+        println!(
+            "No running LMForge instance found (no PID file at {})",
+            pid_path.display()
+        );
     }
 
     Ok(())

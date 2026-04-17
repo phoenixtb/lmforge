@@ -15,9 +15,7 @@ fn emit_probe_path() {
     let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();
 
     // The probe lives in the adjacent ui/src-tauri/binaries/ directory.
-    let probe = format!(
-        "{manifest}/ui/src-tauri/binaries/lmforge-gpu-probe-aarch64-apple-darwin"
-    );
+    let probe = format!("{manifest}/ui/src-tauri/binaries/lmforge-gpu-probe-aarch64-apple-darwin");
 
     println!("cargo:rerun-if-changed={probe}");
 

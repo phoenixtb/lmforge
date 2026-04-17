@@ -1,6 +1,6 @@
 use anyhow::Result;
-use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
 use serde_json::json;
 use std::io::Write;
 
@@ -12,7 +12,8 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
     // 1. Resolve model to get its exact ID
     let engine_format = detect_engine_format(&config.data_dir());
     let catalogs_dir = config.catalogs_dir();
-    let resolved = crate::model::resolver::resolve(model_input, &engine_format, &catalogs_dir).await?;
+    let resolved =
+        crate::model::resolver::resolve(model_input, &engine_format, &catalogs_dir).await?;
     let model_id = resolved.id;
 
     let mut idx = crate::model::index::ModelIndex::load(&config.data_dir())?;
@@ -20,7 +21,7 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
         println!("\nModel '{}' is not installed locally.", model_id);
         print!("Would you like to pull it now? [y/N]: ");
         std::io::stdout().flush().unwrap();
-        
+
         let mut input = String::new();
         std::io::stdin().read_line(&mut input)?;
         if input.trim().eq_ignore_ascii_case("y") {
@@ -35,7 +36,8 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
 
     // 2. Ensure daemon is running (auto-start).
     //    Use 120s — large models (27B+) can take 60–90s to load into unified memory.
-    match daemon::ensure_daemon_running(&config.data_dir(), config.port, Some(&model_id), 120).await {
+    match daemon::ensure_daemon_running(&config.data_dir(), config.port, Some(&model_id), 120).await
+    {
         Ok(true) => println!("  ✓ Engine ready."),
         Ok(false) => println!("  ✓ Daemon already running."),
         Err(e) => {
@@ -63,7 +65,7 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
                 if text.is_empty() {
                     continue;
                 }
-                
+
                 rl.add_history_entry(text)?;
 
                 // Slash commands
@@ -107,7 +109,10 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
 
                 if !resp.status().is_success() {
                     let status = resp.status();
-                    let err_text = resp.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                    let err_text = resp
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "Unknown error".to_string());
                     println!("\n  [API Error: {} - {}]\n", status, err_text);
                     continue;
                 }
@@ -122,12 +127,12 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
 
                 while let Some(chunk_result) = resp.chunk().await.ok().flatten() {
                     buffer.extend_from_slice(&chunk_result);
-                    
+
                     while let Some(pos) = buffer.windows(2).position(|w| w == b"\n\n") {
                         let line_bytes = buffer.split_to(pos + 2);
                         let msg = String::from_utf8_lossy(&line_bytes).to_string();
                         let msg = msg.trim();
-                        
+
                         if msg.starts_with("data: ") {
                             let data = &msg[6..]; // skip "data: "
                             if data == "[DONE]" {
@@ -135,10 +140,18 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
                             }
 
                             if let Ok(chunk) = serde_json::from_str::<serde_json::Value>(data) {
-                                if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array()) {
-                                    if let Some(delta) = choices.get(0).and_then(|c| c.get("delta")).and_then(|d| d.as_object()) {
+                                if let Some(choices) =
+                                    chunk.get("choices").and_then(|c| c.as_array())
+                                {
+                                    if let Some(delta) = choices
+                                        .get(0)
+                                        .and_then(|c| c.get("delta"))
+                                        .and_then(|d| d.as_object())
+                                    {
                                         // Handle reasoning content (thinking)
-                                        if let Some(reasoning) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
+                                        if let Some(reasoning) =
+                                            delta.get("reasoning_content").and_then(|v| v.as_str())
+                                        {
                                             if !reasoning.is_empty() {
                                                 if !in_thinking {
                                                     print!("\x1b[2;3m<think>\n"); // Dim & Italic
@@ -151,7 +164,9 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
                                         }
 
                                         // Handle normal content
-                                        if let Some(content) = delta.get("content").and_then(|v| v.as_str()) {
+                                        if let Some(content) =
+                                            delta.get("content").and_then(|v| v.as_str())
+                                        {
                                             if !content.is_empty() {
                                                 if in_thinking {
                                                     print!("\n</think>\x1b[0m\n\n"); // End gray coloring
@@ -180,7 +195,7 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
                     "role": "assistant",
                     "content": assistant_content,
                 });
-                
+
                 if !reasoning_content.is_empty() {
                     final_msg["reasoning_content"] = json!(reasoning_content);
                 }

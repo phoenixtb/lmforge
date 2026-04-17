@@ -21,32 +21,53 @@ pub async fn run(config: &LmForgeConfig, action: ModelsAction) -> Result<()> {
                 return Ok(());
             }
 
-            println!("{:<42} {:<8} {:<8} {:<6} {:<6} {:<7} {:<6} {:<6} {:>9}",
-                "MODEL", "FORMAT", "ENGINE", "CHAT", "EMBED", "RERANK", "THINK", "DIMS", "SIZE");
+            println!(
+                "{:<42} {:<8} {:<8} {:<6} {:<6} {:<7} {:<6} {:<6} {:>9}",
+                "MODEL", "FORMAT", "ENGINE", "CHAT", "EMBED", "RERANK", "THINK", "DIMS", "SIZE"
+            );
             println!("{}", "─".repeat(110));
 
             let mut total_bytes: u64 = 0;
             for m in models {
                 total_bytes += m.size_bytes;
-                let dims = m.capabilities.embedding_dims
+                let dims = m
+                    .capabilities
+                    .embedding_dims
                     .map(|d| d.to_string())
                     .unwrap_or_else(|| "–".to_string());
-                println!("{:<42} {:<8} {:<8} {:<6} {:<6} {:<7} {:<6} {:<6} {:>9}",
+                println!(
+                    "{:<42} {:<8} {:<8} {:<6} {:<6} {:<7} {:<6} {:<6} {:>9}",
                     m.id,
                     m.format,
                     m.engine,
                     if m.capabilities.chat { "✓" } else { "–" },
-                    if m.capabilities.embeddings { "✓" } else { "–" },
-                    if m.capabilities.reranking { "✓" } else { "–" },
-                    if m.capabilities.thinking { "✓" } else { "–" },
+                    if m.capabilities.embeddings {
+                        "✓"
+                    } else {
+                        "–"
+                    },
+                    if m.capabilities.reranking {
+                        "✓"
+                    } else {
+                        "–"
+                    },
+                    if m.capabilities.thinking {
+                        "✓"
+                    } else {
+                        "–"
+                    },
                     dims,
                     fmt_size(m.size_bytes),
                 );
             }
 
             println!("{}", "─".repeat(110));
-            println!("{:<42} {:>9}  ({} model(s))",
-                "Total", fmt_size(total_bytes), models.len());
+            println!(
+                "{:<42} {:>9}  ({} model(s))",
+                "Total",
+                fmt_size(total_bytes),
+                models.len()
+            );
         }
 
         ModelsAction::Remove { name } => {
@@ -59,7 +80,11 @@ pub async fn run(config: &LmForgeConfig, action: ModelsAction) -> Result<()> {
                     info!(path = %entry.path, "Deleted model files");
                 }
                 idx.save(&data_dir)?;
-                println!("✓ Model '{}' removed ({}).", name, fmt_size(entry.size_bytes));
+                println!(
+                    "✓ Model '{}' removed ({}).",
+                    name,
+                    fmt_size(entry.size_bytes)
+                );
             } else {
                 println!("Model '{}' not found.", name);
                 println!("List installed models with: lmforge models list");

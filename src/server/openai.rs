@@ -5,14 +5,18 @@ use axum::response::IntoResponse;
 use bytes::Bytes;
 use tracing::debug;
 
+use super::AppState;
 use super::proxy;
 use super::thinking;
-use super::AppState;
 
 /// Load the model index, returning an empty index on failure.
 fn load_index(data_dir: &std::path::Path) -> crate::model::index::ModelIndex {
-    crate::model::index::ModelIndex::load(data_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex { schema_version: 1, models: vec![] })
+    crate::model::index::ModelIndex::load(data_dir).unwrap_or_else(|_| {
+        crate::model::index::ModelIndex {
+            schema_version: 1,
+            models: vec![],
+        }
+    })
 }
 
 /// Check that a model's capabilities are appropriate for the requested role.
@@ -31,7 +35,11 @@ fn check_model_role(
     };
 
     if require_chat && !entry.capabilities.chat {
-        let kind = if entry.capabilities.reranking { "re-ranking" } else { "embedding" };
+        let kind = if entry.capabilities.reranking {
+            "re-ranking"
+        } else {
+            "embedding"
+        };
         let body = format!(
             r#"{{"error":{{"message":"Model '{}' is an {} model and cannot be used for chat completions.","type":"invalid_request_error"}}}}"#,
             model_id, kind
@@ -59,11 +67,7 @@ fn check_model_role(
 }
 
 /// `POST /v1/chat/completions` — OpenAI-compatible chat completions
-pub async fn chat_completions(
-    State(state): State<AppState>,
-    body: Bytes,
-) -> impl IntoResponse {
-
+pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> impl IntoResponse {
     let mut body_value: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => {
@@ -84,8 +88,15 @@ pub async fn chat_completions(
     let has_think = thinking::request_has_think(&body_value);
     thinking::translate_think_field(&mut body_value);
 
-    let is_stream = body_value.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
-    let model_id = body_value.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let is_stream = body_value
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let model_id = body_value
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     let keep_alive = body_value.get("keep_alive").and_then(|v| {
         if v.is_string() {
@@ -118,7 +129,10 @@ pub async fn chat_completions(
     if let Some(entry) = index.get(&model_id) {
         if let Some(dir_name) = std::path::Path::new(&entry.path).file_name() {
             if let Some(obj) = body_value.as_object_mut() {
-                obj.insert("model".to_string(), serde_json::Value::String(dir_name.to_string_lossy().to_string()));
+                obj.insert(
+                    "model".to_string(),
+                    serde_json::Value::String(dir_name.to_string_lossy().to_string()),
+                );
             }
         }
     }
@@ -138,7 +152,9 @@ pub async fn chat_completions(
 
     if is_stream {
         // Streaming: pass through directly — oMLX natively emits delta.reasoning_content
-        match proxy::proxy_stream(&client, engine_port, "/v1/chat/completions", forwarded_body).await {
+        match proxy::proxy_stream(&client, engine_port, "/v1/chat/completions", forwarded_body)
+            .await
+        {
             Ok(stream_body) => Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "text/event-stream")
@@ -160,7 +176,9 @@ pub async fn chat_completions(
             engine_port,
             "/v1/chat/completions",
             forwarded_body,
-        ).await {
+        )
+        .await
+        {
             Ok((status, text)) => Response::builder()
                 .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
                 .header(header::CONTENT_TYPE, "application/json")
@@ -174,7 +192,9 @@ pub async fn chat_completions(
         }
     } else {
         // Standard non-streaming pass-through
-        match proxy::proxy_request(&client, engine_port, "/v1/chat/completions", forwarded_body).await {
+        match proxy::proxy_request(&client, engine_port, "/v1/chat/completions", forwarded_body)
+            .await
+        {
             Ok((status, text)) => Response::builder()
                 .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
                 .header(header::CONTENT_TYPE, "application/json")
@@ -190,66 +210,79 @@ pub async fn chat_completions(
 }
 
 /// `POST /v1/completions` — OpenAI-compatible text completions
-pub async fn completions(
-    State(state): State<AppState>,
-    body: Bytes,
-) -> impl IntoResponse {
+pub async fn completions(State(state): State<AppState>, body: Bytes) -> impl IntoResponse {
     let mut body_value: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-    let model_id = body_value.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    
+    let model_id = body_value
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
     let keep_alive = body_value.get("keep_alive").and_then(|v| {
-        if v.is_string() { Some(v.as_str().unwrap().to_string()) }
-        else if v.is_number() { Some(v.as_i64().unwrap().to_string()) }
-        else { None }
+        if v.is_string() {
+            Some(v.as_str().unwrap().to_string())
+        } else if v.is_number() {
+            Some(v.as_i64().unwrap().to_string())
+        } else {
+            None
+        }
     });
     let engine_port = match state.ensure_model(&model_id, keep_alive).await {
         Ok(port) => port,
         Err(resp) => return resp.into_response(),
     };
 
-    let index = crate::model::index::ModelIndex::load(&state.data_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex { schema_version: 1, models: vec![] });
+    let index = crate::model::index::ModelIndex::load(&state.data_dir).unwrap_or_else(|_| {
+        crate::model::index::ModelIndex {
+            schema_version: 1,
+            models: vec![],
+        }
+    });
     if let Some(entry) = index.get(&model_id) {
         if let Some(dir_name) = std::path::Path::new(&entry.path).file_name() {
             if let Some(obj) = body_value.as_object_mut() {
-                obj.insert("model".to_string(), serde_json::Value::String(dir_name.to_string_lossy().to_string()));
+                obj.insert(
+                    "model".to_string(),
+                    serde_json::Value::String(dir_name.to_string_lossy().to_string()),
+                );
             }
         }
     }
-    
+
     let forwarded_body = Bytes::from(serde_json::to_vec(&body_value).unwrap_or_default());
 
     let client = proxy::build_proxy_client();
     match proxy::proxy_request(&client, engine_port, "/v1/completions", forwarded_body).await {
-        Ok((status, text)) => {
-            Response::builder()
-                .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(text))
-                .unwrap()
-        }
-        Err((status, text)) => {
-            Response::builder()
-                .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(text))
-                .unwrap()
-        }
+        Ok((status, text)) => Response::builder()
+            .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(text))
+            .unwrap(),
+        Err((status, text)) => Response::builder()
+            .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(text))
+            .unwrap(),
     }
 }
 
 /// `POST /v1/embeddings` — OpenAI-compatible embeddings with batch chunking and dim auto-detection
-pub async fn embeddings(
-    State(state): State<AppState>,
-    body: Bytes,
-) -> impl IntoResponse {
+pub async fn embeddings(State(state): State<AppState>, body: Bytes) -> impl IntoResponse {
     let mut body_value: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-    let model_id = body_value.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let model_id = body_value
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     let keep_alive = body_value.get("keep_alive").and_then(|v| {
-        if v.is_string() { Some(v.as_str().unwrap().to_string()) }
-        else if v.is_number() { Some(v.as_i64().unwrap().to_string()) }
-        else { None }
+        if v.is_string() {
+            Some(v.as_str().unwrap().to_string())
+        } else if v.is_number() {
+            Some(v.as_i64().unwrap().to_string())
+        } else {
+            None
+        }
     });
 
     // Engine-level gate: does this engine support embeddings at all?
@@ -277,8 +310,11 @@ pub async fn embeddings(
     };
 
     // Resolve the engine-facing model directory name (needed by oMLX)
-    let dir_name = index.get(&model_id)
-        .and_then(|e| std::path::Path::new(&e.path).file_name().map(|n| n.to_string_lossy().to_string()));
+    let dir_name = index.get(&model_id).and_then(|e| {
+        std::path::Path::new(&e.path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+    });
 
     let client = proxy::build_proxy_client();
     let batch_size = state.config.read().await.orchestrator.embed_batch_size;
@@ -287,12 +323,21 @@ pub async fn embeddings(
     // If `input` is an array with more than `batch_size` items, split into sub-batches,
     // call the engine for each, merge `data[]` arrays and sum usage tokens.
     let result: Result<(u16, String), (u16, String)> = {
-        let inputs_opt = body_value.get("input").and_then(|v| v.as_array()).map(|a| a.clone());
+        let inputs_opt = body_value
+            .get("input")
+            .and_then(|v| v.as_array())
+            .map(|a| a.clone());
 
         if let Some(inputs) = inputs_opt.filter(|a| a.len() > batch_size) {
             proxy_embeddings_batched(
-                &client, engine_port, dir_name.as_deref(), inputs, batch_size, &body_value
-            ).await
+                &client,
+                engine_port,
+                dir_name.as_deref(),
+                inputs,
+                batch_size,
+                &body_value,
+            )
+            .await
         } else {
             // Single string or small array -- pass through unchanged
             if let Some(ref name) = dir_name {
@@ -321,13 +366,11 @@ pub async fn embeddings(
                 .body(Body::from(text))
                 .unwrap()
         }
-        Err((status, text)) => {
-            Response::builder()
-                .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(text))
-                .unwrap()
-        }
+        Err((status, text)) => Response::builder()
+            .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(text))
+            .unwrap(),
     }
 }
 
@@ -349,9 +392,15 @@ async fn proxy_embeddings_batched(
     for chunk in inputs.chunks(batch_size) {
         let mut req = template.clone();
         if let Some(obj) = req.as_object_mut() {
-            obj.insert("input".to_string(), serde_json::Value::Array(chunk.to_vec()));
+            obj.insert(
+                "input".to_string(),
+                serde_json::Value::Array(chunk.to_vec()),
+            );
             if let Some(name) = dir_name {
-                obj.insert("model".to_string(), serde_json::Value::String(name.to_string()));
+                obj.insert(
+                    "model".to_string(),
+                    serde_json::Value::String(name.to_string()),
+                );
             }
         }
         let body_bytes = Bytes::from(serde_json::to_vec(&req).unwrap_or_default());
@@ -373,8 +422,14 @@ async fn proxy_embeddings_batched(
                         }
                     }
                     if let Some(usage) = resp.get("usage") {
-                        total_prompt_tokens += usage.get("prompt_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-                        total_tokens += usage.get("total_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+                        total_prompt_tokens += usage
+                            .get("prompt_tokens")
+                            .and_then(|t| t.as_u64())
+                            .unwrap_or(0);
+                        total_tokens += usage
+                            .get("total_tokens")
+                            .and_then(|t| t.as_u64())
+                            .unwrap_or(0);
                     }
                     if let Some(m) = resp.get("model").and_then(|m| m.as_str()) {
                         last_model = m.to_string();
@@ -400,7 +455,11 @@ async fn proxy_embeddings_batched(
 
 /// Lazily update embedding_dims in models.json from the first successful /v1/embeddings response.
 /// Fire-and-forget background task -- errors are silently ignored.
-async fn maybe_update_embedding_dims(data_dir: &std::path::Path, model_id: &str, response_text: &str) {
+async fn maybe_update_embedding_dims(
+    data_dir: &std::path::Path,
+    model_id: &str,
+    response_text: &str,
+) {
     let resp: serde_json::Value = match serde_json::from_str(response_text) {
         Ok(v) => v,
         Err(_) => return,
@@ -435,27 +494,32 @@ async fn maybe_update_embedding_dims(data_dir: &std::path::Path, model_id: &str,
 }
 
 /// `GET /v1/models` — List available models with capability metadata
-pub async fn models(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn models(State(state): State<AppState>) -> impl IntoResponse {
+    let index = crate::model::index::ModelIndex::load(&state.data_dir).unwrap_or_else(|_| {
+        crate::model::index::ModelIndex {
+            schema_version: 1,
+            models: vec![],
+        }
+    });
 
-    let index = crate::model::index::ModelIndex::load(&state.data_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex { schema_version: 1, models: vec![] });
-
-    let data: Vec<serde_json::Value> = index.list().iter().map(|m| {
-        serde_json::json!({
-            "id": m.id,
-            "object": "model",
-            "owned_by": "lmforge",
-            "capabilities": {
-                "chat": m.capabilities.chat,
-                "embeddings": m.capabilities.embeddings,
-                "reranking": m.capabilities.reranking,
-                "thinking": m.capabilities.thinking,
-                "embedding_dims": m.capabilities.embedding_dims,
-            }
+    let data: Vec<serde_json::Value> = index
+        .list()
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "object": "model",
+                "owned_by": "lmforge",
+                "capabilities": {
+                    "chat": m.capabilities.chat,
+                    "embeddings": m.capabilities.embeddings,
+                    "reranking": m.capabilities.reranking,
+                    "thinking": m.capabilities.thinking,
+                    "embedding_dims": m.capabilities.embedding_dims,
+                }
+            })
         })
-    }).collect();
+        .collect();
 
     let resp = serde_json::json!({ "object": "list", "data": data });
 

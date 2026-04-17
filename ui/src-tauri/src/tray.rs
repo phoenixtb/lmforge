@@ -7,28 +7,28 @@
 //! - "Open LMForge" → shows + focuses the main window.
 
 use tauri::{
-    AppHandle, Manager,
     image::Image,
-    menu::{Menu, MenuItem, MenuEvent},
+    menu::{Menu, MenuEvent, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Manager,
 };
 
 // Embedded at compile time.
-const ICON_READY:    &[u8] = include_bytes!("../icons/tray-ready-32.png");
+const ICON_READY: &[u8] = include_bytes!("../icons/tray-ready-32.png");
 const ICON_DEGRADED: &[u8] = include_bytes!("../icons/tray-degraded-32.png");
-const ICON_ERROR:    &[u8] = include_bytes!("../icons/tray-error-32.png");
-const ICON_OFFLINE:  &[u8] = include_bytes!("../icons/tray-offline-32.png");
+const ICON_ERROR: &[u8] = include_bytes!("../icons/tray-error-32.png");
+const ICON_OFFLINE: &[u8] = include_bytes!("../icons/tray-offline-32.png");
 
 /// Set up the system tray. Non-fatal: returns Err on platforms without tray support.
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let show_item  = MenuItem::with_id(app, "show",   "Open LMForge", true, None::<&str>)?;
-    let hide_item  = MenuItem::with_id(app, "hide",   "Hide UI",      true, None::<&str>)?;
-    let stop_item  = MenuItem::with_id(app, "stop",   "Stop Engine",  true, None::<&str>)?;
+    let show_item = MenuItem::with_id(app, "show", "Open LMForge", true, None::<&str>)?;
+    let hide_item = MenuItem::with_id(app, "hide", "Hide UI", true, None::<&str>)?;
+    let stop_item = MenuItem::with_id(app, "stop", "Stop Engine", true, None::<&str>)?;
 
     let menu = Menu::with_items(app, &[&show_item, &hide_item, &stop_item])?;
     let icon = Image::from_bytes(ICON_OFFLINE)?;
 
-    let app_menu  = app.clone();
+    let app_menu = app.clone();
     let app_click = app.clone();
 
     TrayIconBuilder::with_id("lmforge-tray")
@@ -68,11 +68,16 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
-            } = event {
+            } = event
+            {
                 if let Some(win) = app_click.get_webview_window("main") {
                     let visible = win.is_visible().unwrap_or(false);
-                    if visible { let _ = win.hide(); }
-                    else { let _ = win.show(); let _ = win.set_focus(); }
+                    if visible {
+                        let _ = win.hide();
+                    } else {
+                        let _ = win.show();
+                        let _ = win.set_focus();
+                    }
                 }
             }
         })
@@ -115,7 +120,8 @@ async fn tray_poll_loop(app: AppHandle) {
                 .await
                 .ok()?;
             resp.json::<serde_json::Value>().await.ok()
-        }.await;
+        }
+        .await;
 
         update_tray_from_json(&app, state.as_ref());
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -123,7 +129,9 @@ async fn tray_poll_loop(app: AppHandle) {
 }
 
 fn set_tray_offline(app: &AppHandle) {
-    let Some(tray) = app.tray_by_id("lmforge-tray") else { return };
+    let Some(tray) = app.tray_by_id("lmforge-tray") else {
+        return;
+    };
     if let Ok(icon) = Image::from_bytes(ICON_OFFLINE) {
         let _ = tray.set_icon(Some(icon));
     }
@@ -131,7 +139,9 @@ fn set_tray_offline(app: &AppHandle) {
 }
 
 fn update_tray_from_json(app: &AppHandle, state: Option<&serde_json::Value>) {
-    let Some(tray) = app.tray_by_id("lmforge-tray") else { return };
+    let Some(tray) = app.tray_by_id("lmforge-tray") else {
+        return;
+    };
 
     let status = state
         .and_then(|s| s.get("overall_status"))
@@ -145,19 +155,23 @@ fn update_tray_from_json(app: &AppHandle, state: Option<&serde_json::Value>) {
         .unwrap_or(0);
 
     let icon_bytes: &[u8] = match status {
-        "ready"    => ICON_READY,
+        "ready" => ICON_READY,
         "degraded" => ICON_DEGRADED,
-        "error"    => ICON_ERROR,
-        _          => ICON_OFFLINE,
+        "error" => ICON_ERROR,
+        _ => ICON_OFFLINE,
     };
 
     let tooltip = match status {
         "ready" if n == 0 => "LMForge — Ready".to_string(),
-        "ready"           => format!("LMForge — {} model{} loaded", n, if n == 1 { "" } else { "s" }),
-        "starting"        => "LMForge — Starting…".to_string(),
-        "degraded"        => "LMForge — Degraded".to_string(),
-        "error"           => "LMForge — Error".to_string(),
-        _                 => "LMForge — Offline".to_string(),
+        "ready" => format!(
+            "LMForge — {} model{} loaded",
+            n,
+            if n == 1 { "" } else { "s" }
+        ),
+        "starting" => "LMForge — Starting…".to_string(),
+        "degraded" => "LMForge — Degraded".to_string(),
+        "error" => "LMForge — Error".to_string(),
+        _ => "LMForge — Offline".to_string(),
     };
 
     if let Ok(icon) = Image::from_bytes(icon_bytes) {

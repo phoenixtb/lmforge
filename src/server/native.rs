@@ -2,8 +2,8 @@ use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{Response, StatusCode, header};
 use axum::response::IntoResponse;
-use tracing::{info, warn, error};
 use tokio_stream::StreamExt;
+use tracing::{error, info, warn};
 
 use super::AppState;
 
@@ -17,9 +17,7 @@ use super::AppState;
 ///   - Sends the current snapshot immediately on connect.
 ///   - Sends a new snapshot on every state change (model load/unload/health change).
 ///   - Sends a heartbeat `event: ping` every 15 s to survive TCP/proxy timeouts.
-pub async fn status_stream(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn status_stream(State(state): State<AppState>) -> impl IntoResponse {
     let mut rx = state.status_tx.subscribe();
 
     // Capture the current snapshot to emit immediately on connect.
@@ -66,11 +64,8 @@ pub async fn status_stream(
         .unwrap()
 }
 
-
 /// `GET /lf/status` — LMForge native status endpoint
-pub async fn status(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn status(State(state): State<AppState>) -> impl IntoResponse {
     let engine_state = state.engine_state.read().await;
 
     let running_models: Vec<_> = engine_state.running_models.values().collect();
@@ -94,9 +89,7 @@ pub async fn status(
 }
 
 /// `GET /lf/hardware` — Return cached hardware profile
-pub async fn hardware(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn hardware(State(state): State<AppState>) -> impl IntoResponse {
     let hw_path = state.data_dir.join("hardware.json");
     let content = std::fs::read_to_string(&hw_path).unwrap_or_else(|_| {
         r#"{"error":"Hardware profile not found. Run lmforge init first."}"#.to_string()
@@ -110,14 +103,11 @@ pub async fn hardware(
 }
 
 /// `GET /lf/model/list` — List installed models
-pub async fn model_list(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn model_list(State(state): State<AppState>) -> impl IntoResponse {
     let models_file = state.data_dir.join("models.json");
     let content = if models_file.exists() {
-        std::fs::read_to_string(&models_file).unwrap_or_else(|_| {
-            r#"{"schema_version":1,"models":[]}"#.to_string()
-        })
+        std::fs::read_to_string(&models_file)
+            .unwrap_or_else(|_| r#"{"schema_version":1,"models":[]}"#.to_string())
     } else {
         r#"{"schema_version":1,"models":[]}"#.to_string()
     };
@@ -146,10 +136,14 @@ pub async fn model_switch(
     };
     let model_id = match req.get("model").and_then(|v| v.as_str()) {
         Some(m) => m.to_string(),
-        None => return Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Body::from(r#"{"error":"Missing or invalid 'model' parameter."}"#))
-            .unwrap()
+        None => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from(
+                    r#"{"error":"Missing or invalid 'model' parameter."}"#,
+                ))
+                .unwrap();
+        }
     };
 
     info!(model = %model_id, "API request to hot-swap or warm orchestrator model");
@@ -162,14 +156,14 @@ pub async fn model_switch(
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(r#"{"status":"Orchestrator VRAM Hot-Swap queued successfully."}"#))
+        .body(Body::from(
+            r#"{"status":"Orchestrator VRAM Hot-Swap queued successfully."}"#,
+        ))
         .unwrap()
 }
 
 /// `POST /lf/shutdown` — Graceful shutdown (loopback only)
-pub async fn shutdown(
-    State(_state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn shutdown(State(_state): State<AppState>) -> impl IntoResponse {
     info!("Shutdown requested via API");
 
     // Trigger shutdown asynchronously
@@ -178,7 +172,7 @@ pub async fn shutdown(
         std::process::exit(0);
     });
 
-        Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(r#"{"status":"shutting_down"}"#))
@@ -199,10 +193,12 @@ pub async fn model_pull(
 ) -> impl IntoResponse {
     let req: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
-        Err(_) => return Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Body::from(r#"{"error":"Invalid JSON"}"#))
-            .unwrap(),
+        Err(_) => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from(r#"{"error":"Invalid JSON"}"#))
+                .unwrap();
+        }
     };
 
     let model_id = req.get("model").and_then(|v| v.as_str()).unwrap_or("");
@@ -215,13 +211,16 @@ pub async fn model_pull(
 
     let engine_format = state.engine_config.model_format.clone();
     let catalogs_dir = state.config.read().await.catalogs_dir();
-    let resolved = match crate::model::resolver::resolve(model_id, &engine_format, &catalogs_dir).await {
-        Ok(r) => r,
-        Err(e) => return Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Body::from(format!(r#"{{"error":"{}"}}"#, e)))
-            .unwrap(),
-    };
+    let resolved =
+        match crate::model::resolver::resolve(model_id, &engine_format, &catalogs_dir).await {
+            Ok(r) => r,
+            Err(e) => {
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from(format!(r#"{{"error":"{}"}}"#, e)))
+                    .unwrap();
+            }
+        };
 
     let data_dir = state.data_dir.clone();
     let model_dir = data_dir.join("models").join(&resolved.dir_name);
@@ -239,7 +238,8 @@ pub async fn model_pull(
             &resolved.files,
             &model_dir,
             tx.clone(),
-        ).await;
+        )
+        .await;
 
         if succeeded {
             // Update ModelIndex now that weights are on disk
@@ -338,7 +338,9 @@ pub async fn model_unload(
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(r#"{"error":"Orchestrator Control Plane is dead"}"#))
+            .body(Body::from(
+                r#"{"error":"Orchestrator Control Plane is dead"}"#,
+            ))
             .unwrap();
     }
 
@@ -372,7 +374,10 @@ pub async fn model_delete(
             return Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(format!(r#"{{"error":"Model '{}' not found"}}"#, name)))
+                .body(Body::from(format!(
+                    r#"{{"error":"Model '{}' not found"}}"#,
+                    name
+                )))
                 .unwrap();
         }
     };
@@ -396,7 +401,8 @@ pub async fn model_delete(
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(format!(
-                    r#"{{"status":"removed_from_index","warning":"Could not delete files: {}"}}"#, e
+                    r#"{{"status":"removed_from_index","warning":"Could not delete files: {}"}}"#,
+                    e
                 )))
                 .unwrap();
         }
@@ -406,14 +412,15 @@ pub async fn model_delete(
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(format!(r#"{{"status":"deleted","model":"{}"}}"#, name)))
+        .body(Body::from(format!(
+            r#"{{"status":"deleted","model":"{}"}}"#,
+            name
+        )))
         .unwrap()
 }
 
 /// `GET /lf/config` — Get the current LMForge config
-pub async fn config_get(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn config_get(State(state): State<AppState>) -> impl IntoResponse {
     let config = state.config.read().await;
     let json = serde_json::to_string(&*config).unwrap_or_else(|_| "{}".to_string());
 
@@ -435,7 +442,10 @@ pub async fn config_update(
             return Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(format!(r#"{{"error":"Invalid config payload: {}"}}"#, e)))
+                .body(Body::from(format!(
+                    r#"{{"error":"Invalid config payload: {}"}}"#,
+                    e
+                )))
                 .unwrap();
         }
     };
@@ -444,14 +454,17 @@ pub async fn config_update(
     {
         let mut config = state.config.write().await;
         *config = req.clone();
-        
+
         // Persist to disk natively
         if let Err(e) = config.save() {
             error!(error = %e, "Failed to persist LMForgeConfig disk after update");
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(format!(r#"{{"error":"Failed to save configuration: {}"}}"#, e)))
+                .body(Body::from(format!(
+                    r#"{{"error":"Failed to save configuration: {}"}}"#,
+                    e
+                )))
                 .unwrap();
         }
     }

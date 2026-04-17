@@ -10,9 +10,7 @@ use crate::engine::manager::EngineStatus;
 ///
 /// Returns version and min_ui_version so the desktop client can perform
 /// a compatibility check on startup before showing the main UI.
-pub async fn health(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
     let engine_state = state.engine_state.read().await;
 
     // Semver from Cargo.toml; injected at compile time.

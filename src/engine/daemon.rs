@@ -10,8 +10,7 @@ pub fn pid_file_path(data_dir: &std::path::Path) -> std::path::PathBuf {
 pub fn write_pid_file(data_dir: &std::path::Path) -> Result<()> {
     let pid = std::process::id();
     let path = pid_file_path(data_dir);
-    std::fs::write(&path, pid.to_string())
-        .context("Failed to write PID file")?;
+    std::fs::write(&path, pid.to_string()).context("Failed to write PID file")?;
     info!(pid, path = %path.display(), "PID file written");
     Ok(())
 }
@@ -105,8 +104,8 @@ pub async fn ensure_daemon_running(
     info!("Auto-starting LMForge daemon...");
     println!("Starting LMForge daemon...");
 
-    let lmforge_bin = std::env::current_exe()
-        .unwrap_or_else(|_| std::path::PathBuf::from("lmforge"));
+    let lmforge_bin =
+        std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("lmforge"));
 
     let mut cmd = std::process::Command::new(&lmforge_bin);
     cmd.args(["start"]);
@@ -184,6 +183,9 @@ mod tests {
 
     #[test]
     fn test_read_pid_nonexistent() {
-        assert_eq!(read_pid(std::path::Path::new("/tmp/nonexistent-lmforge-test")), None);
+        assert_eq!(
+            read_pid(std::path::Path::new("/tmp/nonexistent-lmforge-test")),
+            None
+        );
     }
 }

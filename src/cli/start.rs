@@ -29,7 +29,10 @@ pub async fn run(
     // This makes `lmforge start` safe to call unconditionally from consumer apps,
     // install scripts, and alongside a running system service.
     if is_daemon_running(api_port).await {
-        println!("✓ LMForge already running at http://{}:{}", bind_addr, api_port);
+        println!(
+            "✓ LMForge already running at http://{}:{}",
+            bind_addr, api_port
+        );
         println!("  Use `lmforge status` to see running models.");
         return Ok(());
     }
@@ -43,7 +46,6 @@ pub async fn run(
     //    and verify both ports are free BEFORE we do anything expensive.
     //    This must happen before hardware probe, engine spawn, or model load.
     startup_cleanup(&data_dir, api_port, engine_port).await?;
-
 
     // 3. Load or probe hardware
     let profile = if data_dir.join("hardware.json").exists() {
@@ -59,9 +61,11 @@ pub async fn run(
 
     // 4. Select engine
     let user_engines = data_dir.join("engines.toml");
-    let registry = engine::EngineRegistry::load(
-        if user_engines.exists() { Some(user_engines.as_path()) } else { None }
-    )?;
+    let registry = engine::EngineRegistry::load(if user_engines.exists() {
+        Some(user_engines.as_path())
+    } else {
+        None
+    })?;
     let engine_config = registry.select(&profile)?.clone();
 
     // 5. Check engine is installed
@@ -74,10 +78,18 @@ pub async fn run(
     // 6. (Optional) validate model if --model was passed
     if let Some(ref m) = model {
         // Verify the model exists in the index before starting so we fail fast
-        let idx = crate::model::index::ModelIndex::load(&data_dir)
-            .unwrap_or_else(|_| crate::model::index::ModelIndex { schema_version: 1, models: vec![] });
+        let idx = crate::model::index::ModelIndex::load(&data_dir).unwrap_or_else(|_| {
+            crate::model::index::ModelIndex {
+                schema_version: 1,
+                models: vec![],
+            }
+        });
         if idx.get(m).is_none() {
-            anyhow::bail!("Model '{}' not found. Pull it first with:\n  lmforge pull {}", m, m);
+            anyhow::bail!(
+                "Model '{}' not found. Pull it first with:\n  lmforge pull {}",
+                m,
+                m
+            );
         }
     };
 
@@ -93,7 +105,8 @@ pub async fn run(
         }
         None => {
             // Standalone CLI mode — create our own channel.
-            let (tx, rx) = tokio::sync::broadcast::channel::<crate::engine::manager::EngineState>(16);
+            let (tx, rx) =
+                tokio::sync::broadcast::channel::<crate::engine::manager::EngineState>(16);
             (tx, Some(rx))
         }
     };
@@ -111,18 +124,25 @@ pub async fn run(
         status_tx.clone(),
     );
 
-    println!("⚙ Starting {} v{} Orchestrator...", engine_config.name, engine_config.version);
+    println!(
+        "⚙ Starting {} v{} Orchestrator...",
+        engine_config.name, engine_config.version
+    );
     manager.start().await?;
-
-
 
     // 10. Start Orchestrator Control Channel
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
 
     let state = manager.state();
     println!("\n✓ LMForge Orchestrator ready");
-    println!("  Engine:  {} v{}", engine_config.name, engine_config.version);
-    println!("  Mode:    Multi-model (keep_alive={})", config.orchestrator.keep_alive);
+    println!(
+        "  Engine:  {} v{}",
+        engine_config.name, engine_config.version
+    );
+    println!(
+        "  Mode:    Multi-model (keep_alive={})",
+        config.orchestrator.keep_alive
+    );
     println!("  API:     http://{}:{}", bind_addr, api_port);
     println!("  Health:  http://{}:{}/health", bind_addr, api_port);
     println!("\n  Press Ctrl+C to stop.\n");
@@ -157,7 +177,8 @@ pub async fn run(
     let app = crate::server::build_router(app_state);
     let addr = format!("{}:{}", bind_addr, api_port);
     // Port was verified free in startup_cleanup — bind must succeed now.
-    let listener = tokio::net::TcpListener::bind(&addr).await
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to bind API port {}: {}", api_port, e))?;
 
     info!(addr = %addr, "API server listening");
@@ -186,7 +207,11 @@ pub async fn run(
 ///      and kill the holding process as a last resort.
 ///   4. Wait until both the API port and engine port are confirmed free (up to 10s).
 ///      Returns Err if either port is still occupied after all attempts.
-async fn startup_cleanup(data_dir: &std::path::Path, api_port: u16, engine_port: u16) -> anyhow::Result<()> {
+async fn startup_cleanup(
+    data_dir: &std::path::Path,
+    api_port: u16,
+    engine_port: u16,
+) -> anyhow::Result<()> {
     kill_pid_file_process(engine::daemon::pid_file_path(data_dir), true).await;
     kill_engine_pid_files(data_dir);
 
@@ -203,22 +228,31 @@ async fn startup_cleanup(data_dir: &std::path::Path, api_port: u16, engine_port:
 /// Kill the process recorded in `pid_file`.
 /// If `graceful` is true, sends SIGTERM first and waits up to 3s before SIGKILL.
 async fn kill_pid_file_process(pid_file: std::path::PathBuf, graceful: bool) {
-    let Ok(content) = std::fs::read_to_string(&pid_file) else { return };
-    let Ok(pid) = content.trim().parse::<u32>() else { return };
+    let Ok(content) = std::fs::read_to_string(&pid_file) else {
+        return;
+    };
+    let Ok(pid) = content.trim().parse::<u32>() else {
+        return;
+    };
 
     #[cfg(unix)]
     {
-        use nix::sys::signal::{kill, Signal};
+        use nix::sys::signal::{Signal, kill};
         use nix::unistd::Pid;
         let nix_pid = Pid::from_raw(pid as i32);
 
         if graceful {
             let _ = kill(nix_pid, Signal::SIGTERM);
-            warn!(pid, "Sent SIGTERM to stale LMForge daemon, waiting for clean exit");
+            warn!(
+                pid,
+                "Sent SIGTERM to stale LMForge daemon, waiting for clean exit"
+            );
             // Wait up to 3s for graceful exit
             for _ in 0..6 {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                if unsafe { libc::kill(pid as i32, 0) } != 0 { break; } // process gone
+                if unsafe { libc::kill(pid as i32, 0) } != 0 {
+                    break;
+                } // process gone
             }
             // If still running, force kill
             let _ = kill(nix_pid, Signal::SIGKILL);
@@ -234,7 +268,9 @@ async fn kill_pid_file_process(pid_file: std::path::PathBuf, graceful: bool) {
 /// Kill all engine PID files found under <data_dir>/engines/*.pid
 fn kill_engine_pid_files(data_dir: &std::path::Path) {
     let engines_dir = data_dir.join("engines");
-    let Ok(entries) = std::fs::read_dir(&engines_dir) else { return };
+    let Ok(entries) = std::fs::read_dir(&engines_dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().map_or(false, |e| e == "pid") {
@@ -242,7 +278,7 @@ fn kill_engine_pid_files(data_dir: &std::path::Path) {
                 if let Ok(pid) = content.trim().parse::<u32>() {
                     #[cfg(unix)]
                     {
-                        use nix::sys::signal::{kill, Signal};
+                        use nix::sys::signal::{Signal, kill};
                         use nix::unistd::Pid;
                         let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
                         warn!(pid, path = %path.display(), "Sent SIGKILL to stale engine process");
@@ -258,21 +294,29 @@ fn kill_engine_pid_files(data_dir: &std::path::Path) {
 /// use `lsof` to find and kill the holding process, then wait up to 10s.
 async fn ensure_port_free(port: u16) -> anyhow::Result<()> {
     // Fast path — already free
-    if is_port_free(port).await { return Ok(()); }
+    if is_port_free(port).await {
+        return Ok(());
+    }
 
     // Last resort: ask lsof who is holding the port and kill it
-    warn!(port, "Port still occupied after PID cleanup — using lsof to identify holder");
+    warn!(
+        port,
+        "Port still occupied after PID cleanup — using lsof to identify holder"
+    );
     kill_port_holder_via_lsof(port);
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
     for _ in 0..9 {
-        if is_port_free(port).await { return Ok(()); }
+        if is_port_free(port).await {
+            return Ok(());
+        }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
 
     anyhow::bail!(
         "Port {} is still occupied after cleanup. Kill it manually:\n  lsof -ti :{} | xargs kill -9",
-        port, port
+        port,
+        port
     )
 }
 
@@ -285,7 +329,8 @@ async fn is_daemon_running(port: u16) -> bool {
     let connect = tokio::time::timeout(
         std::time::Duration::from_millis(400),
         tokio::net::TcpStream::connect(("127.0.0.1", port)),
-    ).await;
+    )
+    .await;
 
     let mut stream: tokio::net::TcpStream = match connect {
         Ok(Ok(s)) => s,
@@ -298,10 +343,8 @@ async fn is_daemon_running(port: u16) -> bool {
     }
 
     let mut buf = [0u8; 32];
-    let read = tokio::time::timeout(
-        std::time::Duration::from_millis(400),
-        stream.read(&mut buf),
-    ).await;
+    let read =
+        tokio::time::timeout(std::time::Duration::from_millis(400), stream.read(&mut buf)).await;
 
     let n = match read {
         Ok(Ok(n)) if n > 0 => n,
@@ -313,7 +356,9 @@ async fn is_daemon_running(port: u16) -> bool {
 }
 
 async fn is_port_free(port: u16) -> bool {
-    tokio::net::TcpListener::bind(("127.0.0.1", port)).await.is_ok()
+    tokio::net::TcpListener::bind(("127.0.0.1", port))
+        .await
+        .is_ok()
 }
 
 /// Use `lsof -ti :PORT` to find the PID holding the port and send SIGKILL.
@@ -328,7 +373,7 @@ fn kill_port_holder_via_lsof(port: u16) {
             if let Ok(pid) = line.trim().parse::<u32>() {
                 #[cfg(unix)]
                 {
-                    use nix::sys::signal::{kill, Signal};
+                    use nix::sys::signal::{Signal, kill};
                     use nix::unistd::Pid;
                     let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
                     warn!(pid, port, "Sent SIGKILL to unknown port holder (via lsof)");
@@ -343,8 +388,12 @@ fn resolve_engine_cmd(engine: &engine::EngineConfig, data_dir: &std::path::Path)
     let cmd = &engine.start_cmd;
 
     // Check venv
-    let venv_bin = data_dir.join("engines").join(&engine.id)
-        .join("venv").join("bin").join(cmd);
+    let venv_bin = data_dir
+        .join("engines")
+        .join(&engine.id)
+        .join("venv")
+        .join("bin")
+        .join(cmd);
     if venv_bin.exists() {
         return venv_bin.to_string_lossy().to_string();
     }
@@ -366,4 +415,3 @@ fn command_exists(cmd: &str) -> bool {
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
-

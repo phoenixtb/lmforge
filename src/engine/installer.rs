@@ -23,7 +23,10 @@ pub async fn install(
 
     // Check if already installed
     if let Some(path) = find_existing_install(engine, data_dir) {
-        println!("  ✓ {} v{} already installed at {}", engine.name, engine.version, path);
+        println!(
+            "  ✓ {} v{} already installed at {}",
+            engine.name, engine.version, path
+        );
         return Ok(InstallResult {
             engine_id: engine.id.clone(),
             version: engine.version.clone(),
@@ -100,7 +103,10 @@ fn verify_engine_version(engine: &EngineConfig, _path: &str) -> bool {
 }
 
 /// Install via Homebrew (primary method for oMLX on macOS)
-async fn install_via_brew(engine: &EngineConfig, data_dir: &std::path::Path) -> Result<InstallResult> {
+async fn install_via_brew(
+    engine: &EngineConfig,
+    data_dir: &std::path::Path,
+) -> Result<InstallResult> {
     // Check if brew is available
     if !command_exists("brew") {
         warn!("Homebrew not found, trying pip fallback");
@@ -150,7 +156,9 @@ async fn install_via_brew(engine: &EngineConfig, data_dir: &std::path::Path) -> 
         let cmd = &engine.start_cmd;
         if let Ok(which_out) = std::process::Command::new("which").arg(cmd).output() {
             if which_out.status.success() {
-                let path = String::from_utf8_lossy(&which_out.stdout).trim().to_string();
+                let path = String::from_utf8_lossy(&which_out.stdout)
+                    .trim()
+                    .to_string();
                 println!("  ✓ {} installed at {}", engine.name, path);
                 return Ok(InstallResult {
                     engine_id: engine.id.clone(),
@@ -162,11 +170,17 @@ async fn install_via_brew(engine: &EngineConfig, data_dir: &std::path::Path) -> 
         }
     }
 
-    bail!("Homebrew installation of {} failed — formula or command not found", engine.id);
+    bail!(
+        "Homebrew installation of {} failed — formula or command not found",
+        engine.id
+    );
 }
 
 /// Install via pip in an isolated venv (fallback for oMLX, primary for SGLang)
-async fn install_via_pip(engine: &EngineConfig, data_dir: &std::path::Path) -> Result<InstallResult> {
+async fn install_via_pip(
+    engine: &EngineConfig,
+    data_dir: &std::path::Path,
+) -> Result<InstallResult> {
     // Run preflight checks
     run_preflight_checks(engine)?;
 
@@ -250,10 +264,7 @@ async fn install_via_binary(
         .as_ref()
         .context("No asset_pattern for binary engine")?;
 
-    let binary_name = engine
-        .binary
-        .as_ref()
-        .context("No binary name specified")?;
+    let binary_name = engine.binary.as_ref().context("No binary name specified")?;
 
     // Resolve platform string
     let platform = resolve_platform_string(profile)?;
@@ -402,7 +413,11 @@ fn find_binary_in_dir(dir: &std::path::Path, name: &str) -> Result<std::path::Pa
             }
         }
     }
-    bail!("Binary '{}' not found in extracted archive at {}", name, dir.display());
+    bail!(
+        "Binary '{}' not found in extracted archive at {}",
+        name,
+        dir.display()
+    );
 }
 
 /// Simple recursive directory walk
@@ -445,7 +460,9 @@ fn find_python() -> Result<String> {
                 if let Some(ver_str) = version.split_whitespace().nth(1) {
                     let parts: Vec<&str> = ver_str.split('.').collect();
                     if parts.len() >= 2 {
-                        if let (Ok(major), Ok(minor)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
+                        if let (Ok(major), Ok(minor)) =
+                            (parts[0].parse::<u32>(), parts[1].parse::<u32>())
+                        {
                             if major >= 3 && minor >= 10 {
                                 return Ok(candidate.to_string());
                             }
@@ -468,7 +485,9 @@ fn run_preflight_checks(engine: &EngineConfig) -> Result<()> {
             bail!(
                 "{} requires '{}' but it was not found in PATH.\n\
                  Please install '{}' before continuing.",
-                engine.name, check, check
+                engine.name,
+                check,
+                check
             );
         }
         debug!(check, "Preflight check passed");
@@ -477,10 +496,7 @@ fn run_preflight_checks(engine: &EngineConfig) -> Result<()> {
     // Check disk space if required
     if let Some(min_gb) = engine.min_disk_gb {
         // Simple check via `df`
-        if let Ok(output) = std::process::Command::new("df")
-            .args(["-g", "."])
-            .output()
-        {
+        if let Ok(output) = std::process::Command::new("df").args(["-g", "."]).output() {
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 // Parse the available space from df output (4th column, 2nd line)
@@ -490,7 +506,9 @@ fn run_preflight_checks(engine: &EngineConfig) -> Result<()> {
                             if free_gb < min_gb {
                                 bail!(
                                     "{} requires ≥{} GB free disk space. Available: {} GB",
-                                    engine.name, min_gb, free_gb
+                                    engine.name,
+                                    min_gb,
+                                    free_gb
                                 );
                             }
                         }
@@ -553,7 +571,10 @@ mod tests {
             cpu_cores: 16,
             cpu_model: "AMD Ryzen 9".to_string(),
         };
-        assert_eq!(resolve_platform_string(&profile).unwrap(), "ubuntu-x64-cuda");
+        assert_eq!(
+            resolve_platform_string(&profile).unwrap(),
+            "ubuntu-x64-cuda"
+        );
     }
 
     #[test]

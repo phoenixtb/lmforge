@@ -81,22 +81,24 @@ pub struct EngineRegistry {
 impl EngineRegistry {
     /// Load the registry from the embedded default + optional user override
     pub fn load(user_override_path: Option<&std::path::Path>) -> Result<Self> {
-        let mut registry: EngineRegistryFile = toml::from_str(DEFAULT_ENGINES)
-            .context("Failed to parse embedded engines.toml")?;
+        let mut registry: EngineRegistryFile =
+            toml::from_str(DEFAULT_ENGINES).context("Failed to parse embedded engines.toml")?;
 
         debug!("Loaded {} default engines", registry.engine.len());
 
         // Merge user overrides if present
         if let Some(path) = user_override_path {
             if path.exists() {
-                let user_content = std::fs::read_to_string(path)
-                    .context("Failed to read user engines.toml")?;
-                let user_registry: EngineRegistryFile = toml::from_str(&user_content)
-                    .context("Failed to parse user engines.toml")?;
+                let user_content =
+                    std::fs::read_to_string(path).context("Failed to read user engines.toml")?;
+                let user_registry: EngineRegistryFile =
+                    toml::from_str(&user_content).context("Failed to parse user engines.toml")?;
 
                 for user_engine in user_registry.engine {
                     // Override existing or add new
-                    if let Some(existing) = registry.engine.iter_mut().find(|e| e.id == user_engine.id) {
+                    if let Some(existing) =
+                        registry.engine.iter_mut().find(|e| e.id == user_engine.id)
+                    {
                         info!(engine = %user_engine.id, "User override for engine");
                         *existing = user_engine;
                     } else {
@@ -124,7 +126,10 @@ impl EngineRegistry {
         if candidates.is_empty() {
             bail!(
                 "No engine matches hardware: {:?} {:?} GPU:{:?} VRAM:{:.1}GB",
-                profile.os, profile.arch, profile.gpu_vendor, profile.vram_gb
+                profile.os,
+                profile.arch,
+                profile.gpu_vendor,
+                profile.vram_gb
             );
         }
 
@@ -143,11 +148,19 @@ impl EngineRegistry {
     }
 
     /// Convert a selected EngineConfig into its respective functional Adapter natively
-    pub fn create_adapter(config: &EngineConfig) -> Result<crate::engine::adapter::EngineAdapterInstance> {
+    pub fn create_adapter(
+        config: &EngineConfig,
+    ) -> Result<crate::engine::adapter::EngineAdapterInstance> {
         match config.id.as_str() {
-            "omlx" => Ok(crate::engine::adapter::EngineAdapterInstance::Omlx(crate::engine::adapters::omlx::OmlxAdapter::default())),
-            "sglang" => Ok(crate::engine::adapter::EngineAdapterInstance::Sglang(crate::engine::adapters::sglang::SglangAdapter::default())),
-            "llamacpp" => Ok(crate::engine::adapter::EngineAdapterInstance::Llamacpp(crate::engine::adapters::llamacpp::LlamacppAdapter::default())),
+            "omlx" => Ok(crate::engine::adapter::EngineAdapterInstance::Omlx(
+                crate::engine::adapters::omlx::OmlxAdapter::default(),
+            )),
+            "sglang" => Ok(crate::engine::adapter::EngineAdapterInstance::Sglang(
+                crate::engine::adapters::sglang::SglangAdapter::default(),
+            )),
+            "llamacpp" => Ok(crate::engine::adapter::EngineAdapterInstance::Llamacpp(
+                crate::engine::adapters::llamacpp::LlamacppAdapter::default(),
+            )),
             _ => bail!("Unrecognized engine adapter ID mapping: {}", config.id),
         }
     }

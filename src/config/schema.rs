@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use tracing::warn;
 
 /// Maximum schema version this binary supports

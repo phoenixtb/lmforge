@@ -16,7 +16,11 @@ pub async fn run(
 
     // The rolling appender creates date-suffixed files like lmforge.log.2026-03-28
     // Find the most recent log file(s) by listing the directory
-    let log_prefix = if engine { "engine-stdout.log" } else { "lmforge.log" };
+    let log_prefix = if engine {
+        "engine-stdout.log"
+    } else {
+        "lmforge.log"
+    };
 
     let mut log_files: Vec<_> = std::fs::read_dir(&logs_dir)?
         .filter_map(|e| e.ok())

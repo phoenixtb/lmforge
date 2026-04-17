@@ -1,6 +1,5 @@
 use anyhow::Result;
 
-
 use crate::config::LmForgeConfig;
 use crate::model::{downloader, index, resolver};
 
@@ -28,7 +27,9 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
             "❌ INCOMPATIBLE MODEL FORMAT: You are attempting to pull a '{}' model, \
              but the engine selected for your hardware requires '{}'.\n  \
              Please search HuggingFace for a version of this model in '{}' format.",
-            resolved.format, engine_format, engine_format
+            resolved.format,
+            engine_format,
+            engine_format
         );
     }
 
@@ -37,17 +38,23 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
     let mut idx = index::ModelIndex::load(&data_dir)?;
 
     if let Some(existing) = idx.get(&resolved.id) {
-        println!("  Model '{}' already installed at {}", resolved.id, existing.path);
-        println!("  To re-download, remove it first: lmforge models remove {}", resolved.id);
+        println!(
+            "  Model '{}' already installed at {}",
+            resolved.id, existing.path
+        );
+        println!(
+            "  To re-download, remove it first: lmforge models remove {}",
+            resolved.id
+        );
         return Ok(());
     }
 
     // Download
     println!("⚙ Downloading to: {}", model_dir.display());
 
-    use tokio::sync::mpsc;
     use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
     use std::collections::HashMap;
+    use tokio::sync::mpsc;
 
     let (tx, mut rx) = mpsc::channel(100);
     let hf_repo = resolved.hf_repo.clone();
@@ -63,7 +70,7 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
         .template("    {prefix:>30} [{bar:30.cyan/blue}] {bytes}/{total_bytes} ({eta})")
         .unwrap()
         .progress_chars("█▓░");
-        
+
     let mut bars = HashMap::new();
 
     while let Some(msg) = rx.recv().await {
@@ -71,8 +78,12 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
         match msg {
             Started { repo, files } => {
                 println!("  Downloading {} files from {}", files, repo);
-            },
-            FileProgress { file, downloaded, total } => {
+            }
+            FileProgress {
+                file,
+                downloaded,
+                total,
+            } => {
                 let pb = bars.entry(file.clone()).or_insert_with(|| {
                     let pb = multi.add(ProgressBar::new(total));
                     pb.set_style(style.clone());
@@ -85,15 +96,20 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
                 });
                 pb.set_length(total);
                 pb.set_position(downloaded);
-            },
+            }
             FileCompleted { file } => {
                 if let Some(pb) = bars.get(&file) {
                     pb.finish_with_message("✓");
                 }
-            },
-            Completed { repo: _, total_bytes: _ } => {},
+            }
+            Completed {
+                repo: _,
+                total_bytes: _,
+            } => {}
             Failed { error } => {
-                multi.println(format!("✗ Download error: {}", error)).unwrap();
+                multi
+                    .println(format!("✗ Download error: {}", error))
+                    .unwrap();
             }
         }
     }
@@ -104,13 +120,11 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
     println!("\n  ✓ Downloaded {} MB", size_mb);
 
     // Detect capabilities
-    let caps = index::detect_capabilities(
-        &model_dir,
-        Some(&resolved.id),
-        Some(&resolved.hf_repo),
+    let caps = index::detect_capabilities(&model_dir, Some(&resolved.id), Some(&resolved.hf_repo));
+    println!(
+        "  Capabilities: chat={} embeddings={} reranking={} thinking={} dims={:?}",
+        caps.chat, caps.embeddings, caps.reranking, caps.thinking, caps.embedding_dims
     );
-    println!("  Capabilities: chat={} embeddings={} reranking={} thinking={} dims={:?}",
-        caps.chat, caps.embeddings, caps.reranking, caps.thinking, caps.embedding_dims);
 
     // Add to index
     let entry = index::ModelEntry {

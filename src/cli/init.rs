@@ -23,7 +23,7 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     if !catalogs_dir.exists() {
         std::fs::create_dir_all(&catalogs_dir)?;
     }
-    
+
     // Always write the bundled catalog files — the content is embedded at compile time via
     // include_str!, so this binary always has the freshest version. Overwriting on each init
     // ensures catalog entries added in newer releases are not silently absent.
@@ -49,21 +49,39 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     println!("  OS:         {:?}", profile.os);
     println!("  Arch:       {:?}", profile.arch);
     println!("  GPU:        {:?}", profile.gpu_vendor);
-    println!("  VRAM:       {:.1} GB{}", profile.vram_gb,
-        if profile.unified_mem { " (unified memory)" } else { "" });
+    println!(
+        "  VRAM:       {:.1} GB{}",
+        profile.vram_gb,
+        if profile.unified_mem {
+            " (unified memory)"
+        } else {
+            ""
+        }
+    );
     println!("  RAM:        {:.1} GB", profile.total_ram_gb);
-    println!("  CPU:        {} ({} cores)", profile.cpu_model, profile.cpu_cores);
-    println!("  Quant tier: {}", crate::hardware::vram::quant_tier(profile.vram_gb));
+    println!(
+        "  CPU:        {} ({} cores)",
+        profile.cpu_model, profile.cpu_cores
+    );
+    println!(
+        "  Quant tier: {}",
+        crate::hardware::vram::quant_tier(profile.vram_gb)
+    );
     println!();
 
     // Engine selection
     println!("⚙ Selecting engine...");
     let user_engines_path = data_dir.join("engines.toml");
-    let registry = crate::engine::EngineRegistry::load(
-        if user_engines_path.exists() { Some(user_engines_path.as_path()) } else { None }
-    )?;
+    let registry = crate::engine::EngineRegistry::load(if user_engines_path.exists() {
+        Some(user_engines_path.as_path())
+    } else {
+        None
+    })?;
     let selected = registry.select(&profile)?;
-    println!("  Selected: {} v{} ({})", selected.name, selected.version, selected.id);
+    println!(
+        "  Selected: {} v{} ({})",
+        selected.name, selected.version, selected.id
+    );
     println!("  Format:   {}", selected.model_format);
     println!("  Install:  {}", selected.install_method);
     println!();

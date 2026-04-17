@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use tokio::process::Command;
 use tokio::sync::mpsc::Sender;
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 
 use crate::engine::adapter::{ActiveEngine, EngineAdapter, ModelRole};
 use crate::model::downloader::DownloadProgress;
@@ -21,7 +21,12 @@ impl Default for LlamacppAdapter {
 }
 
 impl EngineAdapter for LlamacppAdapter {
-    async fn pull_model(&self, _repo: &str, _dest_dir: &Path, _progress_tx: Sender<DownloadProgress>) -> Result<bool> {
+    async fn pull_model(
+        &self,
+        _repo: &str,
+        _dest_dir: &Path,
+        _progress_tx: Sender<DownloadProgress>,
+    ) -> Result<bool> {
         // llama.cpp's `-hf-repo` flag pulls at startup but has no streaming progress API.
         // Defer to LMForge's Rust downloader for full SSE progress.
         Ok(false)
@@ -38,12 +43,14 @@ impl EngineAdapter for LlamacppAdapter {
     ) -> Result<ActiveEngine> {
         // llama-server requires a single .gguf file path, not a directory.
         // Find the largest .gguf file in the model directory.
-        let gguf_path = find_gguf_file(model_dir)
-            .ok_or_else(|| anyhow::anyhow!(
+        let gguf_path = find_gguf_file(model_dir).ok_or_else(|| {
+            anyhow::anyhow!(
                 "No .gguf file found in model directory: {}. \
                  Pull the model first with: lmforge pull {}",
-                model_dir.display(), model_id
-            ))?;
+                model_dir.display(),
+                model_id
+            )
+        })?;
 
         info!(
             model_id = %model_id,
@@ -54,17 +61,24 @@ impl EngineAdapter for LlamacppAdapter {
         );
 
         let stdout_file = std::fs::OpenOptions::new()
-            .create(true).append(true).open(logs_dir.join("engine-stdout.log"))?;
+            .create(true)
+            .append(true)
+            .open(logs_dir.join("engine-stdout.log"))?;
         let stderr_file = std::fs::OpenOptions::new()
-            .create(true).append(true).open(logs_dir.join("engine-stderr.log"))?;
+            .create(true)
+            .append(true)
+            .open(logs_dir.join("engine-stderr.log"))?;
 
         let port_str = port.to_string();
         let gguf_str = gguf_path.to_string_lossy().to_string();
 
         let mut args: Vec<String> = vec![
-            "--port".to_string(), port_str,
-            "--model".to_string(), gguf_str,
-            "-ngl".to_string(), "99".to_string(), // Auto offload max layers to Metal/CUDA
+            "--port".to_string(),
+            port_str,
+            "--model".to_string(),
+            gguf_str,
+            "-ngl".to_string(),
+            "99".to_string(), // Auto offload max layers to Metal/CUDA
         ];
 
         match role {
@@ -104,7 +118,7 @@ impl EngineAdapter for LlamacppAdapter {
             info!(pid, model = %active_engine.model_id, "Sending SIGTERM to release llama-server mmap memory footprint");
             #[cfg(unix)]
             {
-                use nix::sys::signal::{kill, Signal};
+                use nix::sys::signal::{Signal, kill};
                 use nix::unistd::Pid;
                 let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
             }
@@ -113,7 +127,12 @@ impl EngineAdapter for LlamacppAdapter {
                 let _ = active_engine.process.kill().await;
             }
 
-            match tokio::time::timeout(std::time::Duration::from_secs(5), active_engine.process.wait()).await {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                active_engine.process.wait(),
+            )
+            .await
+            {
                 Ok(_) => debug!("llama-server universally flushed"),
                 Err(_) => {
                     warn!("llama-server SIGTERM timed out forcing SIGKILL constraint");

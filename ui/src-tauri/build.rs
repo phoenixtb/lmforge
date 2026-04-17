@@ -15,7 +15,7 @@ fn compile_gpu_probe() {
     use std::process::Command;
 
     let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let src      = format!("{manifest}/gpu_probe/main.swift");
+    let src = format!("{manifest}/gpu_probe/main.swift");
 
     // Trigger a rebuild only when the Swift source changes.
     println!("cargo:rerun-if-changed={src}");
@@ -27,7 +27,11 @@ fn compile_gpu_probe() {
 
     // Determine the correct target triple for the binary name.
     // Tauri's externalBin convention: `name-{arch}-apple-darwin`.
-    let arch = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x86_64" };
+    let arch = if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "x86_64"
+    };
     let bin_name = format!("lmforge-gpu-probe-{arch}-apple-darwin");
     let out_path = format!("{manifest}/binaries/{bin_name}");
 
@@ -36,10 +40,13 @@ fn compile_gpu_probe() {
     let status = Command::new("swiftc")
         .args([
             "-O",
-            "-o", &out_path,
+            "-o",
+            &out_path,
             &src,
-            "-framework", "IOKit",
-            "-framework", "Foundation",
+            "-framework",
+            "IOKit",
+            "-framework",
+            "Foundation",
         ])
         .status();
 

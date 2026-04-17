@@ -32,8 +32,21 @@ pub trait EngineAdapter: Send + Sync {
     ///   `Ok(true)`  — engine handled the download (success); caller should update ModelIndex.
     ///   `Ok(false)` — engine deferred; caller must fall back to LMForge Rust downloader.
     ///   `Err(e)`    — engine attempted but failed; caller should surface the error.
-    async fn pull_model(&self, repo: &str, dest_dir: &Path, progress_tx: Sender<DownloadProgress>) -> Result<bool>;
-    async fn start(&self, model_id: &str, model_dir: &Path, port: u16, data_dir: &Path, logs_dir: &Path, role: ModelRole) -> Result<ActiveEngine>;
+    async fn pull_model(
+        &self,
+        repo: &str,
+        dest_dir: &Path,
+        progress_tx: Sender<DownloadProgress>,
+    ) -> Result<bool>;
+    async fn start(
+        &self,
+        model_id: &str,
+        model_dir: &Path,
+        port: u16,
+        data_dir: &Path,
+        logs_dir: &Path,
+        role: ModelRole,
+    ) -> Result<ActiveEngine>;
     async fn stop(&self, active_engine: &mut ActiveEngine) -> Result<()>;
 }
 
@@ -46,7 +59,12 @@ pub enum EngineAdapterInstance {
 }
 
 impl EngineAdapter for EngineAdapterInstance {
-    async fn pull_model(&self, repo: &str, dest_dir: &Path, progress_tx: Sender<DownloadProgress>) -> Result<bool> {
+    async fn pull_model(
+        &self,
+        repo: &str,
+        dest_dir: &Path,
+        progress_tx: Sender<DownloadProgress>,
+    ) -> Result<bool> {
         match self {
             Self::Omlx(ad) => ad.pull_model(repo, dest_dir, progress_tx).await,
             Self::Sglang(ad) => ad.pull_model(repo, dest_dir, progress_tx).await,
@@ -54,11 +72,28 @@ impl EngineAdapter for EngineAdapterInstance {
         }
     }
 
-    async fn start(&self, model_id: &str, model_dir: &Path, port: u16, data_dir: &Path, logs_dir: &Path, role: ModelRole) -> Result<ActiveEngine> {
+    async fn start(
+        &self,
+        model_id: &str,
+        model_dir: &Path,
+        port: u16,
+        data_dir: &Path,
+        logs_dir: &Path,
+        role: ModelRole,
+    ) -> Result<ActiveEngine> {
         match self {
-            Self::Omlx(ad) => ad.start(model_id, model_dir, port, data_dir, logs_dir, role).await,
-            Self::Sglang(ad) => ad.start(model_id, model_dir, port, data_dir, logs_dir, role).await,
-            Self::Llamacpp(ad) => ad.start(model_id, model_dir, port, data_dir, logs_dir, role).await,
+            Self::Omlx(ad) => {
+                ad.start(model_id, model_dir, port, data_dir, logs_dir, role)
+                    .await
+            }
+            Self::Sglang(ad) => {
+                ad.start(model_id, model_dir, port, data_dir, logs_dir, role)
+                    .await
+            }
+            Self::Llamacpp(ad) => {
+                ad.start(model_id, model_dir, port, data_dir, logs_dir, role)
+                    .await
+            }
         }
     }
 

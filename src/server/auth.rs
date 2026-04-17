@@ -5,11 +5,7 @@ use tracing::debug;
 
 /// Check if a request should be authorized.
 /// Returns true if authorized, false if rejected.
-pub fn check_auth(
-    bind_address: &str,
-    api_key: &Option<String>,
-    auth_header: Option<&str>,
-) -> bool {
+pub fn check_auth(bind_address: &str, api_key: &Option<String>, auth_header: Option<&str>) -> bool {
     // Loopback: always accept
     if bind_address == "127.0.0.1" || bind_address == "localhost" || bind_address == "::1" {
         return true;
@@ -51,7 +47,15 @@ mod tests {
     #[test]
     fn test_non_loopback_with_key_requires_auth() {
         assert!(!check_auth("0.0.0.0", &Some("secret".to_string()), None));
-        assert!(!check_auth("0.0.0.0", &Some("secret".to_string()), Some("Bearer wrong")));
-        assert!(check_auth("0.0.0.0", &Some("secret".to_string()), Some("Bearer secret")));
+        assert!(!check_auth(
+            "0.0.0.0",
+            &Some("secret".to_string()),
+            Some("Bearer wrong")
+        ));
+        assert!(check_auth(
+            "0.0.0.0",
+            &Some("secret".to_string()),
+            Some("Bearer secret")
+        ));
     }
 }

@@ -1,14 +1,28 @@
 use anyhow::{Context, Result};
-use tracing::{debug, info};
 use tokio::sync::mpsc;
+use tracing::{debug, info};
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub enum DownloadProgress {
-    Started { repo: String, files: usize },
-    FileProgress { file: String, downloaded: u64, total: u64 },
-    FileCompleted { file: String },
-    Completed { repo: String, total_bytes: u64 },
-    Failed { error: String },
+    Started {
+        repo: String,
+        files: usize,
+    },
+    FileProgress {
+        file: String,
+        downloaded: u64,
+        total: u64,
+    },
+    FileCompleted {
+        file: String,
+    },
+    Completed {
+        repo: String,
+        total_bytes: u64,
+    },
+    Failed {
+        error: String,
+    },
 }
 
 /// Download all files for a model from HuggingFace, emitting progress via channel
@@ -36,53 +50,80 @@ pub async fn download_model(
     let mut total_bytes: u64 = 0;
 
     if let Some(tx) = &progress_tx {
-        let _ = tx.send(DownloadProgress::Started {
-            repo: hf_repo.to_string(),
-            files: files.len(),
-        }).await;
+        let _ = tx
+            .send(DownloadProgress::Started {
+                repo: hf_repo.to_string(),
+                files: files.len(),
+            })
+            .await;
     }
 
     // If it's a URL (not an HF repo), download directly
     if hf_repo.contains("://") {
         let filename = hf_repo.split('/').last().unwrap_or("model");
         let dest = dest_dir.join(filename);
-        total_bytes += download_file(&client, hf_repo, filename, &dest, progress_tx.clone(), hf_token.as_deref()).await?;
-        
+        total_bytes += download_file(
+            &client,
+            hf_repo,
+            filename,
+            &dest,
+            progress_tx.clone(),
+            hf_token.as_deref(),
+        )
+        .await?;
+
         if let Some(tx) = &progress_tx {
-            let _ = tx.send(DownloadProgress::Completed { repo: hf_repo.to_string(), total_bytes }).await;
+            let _ = tx
+                .send(DownloadProgress::Completed {
+                    repo: hf_repo.to_string(),
+                    total_bytes,
+                })
+                .await;
         }
         return Ok(total_bytes);
     }
 
     // Download each file from HF sequentially
     for file in files {
-        let url = format!(
-            "https://huggingface.co/{}/resolve/main/{}",
-            hf_repo, file
-        );
+        let url = format!("https://huggingface.co/{}/resolve/main/{}", hf_repo, file);
 
         let dest = dest_dir.join(file);
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        // Check if file already exists with correct size 
+        // Check if file already exists with correct size
         // (Full logic for size checking removed for brevity, assuming exists means done for chunks)
         if dest.exists() && std::fs::metadata(&dest)?.len() > 0 {
             // Very naive check, assumes existing files are complete
             // In a real system, we'd check sha256 or sizes from HF
         }
 
-        match download_file(&client, &url, file, &dest, progress_tx.clone(), hf_token.as_deref()).await {
+        match download_file(
+            &client,
+            &url,
+            file,
+            &dest,
+            progress_tx.clone(),
+            hf_token.as_deref(),
+        )
+        .await
+        {
             Ok(bytes) => {
                 total_bytes += bytes;
                 if let Some(tx) = &progress_tx {
-                    let _ = tx.send(DownloadProgress::FileCompleted { file: file.clone() }).await;
+                    let _ = tx
+                        .send(DownloadProgress::FileCompleted { file: file.clone() })
+                        .await;
                 }
             }
             Err(e) => {
                 if let Some(tx) = &progress_tx {
-                    let _ = tx.send(DownloadProgress::Failed { error: e.to_string() }).await;
+                    let _ = tx
+                        .send(DownloadProgress::Failed {
+                            error: e.to_string(),
+                        })
+                        .await;
                 }
                 return Err(e).context(format!("Failed to download {}", file));
             }
@@ -96,7 +137,12 @@ pub async fn download_model(
     );
 
     if let Some(tx) = &progress_tx {
-        let _ = tx.send(DownloadProgress::Completed { repo: hf_repo.to_string(), total_bytes }).await;
+        let _ = tx
+            .send(DownloadProgress::Completed {
+                repo: hf_repo.to_string(),
+                total_bytes,
+            })
+            .await;
     }
 
     Ok(total_bytes)
@@ -148,7 +194,9 @@ async fn download_file(
                 anyhow::bail!(
                     "Model '{}' not found on HuggingFace. \
                      The repository does not exist or the model ID is misspelled.",
-                    url.split("/resolve/").next().unwrap_or(url)
+                    url.split("/resolve/")
+                        .next()
+                        .unwrap_or(url)
                         .trim_start_matches("https://huggingface.co/")
                 );
             } else {
@@ -157,9 +205,13 @@ async fn download_file(
                     "Model '{}' is gated on HuggingFace and requires access approval. \
                      Visit https://huggingface.co/{} to request access, \
                      then set HF_TOKEN=your_hf_token in your environment.",
-                    url.split("/resolve/").next().unwrap_or(url)
+                    url.split("/resolve/")
+                        .next()
+                        .unwrap_or(url)
                         .trim_start_matches("https://huggingface.co/"),
-                    url.split("/resolve/").next().unwrap_or(url)
+                    url.split("/resolve/")
+                        .next()
+                        .unwrap_or(url)
                         .trim_start_matches("https://huggingface.co/")
                 );
             }
@@ -189,11 +241,13 @@ async fn download_file(
         // Emit at most every 100ms
         if last_emit.elapsed().as_millis() > 100 {
             if let Some(tx) = &progress_tx {
-                let _ = tx.send(DownloadProgress::FileProgress {
-                    file: file_name.to_string(),
-                    downloaded,
-                    total: total_size
-                }).await;
+                let _ = tx
+                    .send(DownloadProgress::FileProgress {
+                        file: file_name.to_string(),
+                        downloaded,
+                        total: total_size,
+                    })
+                    .await;
             }
             last_emit = std::time::Instant::now();
         }

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use tokio::process::Command;
 use tokio::sync::mpsc::Sender;
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 
 use crate::engine::adapter::{ActiveEngine, EngineAdapter, ModelRole};
 use crate::model::downloader::DownloadProgress;
@@ -21,7 +21,12 @@ impl Default for OmlxAdapter {
 }
 
 impl EngineAdapter for OmlxAdapter {
-    async fn pull_model(&self, _repo: &str, _dest_dir: &Path, _progress_tx: Sender<DownloadProgress>) -> Result<bool> {
+    async fn pull_model(
+        &self,
+        _repo: &str,
+        _dest_dir: &Path,
+        _progress_tx: Sender<DownloadProgress>,
+    ) -> Result<bool> {
         // oMLX's downloader is internal/undocumented with no stable external streaming API.
         // Defer to LMForge's Rust downloader for full SSE progress.
         Ok(false)
@@ -101,7 +106,7 @@ impl EngineAdapter for OmlxAdapter {
             info!(pid, model = %active_engine.model_id, "Sending SIGTERM to flush oMLX Unified Memory");
             #[cfg(unix)]
             {
-                use nix::sys::signal::{kill, Signal};
+                use nix::sys::signal::{Signal, kill};
                 use nix::unistd::Pid;
                 let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
             }
@@ -111,7 +116,12 @@ impl EngineAdapter for OmlxAdapter {
             }
 
             // Wait for process to fully exit, definitively guaranteeing zero VRAM fragmentation
-            match tokio::time::timeout(std::time::Duration::from_secs(5), active_engine.process.wait()).await {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                active_engine.process.wait(),
+            )
+            .await
+            {
                 Ok(_) => debug!("oMLX natively flush-exited"),
                 Err(_) => {
                     warn!("oMLX SIGTERM timed out, forcing SIGKILL");

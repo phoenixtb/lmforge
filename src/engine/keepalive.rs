@@ -24,7 +24,10 @@ impl KeepaliveTracker {
         if enabled {
             info!(keepalive_secs, engine_id, "Keepalive timer enabled");
         } else {
-            debug!(engine_id, "Keepalive timer disabled (engine handles lifecycle natively or keepalive=0)");
+            debug!(
+                engine_id,
+                "Keepalive timer disabled (engine handles lifecycle natively or keepalive=0)"
+            );
         }
 
         Self {

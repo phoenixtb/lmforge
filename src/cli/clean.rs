@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::io::Write;
 
 use crate::config::LmForgeConfig;
-use crate::model::index::{dir_size, ModelIndex};
+use crate::model::index::{ModelIndex, dir_size};
 
 pub struct CleanOptions {
     pub dry_run: bool,
@@ -24,7 +24,11 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
 
     // 1. Indexed models
     let idx = ModelIndex::load(&data_dir)?;
-    let indexed: Vec<_> = idx.list().iter().map(|m| (m.id.clone(), m.path.clone(), m.size_bytes)).collect();
+    let indexed: Vec<_> = idx
+        .list()
+        .iter()
+        .map(|m| (m.id.clone(), m.path.clone(), m.size_bytes))
+        .collect();
     let indexed_total: u64 = indexed.iter().map(|(_, _, s)| s).sum();
 
     println!("Indexed models ({}):", indexed.len());
@@ -54,7 +58,10 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
     }
     let orphan_total: u64 = orphans.iter().map(|(_, s)| s).sum();
 
-    println!("\nOrphaned model directories ({}) [not in index — likely incomplete downloads]:", orphans.len());
+    println!(
+        "\nOrphaned model directories ({}) [not in index — likely incomplete downloads]:",
+        orphans.len()
+    );
     if orphans.is_empty() {
         println!("  None.");
     } else {
@@ -75,7 +82,10 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
             stale.push(id.clone());
         }
     }
-    println!("\nStale index entries ({}) [in models.json but missing from disk]:", stale.len());
+    println!(
+        "\nStale index entries ({}) [in models.json but missing from disk]:",
+        stale.len()
+    );
     if stale.is_empty() {
         println!("  None.");
     } else {
@@ -92,7 +102,11 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
         for entry in std::fs::read_dir(&logs_dir).into_iter().flatten().flatten() {
             let p = entry.path();
             if let Ok(m) = p.metadata() {
-                println!("  {:40} {:>8}", p.file_name().unwrap_or_default().to_string_lossy(), fmt_size(m.len()));
+                println!(
+                    "  {:40} {:>8}",
+                    p.file_name().unwrap_or_default().to_string_lossy(),
+                    fmt_size(m.len())
+                );
             }
         }
     }
@@ -124,26 +138,37 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
         0
     };
 
-    println!("\nHuggingFace cache (~/.cache/huggingface/hub/): {}", fmt_size(hf_total));
+    println!(
+        "\nHuggingFace cache (~/.cache/huggingface/hub/): {}",
+        fmt_size(hf_total)
+    );
     if !hf_duplicates.is_empty() {
         println!("  Confirmed duplicates (also in ~/.lmforge/models/):");
         for (repo, size) in &hf_duplicates {
             println!("    {:40} {:>8}", repo, fmt_size(*size));
         }
         let dup_total: u64 = hf_duplicates.iter().map(|(_, s)| s).sum();
-        println!("  Recoverable from HF cache duplicates: {}", fmt_size(dup_total));
+        println!(
+            "  Recoverable from HF cache duplicates: {}",
+            fmt_size(dup_total)
+        );
     } else if hf_total > 0 {
         println!("  No confirmed duplicates with indexed models.");
     }
 
     // ── Summary ───────────────────────────────────────────────────────────────
 
-    let recoverable = orphan_total + log_size
-        + hf_duplicates.iter().map(|(_, s)| s).sum::<u64>();
+    let recoverable = orphan_total + log_size + hf_duplicates.iter().map(|(_, s)| s).sum::<u64>();
 
     println!("\n{}", "─".repeat(55));
-    println!("Total indexed model storage:  {:>10}", fmt_size(indexed_total));
-    println!("Total recoverable (cleanup):  {:>10}", fmt_size(recoverable));
+    println!(
+        "Total indexed model storage:  {:>10}",
+        fmt_size(indexed_total)
+    );
+    println!(
+        "Total recoverable (cleanup):  {:>10}",
+        fmt_size(recoverable)
+    );
     println!("{}", "─".repeat(55));
 
     if recoverable == 0 && stale.is_empty() {
@@ -161,10 +186,19 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
     println!();
 
     // Orphaned dirs
-    if !orphans.is_empty() && (do_all || opts.partial || confirm("Remove orphaned model directories?")?) {
+    if !orphans.is_empty()
+        && (do_all || opts.partial || confirm("Remove orphaned model directories?")?)
+    {
         for (path, size) in &orphans {
             std::fs::remove_dir_all(path)?;
-            println!("  ✓ Removed {} ({})", std::path::Path::new(path).file_name().unwrap_or_default().to_string_lossy(), fmt_size(*size));
+            println!(
+                "  ✓ Removed {} ({})",
+                std::path::Path::new(path)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy(),
+                fmt_size(*size)
+            );
         }
     }
 
@@ -185,7 +219,11 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
     }
 
     // HF cache duplicates
-    if !hf_duplicates.is_empty() && (do_all || opts.hf_cache || confirm("Remove HuggingFace cache entries that are already in ~/.lmforge/models/?")?) {
+    if !hf_duplicates.is_empty()
+        && (do_all
+            || opts.hf_cache
+            || confirm("Remove HuggingFace cache entries that are already in ~/.lmforge/models/?")?)
+    {
         if let Some(ref hf_dir) = hf_cache_dir {
             for (repo, size) in &hf_duplicates {
                 let cache_name = format!("models--{}", repo.replace('/', "--"));

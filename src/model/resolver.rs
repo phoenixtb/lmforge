@@ -35,7 +35,11 @@ impl std::fmt::Display for ModelFormat {
 /// 2. Logical name (no `/`): look up in curated catalog
 /// 3. URL (contains `://`): direct download
 /// 4. Local path (starts with `/` or `~`): symlink into models dir
-pub async fn resolve(input: &str, engine_format: &str, catalogs_dir: &std::path::Path) -> Result<ResolvedModel> {
+pub async fn resolve(
+    input: &str,
+    engine_format: &str,
+    catalogs_dir: &std::path::Path,
+) -> Result<ResolvedModel> {
     // HuggingFace repo
     if input.contains('/') && !input.contains("://") {
         let mut rm = resolve_hf_repo(input, engine_format).await?;
@@ -84,11 +88,18 @@ async fn resolve_hf_repo(repo: &str, engine_format: &str) -> Result<ResolvedMode
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
-    let resp = client.get(&api_url).send().await
+    let resp = client
+        .get(&api_url)
+        .send()
+        .await
         .context("Failed to query HuggingFace API")?;
 
     if !resp.status().is_success() {
-        anyhow::bail!("Model '{}' not found on HuggingFace (HTTP {})", repo, resp.status());
+        anyhow::bail!(
+            "Model '{}' not found on HuggingFace (HTTP {})",
+            repo,
+            resp.status()
+        );
     }
 
     let data: serde_json::Value = resp.json().await?;
@@ -96,17 +107,28 @@ async fn resolve_hf_repo(repo: &str, engine_format: &str) -> Result<ResolvedMode
     // Detect format from library/tags
     let library = data["library_name"].as_str().unwrap_or("").to_lowercase();
     let repo_lower = repo.to_lowercase();
-    
-    let is_mlx = library == "mlx" 
-        || library == "mlx-lm" 
+
+    let is_mlx = library == "mlx"
+        || library == "mlx-lm"
         || repo_lower.contains("mlx")
-        || data["tags"].as_array().map(|t| t.iter().any(|v| v.as_str().unwrap_or("").to_lowercase() == "mlx")).unwrap_or(false);
+        || data["tags"]
+            .as_array()
+            .map(|t| {
+                t.iter()
+                    .any(|v| v.as_str().unwrap_or("").to_lowercase() == "mlx")
+            })
+            .unwrap_or(false);
 
     let format = if is_mlx {
         ModelFormat::Mlx
-    } else if data["siblings"].as_array().map(|s| s.iter().any(|f|
-        f["rfilename"].as_str().unwrap_or("").ends_with(".gguf")
-    )).unwrap_or(false) {
+    } else if data["siblings"]
+        .as_array()
+        .map(|s| {
+            s.iter()
+                .any(|f| f["rfilename"].as_str().unwrap_or("").ends_with(".gguf"))
+        })
+        .unwrap_or(false)
+    {
         ModelFormat::Gguf
     } else {
         ModelFormat::Safetensors
@@ -136,8 +158,14 @@ async fn resolve_hf_repo(repo: &str, engine_format: &str) -> Result<ResolvedMode
     })
 }
 
-async fn resolve_logical_name(name: &str, engine_format: &str, catalogs_dir: &std::path::Path) -> Result<ResolvedModel> {
-    if let Some(repo) = crate::model::catalog::load_catalog_and_resolve(name, engine_format, catalogs_dir).await {
+async fn resolve_logical_name(
+    name: &str,
+    engine_format: &str,
+    catalogs_dir: &std::path::Path,
+) -> Result<ResolvedModel> {
+    if let Some(repo) =
+        crate::model::catalog::load_catalog_and_resolve(name, engine_format, catalogs_dir).await
+    {
         let mut rm = resolve_hf_repo(&repo, engine_format).await?;
         rm.id = name.to_string();
         return Ok(rm);
@@ -148,7 +176,12 @@ async fn resolve_logical_name(name: &str, engine_format: &str, catalogs_dir: &st
     let suggestion_str = if suggestions.is_empty() {
         "run 'lmforge models' to see available shortcuts".to_string()
     } else {
-        suggestions.iter().take(6).cloned().collect::<Vec<_>>().join(", ")
+        suggestions
+            .iter()
+            .take(6)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
     };
 
     anyhow::bail!(
@@ -157,7 +190,6 @@ async fn resolve_logical_name(name: &str, engine_format: &str, catalogs_dir: &st
         name,
         suggestion_str
     );
-
 }
 
 /// Determine which files to download based on format
@@ -170,9 +202,7 @@ fn should_download_file(filename: &str, format: ModelFormat) -> bool {
                 || filename.ends_with(".jinja")
                 || filename == "tokenizer.model"
         }
-        ModelFormat::Gguf => {
-            filename.ends_with(".gguf")
-        }
+        ModelFormat::Gguf => filename.ends_with(".gguf"),
         ModelFormat::Safetensors => {
             filename.ends_with(".safetensors")
                 || filename.ends_with(".json")

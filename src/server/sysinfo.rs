@@ -1,6 +1,6 @@
-use axum::{extract::State, response::IntoResponse};
 use axum::body::Body;
 use axum::http::{Response, StatusCode, header};
+use axum::{extract::State, response::IntoResponse};
 use serde::Serialize;
 
 use super::AppState;
@@ -47,16 +47,16 @@ pub struct GpuStats {
 
 #[derive(serde::Deserialize, Default)]
 struct ProbeOutput {
-    gpu_util_pct:     Option<f64>,
-    gpu_mem_used_mb:  Option<f64>,
+    gpu_util_pct: Option<f64>,
+    gpu_mem_used_mb: Option<f64>,
     gpu_mem_total_mb: Option<f64>,
-    source:           Option<String>,
+    source: Option<String>,
 }
 
 // ── CPU + system memory sampling ──────────────────────────────────────────────
 
 fn sample_sys() -> (f32, Vec<f32>, f32, f32, f32, f32) {
-    use sysinfo::{System, CpuRefreshKind, MemoryRefreshKind};
+    use sysinfo::{CpuRefreshKind, MemoryRefreshKind, System};
 
     let mut sys = System::new();
     sys.refresh_cpu_specifics(CpuRefreshKind::nothing().with_cpu_usage());
@@ -68,9 +68,13 @@ fn sample_sys() -> (f32, Vec<f32>, f32, f32, f32, f32) {
     let cores: Vec<f32> = sys.cpus().iter().take(32).map(|c| c.cpu_usage()).collect();
     let b2g = |b: u64| b as f32 / 1_073_741_824.0;
     let total = b2g(sys.total_memory());
-    let used  = b2g(sys.used_memory());
+    let used = b2g(sys.used_memory());
     let avail = b2g(sys.available_memory());
-    let pct   = if total > 0.0 { (used / total * 100.0).clamp(0.0, 100.0) } else { 0.0 };
+    let pct = if total > 0.0 {
+        (used / total * 100.0).clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
 
     (cpu_pct, cores, total, used, avail, pct)
 }
@@ -87,7 +91,7 @@ fn sample_sys() -> (f32, Vec<f32>, f32, f32, f32, f32) {
 /// If a process cannot be matched to a slot, it is still counted but shown as
 /// "engine / other".
 fn sample_model_procs(slot_info: &[(String, u16)]) -> Vec<ModelProcMem> {
-    use sysinfo::{System, ProcessRefreshKind, ProcessesToUpdate, UpdateKind};
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
     let my_pid = sysinfo::Pid::from_u32(std::process::id());
 
@@ -97,13 +101,14 @@ fn sample_model_procs(slot_info: &[(String, u16)]) -> Vec<ModelProcMem> {
         true,
         ProcessRefreshKind::nothing()
             .with_memory()
-            .with_cmd(UpdateKind::Always)
+            .with_cmd(UpdateKind::Always),
     );
 
     let b2mb = |bytes: u64| bytes as f32 / 1_048_576.0;
 
     // Find all direct children of this process.
-    let children: Vec<_> = sys.processes()
+    let children: Vec<_> = sys
+        .processes()
         .values()
         .filter(|p| p.parent() == Some(my_pid))
         .collect();
@@ -112,22 +117,28 @@ fn sample_model_procs(slot_info: &[(String, u16)]) -> Vec<ModelProcMem> {
         return Vec::new();
     }
 
-    children.iter().map(|proc| {
-        // Try to match to a model slot by finding the slot port in the cmdline.
-        let cmdline: String = proc.cmd().iter()
-            .map(|s| s.to_string_lossy())
-            .collect::<Vec<_>>()
-            .join(" ");
-        let model_id = slot_info.iter()
-            .find(|(_, port)| cmdline.contains(&port.to_string()))
-            .map(|(id, _)| id.clone())
-            .unwrap_or_else(|| "engine/other".to_string());
+    children
+        .iter()
+        .map(|proc| {
+            // Try to match to a model slot by finding the slot port in the cmdline.
+            let cmdline: String = proc
+                .cmd()
+                .iter()
+                .map(|s| s.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let model_id = slot_info
+                .iter()
+                .find(|(_, port)| cmdline.contains(&port.to_string()))
+                .map(|(id, _)| id.clone())
+                .unwrap_or_else(|| "engine/other".to_string());
 
-        ModelProcMem {
-            model_id,
-            rss_mb: b2mb(proc.memory()),
-        }
-    }).collect()
+            ModelProcMem {
+                model_id,
+                rss_mb: b2mb(proc.memory()),
+            }
+        })
+        .collect()
 }
 
 // ── GPU probe (macOS) ─────────────────────────────────────────────────────────
@@ -140,17 +151,23 @@ const PROBE_BIN_NAME: &str = "lmforge-gpu-probe-aarch64-apple-darwin";
 fn find_probe() -> Option<std::path::PathBuf> {
     if let Some(p) = PROBE_COMPILE_TIME_PATH {
         let pb = std::path::Path::new(p);
-        if pb.exists() { return Some(pb.to_path_buf()); }
+        if pb.exists() {
+            return Some(pb.to_path_buf());
+        }
     }
     if let Ok(exe) = std::env::current_exe() {
         let c = exe.with_file_name(PROBE_BIN_NAME);
-        if c.exists() { return Some(c); }
+        if c.exists() {
+            return Some(c);
+        }
     }
     if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
         let c = std::path::PathBuf::from(&manifest)
             .join("ui/src-tauri/binaries")
             .join(PROBE_BIN_NAME);
-        if c.exists() { return Some(c); }
+        if c.exists() {
+            return Some(c);
+        }
     }
     None
 }
@@ -159,35 +176,44 @@ fn find_probe() -> Option<std::path::PathBuf> {
 fn run_gpu_probe() -> GpuStats {
     let path = match find_probe() {
         Some(p) => p,
-        None => return GpuStats {
-            source: "unavailable".into(),
-            note: "GPU probe binary not found".into(),
-            ..Default::default()
-        },
+        None => {
+            return GpuStats {
+                source: "unavailable".into(),
+                note: "GPU probe binary not found".into(),
+                ..Default::default()
+            };
+        }
     };
 
     let output = match std::process::Command::new(&path).output() {
         Ok(o) if o.status.success() => o,
-        Ok(o) => return GpuStats {
-            source: "unavailable".into(),
-            note: format!("probe exited {}", o.status),
-            ..Default::default()
-        },
-        Err(e) => return GpuStats {
-            source: "unavailable".into(),
-            note: format!("probe spawn failed: {e}"),
-            ..Default::default()
-        },
+        Ok(o) => {
+            return GpuStats {
+                source: "unavailable".into(),
+                note: format!("probe exited {}", o.status),
+                ..Default::default()
+            };
+        }
+        Err(e) => {
+            return GpuStats {
+                source: "unavailable".into(),
+                note: format!("probe spawn failed: {e}"),
+                ..Default::default()
+            };
+        }
     };
 
     let parsed: ProbeOutput = serde_json::from_slice(&output.stdout).unwrap_or_default();
     let src = parsed.source.clone().unwrap_or_else(|| "unknown".into());
-    let note = if src == "unavailable" { "IOAccelerator returned no data".into() }
-               else { format!("via {src}") };
+    let note = if src == "unavailable" {
+        "IOAccelerator returned no data".into()
+    } else {
+        format!("via {src}")
+    };
 
     GpuStats {
-        util_pct:     parsed.gpu_util_pct.map(|v| v as f32),
-        mem_used_mb:  parsed.gpu_mem_used_mb.map(|v| v as f32),
+        util_pct: parsed.gpu_util_pct.map(|v| v as f32),
+        mem_used_mb: parsed.gpu_mem_used_mb.map(|v| v as f32),
         mem_total_mb: parsed.gpu_mem_total_mb.map(|v| v as f32),
         source: src,
         note,
@@ -196,37 +222,60 @@ fn run_gpu_probe() -> GpuStats {
 
 #[cfg(not(target_os = "macos"))]
 fn run_gpu_probe() -> GpuStats {
-    run_nvidia_smi().or_else(run_rocm_smi).unwrap_or_else(|| GpuStats {
-        source: "unavailable".into(),
-        note: "no GPU probe available on this platform".into(),
-        ..Default::default()
-    })
+    run_nvidia_smi()
+        .or_else(run_rocm_smi)
+        .unwrap_or_else(|| GpuStats {
+            source: "unavailable".into(),
+            note: "no GPU probe available on this platform".into(),
+            ..Default::default()
+        })
 }
 
 #[cfg(not(target_os = "macos"))]
 fn run_nvidia_smi() -> Option<GpuStats> {
     let out = std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"])
-        .output().ok()?;
-    if !out.status.success() { return None; }
+        .args([
+            "--query-gpu=utilization.gpu,memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
     let s = String::from_utf8_lossy(&out.stdout);
     let p: Vec<&str> = s.trim().split(',').collect();
-    if p.len() < 3 { return None; }
-    Some(GpuStats { util_pct: p[0].trim().parse().ok(), mem_used_mb: p[1].trim().parse().ok(),
-        mem_total_mb: p[2].trim().parse().ok(), source: "nvidia-smi".into(), note: "via NVML".into() })
+    if p.len() < 3 {
+        return None;
+    }
+    Some(GpuStats {
+        util_pct: p[0].trim().parse().ok(),
+        mem_used_mb: p[1].trim().parse().ok(),
+        mem_total_mb: p[2].trim().parse().ok(),
+        source: "nvidia-smi".into(),
+        note: "via NVML".into(),
+    })
 }
 
 #[cfg(not(target_os = "macos"))]
 fn run_rocm_smi() -> Option<GpuStats> {
     let out = std::process::Command::new("rocm-smi")
-        .args(["--showuse", "--showmemuse", "--csv"]).output().ok()?;
-    if !out.status.success() { return None; }
+        .args(["--showuse", "--showmemuse", "--csv"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
     for line in String::from_utf8_lossy(&out.stdout).lines().skip(1) {
         let cols: Vec<&str> = line.split(',').collect();
         if cols.len() >= 2 {
             if let Ok(pct) = cols[1].trim().trim_end_matches('%').parse::<f32>() {
-                return Some(GpuStats { util_pct: Some(pct), source: "rocm-smi".into(),
-                    note: "via ROCm".into(), ..Default::default() });
+                return Some(GpuStats {
+                    util_pct: Some(pct),
+                    source: "rocm-smi".into(),
+                    note: "via ROCm".into(),
+                    ..Default::default()
+                });
             }
         }
     }
@@ -237,7 +286,7 @@ fn run_rocm_smi() -> Option<GpuStats> {
 
 fn full_sample(slot_info: Vec<(String, u16)>) -> SysStats {
     let gpu_result = std::sync::Arc::new(std::sync::Mutex::new(GpuStats::default()));
-    let gpu_clone  = gpu_result.clone();
+    let gpu_clone = gpu_result.clone();
 
     let gpu_handle = std::thread::spawn(move || {
         *gpu_clone.lock().unwrap() = run_gpu_probe();
@@ -254,9 +303,15 @@ fn full_sample(slot_info: Vec<(String, u16)>) -> SysStats {
     let model_rss_gb = model_procs.iter().map(|p| p.rss_mb).sum::<f32>() / 1024.0;
 
     SysStats {
-        cpu_pct, cpu_cores_pct: cores,
-        mem_total_gb: mem_total, mem_used_gb: mem_used, mem_avail_gb: mem_avail, mem_pct,
-        gpu, model_procs, model_rss_gb,
+        cpu_pct,
+        cpu_cores_pct: cores,
+        mem_total_gb: mem_total,
+        mem_used_gb: mem_used,
+        mem_avail_gb: mem_avail,
+        mem_pct,
+        gpu,
+        model_procs,
+        model_rss_gb,
     }
 }
 
@@ -267,7 +322,8 @@ pub async fn sysinfo(State(state): State<AppState>) -> impl IntoResponse {
     // Snapshot current slot info (model_id → port) while we still hold the async lock.
     let slot_info: Vec<(String, u16)> = {
         let es = state.engine_state.read().await;
-        es.running_models.iter()
+        es.running_models
+            .iter()
             .map(|(id, slot)| (id.clone(), slot.port))
             .collect()
     };
@@ -275,9 +331,17 @@ pub async fn sysinfo(State(state): State<AppState>) -> impl IntoResponse {
     let stats = tokio::task::spawn_blocking(move || full_sample(slot_info))
         .await
         .unwrap_or_else(|_| SysStats {
-            cpu_pct: 0.0, cpu_cores_pct: vec![],
-            mem_total_gb: 0.0, mem_used_gb: 0.0, mem_avail_gb: 0.0, mem_pct: 0.0,
-            gpu: GpuStats { source: "sampling error".into(), note: String::new(), ..Default::default() },
+            cpu_pct: 0.0,
+            cpu_cores_pct: vec![],
+            mem_total_gb: 0.0,
+            mem_used_gb: 0.0,
+            mem_avail_gb: 0.0,
+            mem_pct: 0.0,
+            gpu: GpuStats {
+                source: "sampling error".into(),
+                note: String::new(),
+                ..Default::default()
+            },
             model_procs: vec![],
             model_rss_gb: 0.0,
         });

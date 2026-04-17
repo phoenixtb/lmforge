@@ -17,11 +17,11 @@ pub fn run() {
             }
         })
         .setup(move |app| {
-        // ── macOS: use Regular policy so the app owns the menu bar when focused.
-        // Accessory would prevent the menu bar from updating, leaving the previous
-        // app's menu visible. We still hide to tray on close (on_window_event above).
-        #[cfg(target_os = "macos")]
-        app.set_activation_policy(tauri::ActivationPolicy::Regular);
+            // ── macOS: use Regular policy so the app owns the menu bar when focused.
+            // Accessory would prevent the menu bar from updating, leaving the previous
+            // app's menu visible. We still hide to tray on close (on_window_event above).
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Regular);
 
             let app_handle = app.handle().clone();
 
@@ -86,28 +86,27 @@ async fn status_bridge(app: tauri::AppHandle) {
         let _ = app.emit("lf:health", serde_json::json!({ "online": health_ok }));
 
         if !health_ok {
-            let _ = app.emit("lf:status", serde_json::json!({
-                "overall_status": "stopped",
-                "engine_id": "—",
-                "engine_version": "—",
-                "running_models": {},
-                "metrics": {
-                    "requests_total": 0,
-                    "ttft_avg_ms": 0.0,
-                    "uptime_secs": 0,
-                    "restart_count": 0
-                }
-            }));
+            let _ = app.emit(
+                "lf:status",
+                serde_json::json!({
+                    "overall_status": "stopped",
+                    "engine_id": "—",
+                    "engine_version": "—",
+                    "running_models": {},
+                    "metrics": {
+                        "requests_total": 0,
+                        "ttft_avg_ms": 0.0,
+                        "uptime_secs": 0,
+                        "restart_count": 0
+                    }
+                }),
+            );
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             continue;
         }
 
         // 2. Fetch full status snapshot when online.
-        if let Ok(resp) = client
-            .get(format!("{}/lf/status", base_url))
-            .send()
-            .await
-        {
+        if let Ok(resp) = client.get(format!("{}/lf/status", base_url)).send().await {
             if let Ok(body) = resp.text().await {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
                     let _ = app.emit("lf:status", &json);

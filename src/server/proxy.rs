@@ -77,12 +77,10 @@ pub async fn proxy_stream(
 
     // Stream the response body through
     let stream = resp.bytes_stream().map(|chunk| {
-        chunk
-            .map(|bytes| bytes)
-            .map_err(|e| {
-                error!(error = %e, "Error reading stream from engine");
-                std::io::Error::new(std::io::ErrorKind::Other, e)
-            })
+        chunk.map(|bytes| bytes).map_err(|e| {
+            error!(error = %e, "Error reading stream from engine");
+            std::io::Error::new(std::io::ErrorKind::Other, e)
+        })
     });
 
     Ok(Body::from_stream(stream))
@@ -104,13 +102,22 @@ pub async fn proxy_request_assembling_stream(
 ) -> Result<(u16, String), (u16, String)> {
     // Patch body: force stream: true
     let mut body_val: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
-        (400u16, format!("{{\"error\":{{\"message\":\"Invalid JSON: {}\"}}}}", e))
+        (
+            400u16,
+            format!("{{\"error\":{{\"message\":\"Invalid JSON: {}\"}}}}", e),
+        )
     })?;
     if let Some(obj) = body_val.as_object_mut() {
         obj.insert("stream".to_string(), serde_json::Value::Bool(true));
     }
     let patched = serde_json::to_vec(&body_val).map_err(|e| {
-        (500u16, format!("{{\"error\":{{\"message\":\"JSON serialization failed: {}\"}}}}", e))
+        (
+            500u16,
+            format!(
+                "{{\"error\":{{\"message\":\"JSON serialization failed: {}\"}}}}",
+                e
+            ),
+        )
     })?;
 
     let url = format!("http://127.0.0.1:{}{}", engine_port, path);
@@ -124,7 +131,13 @@ pub async fn proxy_request_assembling_stream(
         .await
         .map_err(|e| {
             error!(error = %e, "Failed to proxy think stream to engine");
-            (502u16, format!("{{\"error\":{{\"message\":\"Engine unavailable: {}\"}}}}", e))
+            (
+                502u16,
+                format!(
+                    "{{\"error\":{{\"message\":\"Engine unavailable: {}\"}}}}",
+                    e
+                ),
+            )
         })?;
 
     let status = resp.status().as_u16();
@@ -149,7 +162,10 @@ pub async fn proxy_request_assembling_stream(
 
     while let Some(chunk) = stream.next().await {
         let bytes = chunk.map_err(|e| {
-            (502u16, format!("{{\"error\":{{\"message\":\"Stream read error: {}\"}}}}", e))
+            (
+                502u16,
+                format!("{{\"error\":{{\"message\":\"Stream read error: {}\"}}}}", e),
+            )
         })?;
         buffer.push_str(&String::from_utf8_lossy(&bytes));
 
@@ -201,8 +217,14 @@ pub async fn proxy_request_assembling_stream(
 
             // Usage from final chunk
             if let Some(usage) = chunk_val.get("usage") {
-                prompt_tokens = usage.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(prompt_tokens);
-                completion_tokens = usage.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(completion_tokens);
+                prompt_tokens = usage
+                    .get("prompt_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(prompt_tokens);
+                completion_tokens = usage
+                    .get("completion_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(completion_tokens);
             }
         }
     }

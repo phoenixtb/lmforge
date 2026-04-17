@@ -51,10 +51,8 @@ impl ModelIndex {
             });
         }
 
-        let content = std::fs::read_to_string(&path)
-            .context("Failed to read models.json")?;
-        let index: Self = serde_json::from_str(&content)
-            .context("Failed to parse models.json")?;
+        let content = std::fs::read_to_string(&path).context("Failed to read models.json")?;
+        let index: Self = serde_json::from_str(&content).context("Failed to parse models.json")?;
 
         Ok(index)
     }
@@ -93,11 +91,17 @@ impl ModelIndex {
     /// Get a model by ID (with fallback to hf_repo or dir boundary name)
     pub fn get(&self, id: &str) -> Option<&ModelEntry> {
         self.models.iter().find(|m| {
-            if m.id == id { return true; }
-            if let Some(repo) = &m.hf_repo {
-                if repo == id { return true; }
+            if m.id == id {
+                return true;
             }
-            if m.path.ends_with(&format!("/{}", id)) { return true; }
+            if let Some(repo) = &m.hf_repo {
+                if repo == id {
+                    return true;
+                }
+            }
+            if m.path.ends_with(&format!("/{}", id)) {
+                return true;
+            }
             false
         })
     }
@@ -193,15 +197,19 @@ pub fn detect_capabilities(
     if let Ok(content) = std::fs::read_to_string(&config_path) {
         if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
             let model_type = config["model_type"].as_str().unwrap_or("").to_lowercase();
-            let num_labels  = config["num_labels"].as_u64().unwrap_or(0);
+            let num_labels = config["num_labels"].as_u64().unwrap_or(0);
 
             // --- Re-ranker detection (highest priority — must precede embed check) ---
             // Signal 1: architectures array contains a sequence-classification head
             let is_seq_classifier = config["architectures"]
                 .as_array()
-                .map(|archs| archs.iter().any(|a| {
-                    a.as_str().unwrap_or("").contains("ForSequenceClassification")
-                }))
+                .map(|archs| {
+                    archs.iter().any(|a| {
+                        a.as_str()
+                            .unwrap_or("")
+                            .contains("ForSequenceClassification")
+                    })
+                })
                 .unwrap_or(false);
 
             // num_labels == 1 → binary relevance score (cross-encoder re-ranker)
@@ -213,8 +221,16 @@ pub fn detect_capabilities(
             // Generative re-rankers (Qwen3-Reranker etc.) intentionally set both flags so
             // llama.cpp can load them with --reranking while still being a decoder model.
             if [
-                "qwen3", "qwen2", "llama", "mistral", "deepseek",
-                "phi", "gemma", "granite", "starcoder", "falcon",
+                "qwen3",
+                "qwen2",
+                "llama",
+                "mistral",
+                "deepseek",
+                "phi",
+                "gemma",
+                "granite",
+                "starcoder",
+                "falcon",
             ]
             .iter()
             .any(|t| model_type.contains(t))
@@ -225,11 +241,9 @@ pub fn detect_capabilities(
             // --- Encoder-only embedding model detection (only when not a cross-encoder re-ranker) ---
             // These model types are unambiguously embedding-only (BERT / RoBERTa families).
             if !caps.reranking {
-                if [
-                    "nomic", "bert", "xlm-roberta", "roberta", "distilbert",
-                ]
-                .iter()
-                .any(|t| model_type.contains(t))
+                if ["nomic", "bert", "xlm-roberta", "roberta", "distilbert"]
+                    .iter()
+                    .any(|t| model_type.contains(t))
                 {
                     caps.embeddings = true;
                     caps.chat = false; // pure embedding models do not support chat
@@ -281,7 +295,10 @@ pub fn detect_capabilities(
         caps.reranking = true;
         caps.embeddings = false;
         debug!("Signal B: 'rerank(er)' in name — flagging as re-ranker");
-    } else if name_corpus.contains("embedding") || name_corpus.contains("-embed-") || name_corpus.contains("_embed_") {
+    } else if name_corpus.contains("embedding")
+        || name_corpus.contains("-embed-")
+        || name_corpus.contains("_embed_")
+    {
         // "embedding" is unambiguous ("Qwen3-Embedding", "nomic-embed-text")
         // Hyphen/underscore guards prevent false positives on repos like "snowflake-arctic-embeddings-arctic" etc.
         caps.embeddings = true;
@@ -300,11 +317,17 @@ pub fn detect_capabilities(
         if hint_lower.contains("embed") {
             caps.embeddings = true;
             caps.chat = false;
-            debug!(hint, "Signal A: catalog shortcut contains 'embed' — overriding to embedding model");
+            debug!(
+                hint,
+                "Signal A: catalog shortcut contains 'embed' — overriding to embedding model"
+            );
         } else if hint_lower.contains("rerank") {
             caps.reranking = true;
             caps.embeddings = false;
-            debug!(hint, "Signal A: catalog shortcut contains 'rerank' — overriding to re-ranker");
+            debug!(
+                hint,
+                "Signal A: catalog shortcut contains 'rerank' — overriding to re-ranker"
+            );
         }
     }
 
@@ -328,7 +351,9 @@ pub fn detect_capabilities(
                 let has_chat_template = tc.get("chat_template").is_some();
                 if !has_chat_template {
                     caps.chat = false;
-                    debug!("Signal C: no chat_template in tokenizer_config.json — clearing chat=true for embedding model");
+                    debug!(
+                        "Signal C: no chat_template in tokenizer_config.json — clearing chat=true for embedding model"
+                    );
                 }
             }
         }
@@ -382,8 +407,6 @@ pub fn detect_capabilities(
     caps
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,7 +427,14 @@ mod tests {
             engine: "omlx".to_string(),
             hf_repo: Some("test/test".to_string()),
             size_bytes: 1000,
-            capabilities: ModelCapabilities { chat: true, embeddings: false, reranking: false, thinking: false, embedding_dims: None, pooling: None },
+            capabilities: ModelCapabilities {
+                chat: true,
+                embeddings: false,
+                reranking: false,
+                thinking: false,
+                embedding_dims: None,
+                pooling: None,
+            },
             added_at: "2024-01-01".to_string(),
         });
 
@@ -431,12 +461,22 @@ mod tests {
             engine: "omlx".to_string(),
             hf_repo: None,
             size_bytes: 1000,
-            capabilities: ModelCapabilities { chat: true, embeddings: false, reranking: false, thinking: false, embedding_dims: None, pooling: None },
+            capabilities: ModelCapabilities {
+                chat: true,
+                embeddings: false,
+                reranking: false,
+                thinking: false,
+                embedding_dims: None,
+                pooling: None,
+            },
             added_at: "2024-01-01".to_string(),
         };
 
         index.add(entry.clone());
-        index.add(ModelEntry { path: "/tmp/v2".to_string(), ..entry });
+        index.add(ModelEntry {
+            path: "/tmp/v2".to_string(),
+            ..entry
+        });
 
         assert_eq!(index.list().len(), 1);
         assert_eq!(index.get("test").unwrap().path, "/tmp/v2");

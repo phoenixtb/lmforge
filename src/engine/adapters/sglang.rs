@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use tokio::process::Command;
 use tokio::sync::mpsc::Sender;
-use tracing::{info, warn, debug, error};
+use tracing::{debug, error, info, warn};
 
 use crate::engine::adapter::{ActiveEngine, EngineAdapter, ModelRole};
 use crate::model::downloader::DownloadProgress;
@@ -34,16 +34,23 @@ impl EngineAdapter for SglangAdapter {
     /// Returns:
     ///   Ok(true)  — native pull succeeded; caller updates ModelIndex.
     ///   Err(e)    — native pull failed; caller surfaces error via SSE.
-    async fn pull_model(&self, repo: &str, dest_dir: &Path, progress_tx: Sender<DownloadProgress>) -> Result<bool> {
+    async fn pull_model(
+        &self,
+        repo: &str,
+        dest_dir: &Path,
+        progress_tx: Sender<DownloadProgress>,
+    ) -> Result<bool> {
         std::fs::create_dir_all(dest_dir)
             .context("Failed to create model destination directory")?;
 
         info!(repo, dest = %dest_dir.display(), "SGLang: starting native huggingface_hub pull");
 
-        let _ = progress_tx.send(DownloadProgress::Started {
-            repo: repo.to_string(),
-            files: 0, // unknown until snapshot_download resolves the manifest
-        }).await;
+        let _ = progress_tx
+            .send(DownloadProgress::Started {
+                repo: repo.to_string(),
+                files: 0, // unknown until snapshot_download resolves the manifest
+            })
+            .await;
 
         // Build the inline Python snippet. We call snapshot_download directly so we can
         // pass local_dir to put weights into LMForge's managed models directory instead of
@@ -67,10 +74,12 @@ impl EngineAdapter for SglangAdapter {
             let total_bytes = dir_size(dest_dir);
             info!(repo, total_bytes, "SGLang: huggingface_hub pull completed");
 
-            let _ = progress_tx.send(DownloadProgress::Completed {
-                repo: repo.to_string(),
-                total_bytes,
-            }).await;
+            let _ = progress_tx
+                .send(DownloadProgress::Completed {
+                    repo: repo.to_string(),
+                    total_bytes,
+                })
+                .await;
 
             Ok(true)
         } else {
@@ -83,9 +92,11 @@ impl EngineAdapter for SglangAdapter {
             // Surface a clean error message — strip Python traceback boilerplate if present
             let user_error = extract_python_error(&stderr);
 
-            let _ = progress_tx.send(DownloadProgress::Failed {
-                error: user_error.clone(),
-            }).await;
+            let _ = progress_tx
+                .send(DownloadProgress::Failed {
+                    error: user_error.clone(),
+                })
+                .await;
 
             anyhow::bail!("huggingface_hub pull failed: {}", user_error)
         }
@@ -111,9 +122,13 @@ impl EngineAdapter for SglangAdapter {
         info!(model_id = %model_id, port = port, role = ?role, "Spawning native SGLang python instance");
 
         let stdout_file = std::fs::OpenOptions::new()
-            .create(true).append(true).open(logs_dir.join("engine-stdout.log"))?;
+            .create(true)
+            .append(true)
+            .open(logs_dir.join("engine-stdout.log"))?;
         let stderr_file = std::fs::OpenOptions::new()
-            .create(true).append(true).open(logs_dir.join("engine-stderr.log"))?;
+            .create(true)
+            .append(true)
+            .open(logs_dir.join("engine-stderr.log"))?;
 
         let port_str = port.to_string();
         let model_path = model_dir.to_string_lossy().to_string();
@@ -157,7 +172,7 @@ impl EngineAdapter for SglangAdapter {
             info!(pid, model = %active_engine.model_id, "Sending SIGTERM to violently flush RadixAttention NVIDIA VRAM block");
             #[cfg(unix)]
             {
-                use nix::sys::signal::{kill, Signal};
+                use nix::sys::signal::{Signal, kill};
                 use nix::unistd::Pid;
                 let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
             }
@@ -167,10 +182,17 @@ impl EngineAdapter for SglangAdapter {
             }
 
             // Wait for CUDA process to completely teardown to eliminate OOM frag errors on respawn
-            match tokio::time::timeout(std::time::Duration::from_secs(5), active_engine.process.wait()).await {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                active_engine.process.wait(),
+            )
+            .await
+            {
                 Ok(_) => debug!("SGLang natively flush-exited"),
                 Err(_) => {
-                    warn!("SGLang SIGTERM timed out or hung on GPU free, forcing SIGKILL constraint");
+                    warn!(
+                        "SGLang SIGTERM timed out or hung on GPU free, forcing SIGKILL constraint"
+                    );
                     let _ = active_engine.process.kill().await;
                 }
             }
@@ -215,10 +237,7 @@ fn read_pooling_from_config(model_dir: &Path) -> Option<String> {
 /// Extract the last meaningful line from a Python traceback for a clean user-facing error.
 fn extract_python_error(stderr: &str) -> String {
     // Python tracebacks end with the actual exception on the last non-empty line.
-    let last_error = stderr
-        .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty());
+    let last_error = stderr.lines().rev().find(|l| !l.trim().is_empty());
 
     match last_error {
         Some(line) => line.trim().to_string(),
@@ -233,7 +252,10 @@ mod tests {
     #[test]
     fn test_extract_python_error_gets_last_line() {
         let stderr = "Traceback (most recent call last):\n  File ...\nRepositoryNotFoundError: 'bad/repo' not found\n";
-        assert_eq!(extract_python_error(stderr), "RepositoryNotFoundError: 'bad/repo' not found");
+        assert_eq!(
+            extract_python_error(stderr),
+            "RepositoryNotFoundError: 'bad/repo' not found"
+        );
     }
 
     #[test]

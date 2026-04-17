@@ -8,8 +8,11 @@ pub mod rerank;
 pub mod sysinfo;
 pub mod thinking;
 
+use axum::{
+    Router,
+    routing::{delete, get, post},
+};
 use std::sync::Arc;
-use axum::{Router, routing::{get, post, delete}};
 use tokio::sync::RwLock;
 use tracing::info;
 
@@ -60,7 +63,11 @@ impl AppState {
         }
     }
 
-    pub async fn ensure_model(&self, model_id: &str, keep_alive: Option<String>) -> Result<u16, axum::http::Response<axum::body::Body>> {
+    pub async fn ensure_model(
+        &self,
+        model_id: &str,
+        keep_alive: Option<String>,
+    ) -> Result<u16, axum::http::Response<axum::body::Body>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let cmd = ManagerCommand::EnsureModel {
             model_id: model_id.to_string(),
@@ -68,27 +75,28 @@ impl AppState {
             reply: tx,
         };
         if self.command_tx.send(cmd).await.is_err() {
-            return Err(
-                axum::http::Response::builder()
-                    .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(axum::body::Body::from(r#"{"error":{"message":"Orchestrator channel closed"}}"#))
-                    .unwrap()
-            );
+            return Err(axum::http::Response::builder()
+                .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+                .body(axum::body::Body::from(
+                    r#"{"error":{"message":"Orchestrator channel closed"}}"#,
+                ))
+                .unwrap());
         }
         match rx.await {
             Ok(Ok(port)) => Ok(port),
-            Ok(Err(e)) => Err(
-                axum::http::Response::builder()
-                    .status(axum::http::StatusCode::SERVICE_UNAVAILABLE)
-                    .body(axum::body::Body::from(format!(r#"{{"error":{{"message":"Failed to load model: {}"}}}}"#, e)))
-                    .unwrap()
-            ),
-            Err(_) => Err(
-                axum::http::Response::builder()
-                    .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(axum::body::Body::from(r#"{"error":{"message":"Orchestrator failed to reply"}}"#))
-                    .unwrap()
-            ),
+            Ok(Err(e)) => Err(axum::http::Response::builder()
+                .status(axum::http::StatusCode::SERVICE_UNAVAILABLE)
+                .body(axum::body::Body::from(format!(
+                    r#"{{"error":{{"message":"Failed to load model: {}"}}}}"#,
+                    e
+                )))
+                .unwrap()),
+            Err(_) => Err(axum::http::Response::builder()
+                .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+                .body(axum::body::Body::from(
+                    r#"{"error":{"message":"Orchestrator failed to reply"}}"#,
+                ))
+                .unwrap()),
         }
     }
 }
@@ -118,7 +126,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/lf/model/pull", post(native::model_pull))
         .route("/lf/model/unload", post(native::model_unload))
         .route("/lf/model/delete/{name}", delete(native::model_delete))
-        .route("/lf/config", get(native::config_get).post(native::config_update))
+        .route(
+            "/lf/config",
+            get(native::config_get).post(native::config_update),
+        )
         .route("/lf/shutdown", post(native::shutdown))
         // Health
         .route("/health", get(health::health))
