@@ -156,9 +156,14 @@ async fn install_via_brew(
     // ── 2. Tap the repository ─────────────────────────────────────────────────
     if !brew_tap.is_empty() {
         println!("  ⚙ Adding Homebrew tap: {}", brew_tap);
-        // Third-party taps need the source URL as a second argument
+        // Third-party taps need the source URL as a second argument.
+        // HOMEBREW_NO_AUTO_UPDATE skips the auto-updater that floods the
+        // pipe buffer and can cause a spurious non-zero exit in subprocesses.
         let mut tap_cmd = tokio::process::Command::new("brew");
-        tap_cmd.args(["tap", brew_tap]);
+        tap_cmd
+            .args(["tap", brew_tap])
+            .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+            .env("HOMEBREW_NO_ENV_HINTS", "1");
         if !brew_tap_url.is_empty() {
             tap_cmd.arg(brew_tap_url);
         }
@@ -170,12 +175,13 @@ async fn install_via_brew(
         let tap_stderr = String::from_utf8_lossy(&tap_out.stderr);
         let tap_stdout = String::from_utf8_lossy(&tap_out.stdout);
 
-        // "already tapped" is printed to stderr/stdout — treat as success
+        // "already tapped" (or updated as part of general auto-update) = success
         let already = tap_stderr.contains("already tapped")
-            || tap_stdout.contains("already tapped");
+            || tap_stdout.contains("already tapped")
+            || tap_stderr.contains(brew_tap)
+                && tap_stdout.contains("Updated");
 
         if !tap_out.status.success() && !already {
-            // Show the actual brew error to help diagnose
             let detail = if tap_stderr.trim().is_empty() {
                 tap_stdout.trim().to_string()
             } else {
@@ -196,8 +202,8 @@ async fn install_via_brew(
     println!("  ⚙ Installing {} via Homebrew...", brew_formula);
     let output = tokio::process::Command::new("brew")
         .args(["install", brew_formula])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+        .env("HOMEBREW_NO_ENV_HINTS", "1")
         .output()
         .await
         .context("Failed to run 'brew install'")?;
