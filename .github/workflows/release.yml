@@ -156,31 +156,49 @@ jobs:
         working-directory: ui
         run: npm run tauri build -- --target ${{ matrix.target }}
 
+      - name: Rename macOS DMG
+        if: runner.os == 'macOS'
+        run: |
+          src=$(find target/${{ matrix.target }}/release/bundle/dmg -name "*.dmg" | head -1)
+          cp "$src" "LMForge-UI-${{ matrix.platform }}.dmg"
+
       - name: Upload macOS DMG
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
           name: LMForge-UI-${{ matrix.platform }}.dmg
-          # Tauri places bundles in the repo-root target/ when --target is specified
-          path: target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          path: LMForge-UI-${{ matrix.platform }}.dmg
           if-no-files-found: error
           retention-days: 1
+
+      - name: Rename Linux AppImage
+        if: runner.os == 'Linux'
+        run: |
+          src=$(find target/${{ matrix.target }}/release/bundle/appimage -name "*.AppImage" | head -1)
+          cp "$src" "LMForge-UI-${{ matrix.platform }}.AppImage"
 
       - name: Upload Linux AppImage
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: LMForge-UI-${{ matrix.platform }}.AppImage
-          path: target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+          path: LMForge-UI-${{ matrix.platform }}.AppImage
           if-no-files-found: error
           retention-days: 1
+
+      - name: Rename Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $src = Get-ChildItem "target/${{ matrix.target }}/release/bundle/nsis/*.exe" | Select-Object -First 1
+          Copy-Item $src.FullName "LMForge-UI-${{ matrix.platform }}.exe"
 
       - name: Upload Windows installer
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: LMForge-UI-${{ matrix.platform }}.exe
-          path: target/${{ matrix.target }}/release/bundle/nsis/*.exe
+          path: LMForge-UI-${{ matrix.platform }}.exe
           if-no-files-found: error
           retention-days: 1
 
