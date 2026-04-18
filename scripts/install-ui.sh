@@ -79,6 +79,11 @@ fi
 # ── Prerequisite: Core must be installed ─────────────────────────────────────
 section "Checking LMForge Core..."
 
+# Augment PATH with every location install-core.sh might have used,
+# so this check works even in a fresh bash subprocess (curl | bash)
+# where ~/.zshrc / ~/.bashrc has not been sourced.
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
+
 if ! command -v lmforge &>/dev/null; then
     error "LMForge Core not found. Install it first:\n  curl -fsSL https://github.com/$REPO/releases/latest/download/install-core.sh | bash"
 fi
