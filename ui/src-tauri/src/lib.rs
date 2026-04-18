@@ -161,13 +161,20 @@ async fn stop_engine() -> Result<(), String> {
 /// 1. Next to the current executable (production install)
 /// 2. PATH (developer install via `cargo install`)
 fn find_lmforge_binary() -> String {
+    // Binary name differs by platform
+    let bin_name = if cfg!(windows) {
+        "lmforge.exe"
+    } else {
+        "lmforge"
+    };
+
     // 1. Sibling of the current exe (bundled install)
     if let Ok(exe) = std::env::current_exe() {
-        let sibling = exe.with_file_name("lmforge");
+        let sibling = exe.with_file_name(bin_name);
         if sibling.exists() {
             return sibling.to_string_lossy().to_string();
         }
     }
     // 2. Rely on PATH
-    "lmforge".to_string()
+    bin_name.to_string()
 }

@@ -247,14 +247,12 @@ async fn kill_pid_file_process(pid_file: std::path::PathBuf, graceful: bool) {
                 pid,
                 "Sent SIGTERM to stale LMForge daemon, waiting for clean exit"
             );
-            // Wait up to 3s for graceful exit
             for _ in 0..6 {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 if unsafe { libc::kill(pid as i32, 0) } != 0 {
                     break;
-                } // process gone
+                }
             }
-            // If still running, force kill
             let _ = kill(nix_pid, Signal::SIGKILL);
             warn!(pid, "Sent SIGKILL to stale LMForge daemon");
         } else {
@@ -262,6 +260,15 @@ async fn kill_pid_file_process(pid_file: std::path::PathBuf, graceful: bool) {
             warn!(pid, "Sent SIGKILL to stale engine process");
         }
     }
+
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .output();
+        warn!(pid, "Sent taskkill /F to stale LMForge daemon");
+    }
+
     let _ = std::fs::remove_file(&pid_file);
 }
 
@@ -282,6 +289,14 @@ fn kill_engine_pid_files(data_dir: &std::path::Path) {
                         use nix::unistd::Pid;
                         let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
                         warn!(pid, path = %path.display(), "Sent SIGKILL to stale engine process");
+                    }
+
+                    #[cfg(windows)]
+                    {
+                        let _ = std::process::Command::new("taskkill")
+                            .args(["/F", "/PID", &pid.to_string()])
+                            .output();
+                        warn!(pid, path = %path.display(), "Sent taskkill /F to stale engine process");
                     }
                 }
             }
@@ -361,22 +376,44 @@ async fn is_port_free(port: u16) -> bool {
         .is_ok()
 }
 
-/// Use `lsof -ti :PORT` to find the PID holding the port and send SIGKILL.
+/// Use `lsof` (Unix) or `netstat`+`taskkill` (Windows) to free a held port.
 fn kill_port_holder_via_lsof(port: u16) {
-    let output = std::process::Command::new("lsof")
-        .args(["-ti", &format!(":{}", port)])
-        .output();
-
-    if let Ok(out) = output {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        for line in stdout.lines() {
-            if let Ok(pid) = line.trim().parse::<u32>() {
-                #[cfg(unix)]
-                {
+    #[cfg(unix)]
+    {
+        let output = std::process::Command::new("lsof")
+            .args(["-ti", &format!(":{}", port)])
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for line in stdout.lines() {
+                if let Ok(pid) = line.trim().parse::<u32>() {
                     use nix::sys::signal::{Signal, kill};
                     use nix::unistd::Pid;
                     let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
-                    warn!(pid, port, "Sent SIGKILL to unknown port holder (via lsof)");
+                    warn!(pid, port, "Sent SIGKILL to port holder (via lsof)");
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        // netstat -ano | findstr :<port>  → last column is PID
+        let output = std::process::Command::new("netstat")
+            .args(["-ano"])
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for line in stdout.lines() {
+                if line.contains(&format!(":{} ", port)) || line.contains(&format!(":{}	", port)) {
+                    if let Some(pid_str) = line.split_whitespace().last() {
+                        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                            let _ = std::process::Command::new("taskkill")
+                                .args(["/F", "/PID", &pid.to_string()])
+                                .output();
+                            warn!(pid, port, "Sent taskkill /F to port holder (via netstat)");
+                        }
+                    }
                 }
             }
         }
@@ -407,11 +444,22 @@ fn resolve_engine_cmd(engine: &engine::EngineConfig, data_dir: &std::path::Path)
     cmd.clone()
 }
 
-/// Check if a command exists
+/// Check if a command exists (cross-platform)
 fn command_exists(cmd: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(cmd)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    #[cfg(unix)]
+    {
+        std::process::Command::new("which")
+            .arg(cmd)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("where")
+            .arg(cmd)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
 }

@@ -1,44 +1,41 @@
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 
-/// Generate and install the LMForge system service (Launchd / Systemd)
+/// Generate and install the LMForge system service.
+/// - macOS  → launchd user agent   (~/Library/LaunchAgents/)
+/// - Linux  → systemd user unit    (~/.config/systemd/user/)
+/// - Windows → Scheduled Task       (runs at logon, no elevation)
 pub fn install() -> Result<()> {
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("lmforge"));
     let exe_path = exe.to_string_lossy().to_string();
 
     #[cfg(target_os = "macos")]
-    {
-        install_launchd(&exe_path)?;
-    }
+    install_launchd(&exe_path)?;
 
     #[cfg(target_os = "linux")]
-    {
-        install_systemd(&exe_path)?;
-    }
+    install_systemd(&exe_path)?;
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        bail!("Service installation is only supported on macOS and Linux.");
-    }
+    #[cfg(windows)]
+    install_scheduled_task(&exe_path)?;
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    bail!("Service installation is not supported on this platform.");
 
     Ok(())
 }
 
 pub fn uninstall() -> Result<()> {
     #[cfg(target_os = "macos")]
-    {
-        uninstall_launchd()?;
-    }
+    uninstall_launchd()?;
 
     #[cfg(target_os = "linux")]
-    {
-        uninstall_systemd()?;
-    }
+    uninstall_systemd()?;
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        bail!("Service uninstallation is only supported on macOS and Linux.");
-    }
+    #[cfg(windows)]
+    uninstall_scheduled_task()?;
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    bail!("Service uninstallation is not supported on this platform.");
 
     Ok(())
 }
@@ -211,6 +208,87 @@ fn uninstall_systemd() -> Result<()> {
     Ok(())
 }
 
+// --- Windows Scheduled Task ---
+
+static WINDOWS_TASK_NAME: &str = "LMForge Daemon";
+
+/// Register a Windows Scheduled Task that runs `lmforge start --foreground`
+/// at every user logon. Uses PowerShell's Register-ScheduledTask — no
+/// administrator elevation is required (RunLevel = Limited).
+#[cfg(windows)]
+fn install_scheduled_task(exe_path: &str) -> Result<()> {
+    // Build the log directory so the task can redirect output immediately.
+    let home = home_dir()?;
+    let log_dir = home.join(".lmforge").join("logs");
+    std::fs::create_dir_all(&log_dir)?;
+    let log_out = log_dir.join("daemon.out.log");
+
+    let ps_script = format!(
+        r#"
+$action  = New-ScheduledTaskAction `
+    -Execute "{exe}" `
+    -Argument "start --foreground"
+$trigger = New-ScheduledTaskTrigger -AtLogon
+$settings = New-ScheduledTaskSettingsSet `
+    -RestartCount 3 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -ExecutionTimeLimit ([TimeSpan]::Zero)
+$principal = New-ScheduledTaskPrincipal `
+    -UserId "$env:USERNAME" `
+    -RunLevel Limited `
+    -LogonType Interactive
+Register-ScheduledTask `
+    -TaskName "{task}" `
+    -Action $action `
+    -Trigger $trigger `
+    -Settings $settings `
+    -Principal $principal `
+    -Force | Out-Null
+Start-ScheduledTask -TaskName "{task}"
+"#,
+        exe = exe_path.replace('"', r#"\""#),
+        task = WINDOWS_TASK_NAME,
+    );
+
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
+        .output()
+        .context("Failed to run PowerShell")?;
+
+    if !out.status.success() {
+        bail!(
+            "Failed to register scheduled task:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    println!("✓ LMForge scheduled task registered and started.");
+    println!("  It will now start automatically at logon.");
+    println!("  Logs: {}", log_out.display());
+    Ok(())
+}
+
+#[cfg(windows)]
+fn uninstall_scheduled_task() -> Result<()> {
+    // Stop first (ignore error if not running)
+    std::process::Command::new("taskkill")
+        .args(["/F", "/IM", "lmforge.exe"])
+        .output()
+        .ok();
+
+    let ps = format!(
+        r#"Unregister-ScheduledTask -TaskName "{}" -Confirm:$false"#,
+        WINDOWS_TASK_NAME
+    );
+    std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+        .output()
+        .context("Failed to run PowerShell")?;
+
+    println!("✓ LMForge scheduled task removed.");
+    Ok(())
+}
+
 // ── Service control (start / stop / status) ───────────────────────────────────
 
 pub fn service_start() -> Result<()> {
@@ -242,8 +320,20 @@ pub fn service_start() -> Result<()> {
         println!("✓ LMForge service started.");
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    bail!("Service control is only supported on macOS and Linux.");
+    #[cfg(windows)]
+    {
+        let out = std::process::Command::new("schtasks")
+            .args(["/Run", "/TN", WINDOWS_TASK_NAME])
+            .output()?;
+        if out.status.success() {
+            println!("✓ LMForge scheduled task started.");
+        } else {
+            bail!("{}", String::from_utf8_lossy(&out.stderr));
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    bail!("Service control is not supported on this platform.");
 
     Ok(())
 }
@@ -265,8 +355,18 @@ pub fn service_stop() -> Result<()> {
         println!("✓ LMForge service stopped.");
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    bail!("Service control is only supported on macOS and Linux.");
+    #[cfg(windows)]
+    {
+        // End any running lmforge.exe processes (task stays registered)
+        std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "lmforge.exe"])
+            .output()
+            .ok();
+        println!("✓ LMForge process terminated.");
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    bail!("Service control is not supported on this platform.");
 
     Ok(())
 }
@@ -283,7 +383,6 @@ pub fn service_status() -> Result<()> {
                 "not installed"
             }
         );
-
         if installed {
             let out = std::process::Command::new("launchctl")
                 .args(["list", LAUNCHD_LABEL])
@@ -312,7 +411,6 @@ pub fn service_status() -> Result<()> {
                 "not installed"
             }
         );
-
         if installed {
             let out = std::process::Command::new("systemctl")
                 .args(["--user", "is-active", SYSTEMD_SERVICE])
@@ -329,19 +427,49 @@ pub fn service_status() -> Result<()> {
         }
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    println!("  Service management not available on this platform.");
+    #[cfg(windows)]
+    {
+        let out = std::process::Command::new("schtasks")
+            .args(["/Query", "/TN", WINDOWS_TASK_NAME, "/FO", "LIST"])
+            .output()
+            .unwrap_or_else(|_| std::process::Output {
+                status: std::process::ExitStatus::default(),
+                stdout: vec![],
+                stderr: vec![],
+            });
+        let info = String::from_utf8_lossy(&out.stdout);
+        let installed = out.status.success();
+        println!(
+            "  Scheduled task: {}",
+            if installed {
+                "registered ✓"
+            } else {
+                "not registered"
+            }
+        );
+        if installed {
+            let running = info.contains("Running");
+            println!(
+                "  Task status  : {}",
+                if running {
+                    "running ✓"
+                } else {
+                    "not running"
+                }
+            );
+        }
+    }
 
-    // Always show live daemon health regardless of service mode
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    println!("  Service management is not available on this platform.");
+
+    // Always show live daemon health — use raw TCP, works on all platforms.
     println!();
-    let health_ok = std::process::Command::new("sh")
-        .args([
-            "-c",
-            "curl -sf http://127.0.0.1:11430/health > /dev/null 2>&1",
-        ])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let health_ok = std::net::TcpStream::connect_timeout(
+        &"127.0.0.1:11430".parse().unwrap(),
+        std::time::Duration::from_millis(500),
+    )
+    .is_ok();
     println!(
         "  Daemon API   : {}",
         if health_ok {
