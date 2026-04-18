@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
 #  LMForge Core — Install Script
-#  Downloads the pre-built binary from GitHub Releases, installs it,
-#  runs init, and registers the system service.
+#  Downloads the pre-built binary from GitHub Releases, installs it to the
+#  current user's local bin directory, adds it to PATH, runs init, and
+#  registers the system service.
 #
 #  Usage:
 #    curl -fsSL https://github.com/phoenixtb/lmforge/releases/latest/download/install-core.sh | bash
 #
 #  Environment variables:
-#    LMFORGE_VERSION     Pin a specific version, e.g. "v0.3.1" (default: latest)
-#    LMFORGE_INSTALL_DIR Where to place the binary (default: /usr/local/bin)
+#    LMFORGE_VERSION     Pin a specific version, e.g. "v0.1.0" (default: latest)
+#    LMFORGE_INSTALL_DIR Where to place the binary (default: ~/.local/bin)
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 REPO="phoenixtb/lmforge"
 BINARY_NAME="lmforge"
-INSTALL_DIR="${LMFORGE_INSTALL_DIR:-/usr/local/bin}"
+INSTALL_DIR="${LMFORGE_INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${LMFORGE_VERSION:-latest}"
 
 # ── Colours ───────────────────────────────────────────────────────────────────
@@ -85,15 +86,14 @@ for cmd in curl; do
 done
 info "curl available"
 
-# Ensure install dir exists and is writable
+# Ensure install dir exists and is writable (no sudo — user-local only)
 if [[ ! -d "$INSTALL_DIR" ]]; then
-    mkdir -p "$INSTALL_DIR" 2>/dev/null || \
-        error "Cannot create $INSTALL_DIR. Try: sudo mkdir -p $INSTALL_DIR && sudo chown \$(whoami) $INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR" || error "Cannot create $INSTALL_DIR"
 fi
 if [[ ! -w "$INSTALL_DIR" ]]; then
-    error "$INSTALL_DIR is not writable.\nTry: sudo chown \$(whoami) $INSTALL_DIR\nOr:  LMFORGE_INSTALL_DIR=~/.local/bin bash <(curl ...)"
+    error "$INSTALL_DIR is not writable. Try: LMFORGE_INSTALL_DIR=~/bin bash <(curl ...)"
 fi
-info "Install dir writable: $INSTALL_DIR"
+info "Install dir: $INSTALL_DIR"
 
 # ── Download ──────────────────────────────────────────────────────────────────
 section "Downloading lmforge..."
@@ -120,12 +120,32 @@ chmod +x "$TMP_BIN"
 cp "$TMP_BIN" "$INSTALL_DIR/$BINARY_NAME"
 info "Installed $INSTALL_DIR/$BINARY_NAME"
 
-# Check PATH
+# ── PATH injection ────────────────────────────────────────────────────────────
+# Add INSTALL_DIR to PATH in every shell config if not already present.
+add_to_path() {
+    local profile_file="$1"
+    local export_line="export PATH=\"$INSTALL_DIR:\$PATH\""
+    if [[ -f "$profile_file" ]] && grep -qF "$INSTALL_DIR" "$profile_file"; then
+        return  # already present
+    fi
+    # Only write to files that exist OR the primary shell rc
+    if [[ -f "$profile_file" ]] || [[ "$profile_file" == "$HOME/.zshrc" ]] || [[ "$profile_file" == "$HOME/.bashrc" ]]; then
+        echo "" >> "$profile_file"
+        echo "# LMForge" >> "$profile_file"
+        echo "$export_line" >> "$profile_file"
+        info "Added $INSTALL_DIR to PATH in $profile_file"
+    fi
+}
+
+add_to_path "$HOME/.zshrc"
+add_to_path "$HOME/.bashrc"
+add_to_path "$HOME/.profile"
+
+# Make available in this session immediately
+export PATH="$INSTALL_DIR:$PATH"
+
 if ! command -v "$BINARY_NAME" &>/dev/null; then
-    warn "lmforge is not yet on PATH. Add this to your shell profile:"
-    warn "  export PATH=\"$INSTALL_DIR:\$PATH\""
-    warn "Then reload: source ~/.zshrc  (or ~/.bashrc)"
-    export PATH="$INSTALL_DIR:$PATH"
+    warn "Run: source ~/.zshrc  (or open a new terminal) to use lmforge from PATH"
 fi
 
 # Verify

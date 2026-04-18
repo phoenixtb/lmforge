@@ -14,11 +14,11 @@ set -euo pipefail
 
 REPO="phoenixtb/lmforge"
 VERSION="${LMFORGE_VERSION:-latest}"
-MIN_CORE_VERSION="0.3.0"
+MIN_CORE_VERSION="0.1.0"
 
-# macOS
+# macOS — install to user Applications (no sudo required)
 APP_NAME="LMForge"
-APP_BUNDLE="/Applications/${APP_NAME}.app"
+APP_BUNDLE="${HOME}/Applications/${APP_NAME}.app"
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BOLD='\033[1m'; NC='\033[0m'
@@ -45,7 +45,7 @@ detect_ui_asset() {
                 *)        error "Unsupported Linux arch: $ARCH. Only x86_64 is supported currently." ;;
             esac ;;
         *)
-            error "Unsupported OS: $OS. For Windows, download the .msi from GitHub Releases." ;;
+            error "Unsupported OS: $OS. For Windows, download the NSIS installer (.exe) from GitHub Releases." ;;
     esac
 }
 
@@ -127,12 +127,15 @@ info "Downloaded $ASSET"
 if [[ "$OS" == "Darwin" ]]; then
     section "Installing LMForge.app..."
 
+    # Ensure ~/Applications exists (no sudo required)
+    mkdir -p "${HOME}/Applications"
+
     # Mount DMG
     MOUNT_POINT=$(mktemp -d "/tmp/lmforge-dmg-XXXXXX")
     trap 'hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null || true; rm -f "$TMP_FILE"' EXIT
     hdiutil attach "$TMP_FILE" -mountpoint "$MOUNT_POINT" -nobrowse -quiet
 
-    # Copy .app to /Applications
+    # Copy .app to ~/Applications
     APP_SRC=$(find "$MOUNT_POINT" -name "*.app" -maxdepth 1 | head -1)
     [[ -z "$APP_SRC" ]] && error "No .app found in DMG"
 
@@ -193,7 +196,7 @@ echo -e "${BOLD}${GREEN}  ✓ LMForge UI installed successfully!${NC}"
 echo ""
 if [[ "$OS" == "Darwin" ]]; then
     echo    "  App:     $APP_BUNDLE"
-    echo    "  Open:    open -a LMForge  (or Spotlight / Launchpad)"
+    echo    "  Open:    open -a LMForge  (also available in Spotlight / Launchpad)"
 fi
 echo    ""
 echo    "  The UI connects to the daemon at http://127.0.0.1:11430"
