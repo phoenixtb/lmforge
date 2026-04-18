@@ -16,9 +16,9 @@ Write-Host "  LMForge — Hardware-aware LLM inference orchestrator" -Foreground
 Write-Host ""
 
 # ── Config ────────────────────────────────────────────────────────────────────
-$Repo      = "phoenixtb/lmforge"
-$Binary    = "lmforge.exe"
-$Target    = "x86_64-pc-windows-msvc"
+$Repo       = "phoenixtb/lmforge"
+$Binary     = "lmforge.exe"
+$AssetName  = "lmforge-windows-x86_64.exe"   # name on GitHub Releases
 $InstallDir = "$env:LOCALAPPDATA\lmforge\bin"
 
 # ── Fetch latest release ──────────────────────────────────────────────────────
@@ -38,27 +38,20 @@ try {
 $Installed = $false
 
 if ($Latest) {
-    $Tarball    = "lmforge-$Target.tar.gz"
-    $DownloadUrl = "https://github.com/$Repo/releases/download/$Latest/$Tarball"
-    $TmpDir     = [System.IO.Path]::GetTempPath() + [System.Guid]::NewGuid().ToString()
-    New-Item -ItemType Directory -Path $TmpDir | Out-Null
+    $DownloadUrl = "https://github.com/$Repo/releases/download/$Latest/$AssetName"
+    $TmpExe      = "$env:TEMP\lmforge-download.exe"
 
-    Info "Downloading $Tarball..."
+    Info "Downloading $AssetName..."
     try {
-        Invoke-WebRequest -Uri $DownloadUrl -OutFile "$TmpDir\$Tarball" -UseBasicParsing
-
-        # Extract (requires tar, available on Windows 10 1803+)
-        tar -xzf "$TmpDir\$Tarball" -C $TmpDir
-
+        Invoke-WebRequest -Uri $DownloadUrl -OutFile $TmpExe -UseBasicParsing
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-        Copy-Item "$TmpDir\$Binary" "$InstallDir\$Binary" -Force
+        Copy-Item $TmpExe "$InstallDir\$Binary" -Force
+        Remove-Item $TmpExe -ErrorAction SilentlyContinue
 
         Success "Binary installed to $InstallDir\$Binary"
         $Installed = $true
     } catch {
         Warn "Pre-built binary not available. Falling back to source build..."
-    } finally {
-        Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
     }
 }
 
@@ -117,13 +110,23 @@ if ($UserPath -notlike "*$InstallDir*") {
     Success "Added $InstallDir to your user PATH (restart terminal to take effect)"
 }
 
+# ── Init + Service install ────────────────────────────────────────────────────
+Info "Running lmforge init..."
+& "$InstallDir\$Binary" init
+
+Info "Registering Windows Scheduled Task (auto-start at logon)..."
+& "$InstallDir\$Binary" service install
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 Write-Host ""
 Success "LMForge $($Latest ?? 'dev') installed successfully!"
 Write-Host ""
+Write-Host "  The daemon is running and starts automatically at logon." -ForegroundColor White
+Write-Host "  API:  http://127.0.0.1:11430" -ForegroundColor White
+Write-Host ""
 Write-Host "  Next steps:" -ForegroundColor White
-Write-Host "    lmforge init           # detect hardware and create config"
-Write-Host "    lmforge pull qwen3-8b  # download your first model"
-Write-Host "    lmforge start          # start the inference server"
-Write-Host "    lmforge run qwen3-8b   # start interactive chat"
+Write-Host "    lmforge pull qwen3-8b        # download your first model"
+Write-Host "    lmforge run qwen3-8b         # interactive chat"
+Write-Host "    lmforge status               # show engine + model status"
+Write-Host "    lmforge service status       # show service health"
 Write-Host ""
