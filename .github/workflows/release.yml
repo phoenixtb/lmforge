@@ -28,10 +28,6 @@ jobs:
             target: aarch64-apple-darwin
             asset_name: lmforge-macos-arm64
 
-          - os: macos-13           # Intel runner
-            target: x86_64-apple-darwin
-            asset_name: lmforge-macos-x86_64
-
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             asset_name: lmforge-linux-x86_64
@@ -108,13 +104,13 @@ jobs:
             platform: macos-arm64
             target: aarch64-apple-darwin
 
-          - os: macos-13
-            platform: macos-x86_64
-            target: x86_64-apple-darwin
-
           - os: ubuntu-22.04
             platform: linux-x86_64
             target: x86_64-unknown-linux-gnu
+
+          - os: windows-2022
+            platform: windows-x86_64
+            target: x86_64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v4
@@ -148,6 +144,8 @@ jobs:
             libappindicator3-dev librsvg2-dev \
             patchelf libxdo-dev
 
+      # WebView2 is pre-installed on windows-2022; nothing extra needed.
+
       - name: Install npm deps
         working-directory: ui
         run: npm ci
@@ -174,6 +172,15 @@ jobs:
         with:
           name: LMForge-UI-${{ matrix.platform }}.AppImage
           path: target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload Windows installer
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: LMForge-UI-${{ matrix.platform }}.exe
+          path: target/${{ matrix.target }}/release/bundle/nsis/*.exe
           if-no-files-found: error
           retention-days: 1
 
