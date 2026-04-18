@@ -162,20 +162,35 @@ async fn install_via_brew(
         if !brew_tap_url.is_empty() {
             tap_cmd.arg(brew_tap_url);
         }
-        let status = tap_cmd
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .status()
+        let tap_out = tap_cmd
+            .output()
             .await
             .context("Failed to run 'brew tap'")?;
 
-        if !status.success() {
+        let tap_stderr = String::from_utf8_lossy(&tap_out.stderr);
+        let tap_stdout = String::from_utf8_lossy(&tap_out.stdout);
+
+        // "already tapped" is printed to stderr/stdout — treat as success
+        let already = tap_stderr.contains("already tapped")
+            || tap_stdout.contains("already tapped");
+
+        if !tap_out.status.success() && !already {
+            // Show the actual brew error to help diagnose
+            let detail = if tap_stderr.trim().is_empty() {
+                tap_stdout.trim().to_string()
+            } else {
+                tap_stderr.trim().to_string()
+            };
             return Err(guidance(&format!(
-                "brew tap {} failed — the tap may not exist yet or requires internet access.",
-                brew_tap
+                "brew tap {} failed.\n  Brew said: {}",
+                brew_tap, detail
             )));
         }
+        if already {
+            info!("Tap {} already added", brew_tap);
+        }
     }
+
 
     // ── 3. Install the formula ────────────────────────────────────────────────
     println!("  ⚙ Installing {} via Homebrew...", brew_formula);
