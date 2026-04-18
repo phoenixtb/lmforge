@@ -102,22 +102,57 @@ fn verify_engine_version(engine: &EngineConfig, _path: &str) -> bool {
     true
 }
 
-/// Install via Homebrew (primary method for oMLX on macOS)
+/// Install via Homebrew (primary method for oMLX on macOS).
+/// Never silently falls back to pip — instead prints clear instructions
+/// so the user can choose their preferred Python management method.
 async fn install_via_brew(
     engine: &EngineConfig,
-    data_dir: &std::path::Path,
+    _data_dir: &std::path::Path,
 ) -> Result<InstallResult> {
-    // Check if brew is available
+    let brew_tap = engine.brew_tap.as_deref().unwrap_or("");
+    let brew_formula = engine.brew_formula.as_deref().unwrap_or(&engine.id);
+    let pip_pkg = engine
+        .pip_package
+        .as_deref()
+        .or(engine.pip_fallback.as_deref())
+        .unwrap_or(&engine.id);
+
+    // Helper: print the full install guidance and bail
+    let guidance = |reason: &str| -> anyhow::Error {
+        eprintln!();
+        eprintln!("  ✗ {}", reason);
+        eprintln!();
+        eprintln!("  ── How to install {} ─────────────────────────────", engine.name);
+        eprintln!();
+        eprintln!("  Recommended — Homebrew (https://brew.sh):");
+        if !brew_tap.is_empty() {
+            eprintln!("    brew tap {}", brew_tap);
+        }
+        eprintln!("    brew install {}", brew_formula);
+        eprintln!();
+        eprintln!("  Alternative — pip (choose your own Python env):");
+        eprintln!("    pip install {}      # system / conda / pyenv", pip_pkg);
+        eprintln!("    # or with extras for Apple Silicon:");
+        eprintln!("    pip install {}[metal]", pip_pkg);
+        eprintln!();
+        eprintln!("  After installing, run:  lmforge start");
+        eprintln!();
+        anyhow::anyhow!("{} — install {} manually using one of the options above.", reason, engine.name)
+    };
+
+    // ── 1. Homebrew must be present ────────────────────────────────────────────
     if !command_exists("brew") {
-        warn!("Homebrew not found, trying pip fallback");
-        return install_via_pip(engine, data_dir).await;
+        return Err(guidance(
+            "Homebrew is not installed. \
+             Install it from https://brew.sh and re-run `lmforge init`.",
+        ));
     }
 
-    // Tap the repository if needed
-    if let Some(ref tap) = engine.brew_tap {
-        println!("  ⚙ Adding Homebrew tap: {}", tap);
+    // ── 2. Tap the repository ─────────────────────────────────────────────────
+    if !brew_tap.is_empty() {
+        println!("  ⚙ Adding Homebrew tap: {}", brew_tap);
         let status = tokio::process::Command::new("brew")
-            .args(["tap", tap])
+            .args(["tap", brew_tap])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .status()
@@ -125,56 +160,60 @@ async fn install_via_brew(
             .context("Failed to run 'brew tap'")?;
 
         if !status.success() {
-            warn!(tap, "brew tap failed, trying pip fallback");
-            return install_via_pip(engine, data_dir).await;
+            return Err(guidance(&format!(
+                "brew tap {} failed — the tap may not exist yet or requires internet access.",
+                brew_tap
+            )));
         }
     }
 
-    // Install the formula
-    if let Some(ref formula) = engine.brew_formula {
-        println!("  ⚙ Installing {} via Homebrew...", formula);
-        let output = tokio::process::Command::new("brew")
-            .args(["install", formula])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output()
-            .await
-            .context("Failed to run 'brew install'")?;
+    // ── 3. Install the formula ────────────────────────────────────────────────
+    println!("  ⚙ Installing {} via Homebrew...", brew_formula);
+    let output = tokio::process::Command::new("brew")
+        .args(["install", brew_formula])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .context("Failed to run 'brew install'")?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            // "already installed" is not an error
-            if stderr.contains("already installed") {
-                info!(formula, "Already installed via Homebrew");
-            } else {
-                warn!(formula, stderr = %stderr, "brew install failed, trying pip fallback");
-                return install_via_pip(engine, data_dir).await;
-            }
-        }
-
-        // Verify installation
-        let cmd = &engine.start_cmd;
-        if let Ok(which_out) = std::process::Command::new("which").arg(cmd).output() {
-            if which_out.status.success() {
-                let path = String::from_utf8_lossy(&which_out.stdout)
-                    .trim()
-                    .to_string();
-                println!("  ✓ {} installed at {}", engine.name, path);
-                return Ok(InstallResult {
-                    engine_id: engine.id.clone(),
-                    version: engine.version.clone(),
-                    install_path: path,
-                    method_used: "brew".to_string(),
-                });
-            }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("already installed") {
+            info!(brew_formula, "Already installed via Homebrew");
+        } else {
+            return Err(guidance(&format!(
+                "brew install {} failed:\n  {}",
+                brew_formula,
+                stderr.trim()
+            )));
         }
     }
 
-    bail!(
-        "Homebrew installation of {} failed — formula or command not found",
-        engine.id
-    );
+    // ── 4. Verify the binary is on PATH ───────────────────────────────────────
+    let cmd = &engine.start_cmd;
+    if let Ok(which_out) = std::process::Command::new("which").arg(cmd).output() {
+        if which_out.status.success() {
+            let path = String::from_utf8_lossy(&which_out.stdout)
+                .trim()
+                .to_string();
+            println!("  ✓ {} installed at {}", engine.name, path);
+            return Ok(InstallResult {
+                engine_id: engine.id.clone(),
+                version: engine.version.clone(),
+                install_path: path,
+                method_used: "brew".to_string(),
+            });
+        }
+    }
+
+    Err(guidance(&format!(
+        "brew install {} succeeded but '{}' was not found in PATH. \
+         Try opening a new terminal and running `lmforge start`.",
+        brew_formula, cmd
+    )))
 }
+
 
 /// Install via pip in an isolated venv (fallback for oMLX, primary for SGLang)
 async fn install_via_pip(
