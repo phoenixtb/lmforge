@@ -31,6 +31,8 @@ pub struct EngineConfig {
     #[serde(default)]
     pub brew_tap: Option<String>,
     #[serde(default)]
+    pub brew_tap_url: Option<String>,   // optional GitHub URL for 3rd-party taps
+    #[serde(default)]
     pub brew_formula: Option<String>,
     #[serde(default)]
     pub pip_fallback: Option<String>,

@@ -110,6 +110,7 @@ async fn install_via_brew(
     _data_dir: &std::path::Path,
 ) -> Result<InstallResult> {
     let brew_tap = engine.brew_tap.as_deref().unwrap_or("");
+    let brew_tap_url = engine.brew_tap_url.as_deref().unwrap_or("");
     let brew_formula = engine.brew_formula.as_deref().unwrap_or(&engine.id);
     let pip_pkg = engine
         .pip_package
@@ -126,13 +127,17 @@ async fn install_via_brew(
         eprintln!();
         eprintln!("  Recommended — Homebrew (https://brew.sh):");
         if !brew_tap.is_empty() {
-            eprintln!("    brew tap {}", brew_tap);
+            if !brew_tap_url.is_empty() {
+                eprintln!("    brew tap {} {}", brew_tap, brew_tap_url);
+            } else {
+                eprintln!("    brew tap {}", brew_tap);
+            }
         }
         eprintln!("    brew install {}", brew_formula);
         eprintln!();
-        eprintln!("  Alternative — pip (choose your own Python env):");
+        eprintln!("  Alternative — pip (use your own Python env):");
         eprintln!("    pip install {}      # system / conda / pyenv", pip_pkg);
-        eprintln!("    # or with extras for Apple Silicon:");
+        eprintln!("    # or with Metal acceleration (Apple Silicon):");
         eprintln!("    pip install {}[metal]", pip_pkg);
         eprintln!();
         eprintln!("  After installing, run:  lmforge start");
@@ -151,8 +156,13 @@ async fn install_via_brew(
     // ── 2. Tap the repository ─────────────────────────────────────────────────
     if !brew_tap.is_empty() {
         println!("  ⚙ Adding Homebrew tap: {}", brew_tap);
-        let status = tokio::process::Command::new("brew")
-            .args(["tap", brew_tap])
+        // Third-party taps need the source URL as a second argument
+        let mut tap_cmd = tokio::process::Command::new("brew");
+        tap_cmd.args(["tap", brew_tap]);
+        if !brew_tap_url.is_empty() {
+            tap_cmd.arg(brew_tap_url);
+        }
+        let status = tap_cmd
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .status()
