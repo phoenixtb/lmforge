@@ -1,15 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listModels, type ModelEntry } from '$lib/api';
+  import { listModels, getCatalog, fetchHfSizesBatch, type ModelEntry, type CatalogEntry } from '$lib/api';
   import { statusStore } from '$lib/stores/status';
   import { hardwareStore } from '$lib/stores/hardware';
   import { toast } from '$lib/stores/toasts';
   import { dragOnEmpty } from '$lib/drag';
   import ModelCard from '$lib/components/ModelCard.svelte';
+  import CatalogCard from '$lib/components/CatalogCard.svelte';
   import PullPanel from '$lib/components/PullPanel.svelte';
 
   // ── Tabs ───────────────────────────────────────────────────────────────────
-  type Tab = 'installed' | 'discover' | 'add';
+  type Tab = 'installed' | 'recommended' | 'discover' | 'add';
   let activeTab: Tab = 'installed';
 
   // ── Installed ──────────────────────────────────────────────────────────────
@@ -37,32 +38,123 @@
     toast.success(`Removed ${id}`);
   }
 
+  // ── Recommended (platform-filtered catalog) ────────────────────────────────
+  let catalogEntries: CatalogEntry[] = [];
+  let loadingCatalog = false;
+  let catalogError: string | null = null;
+  let catalogFetched = false;
+
+  // Derive the right format for this machine from the hardware profile.
+  // macOS uses MLX (Apple Silicon); Linux + Windows use GGUF.
+  $: platformFormat = (() => {
+    const os = ($hardwareStore?.os ?? '').toLowerCase();
+    if (os.includes('mac') || os.includes('darwin')) return 'mlx';
+    return 'gguf';
+  })();
+
+  // Role filter: '' = all, 'chat', 'embed', 'rerank', 'vision', 'code'
+  let catalogRole = '';
+
+  $: filteredCatalog = catalogEntries.filter((e) => {
+    if (catalogRole && e.role !== catalogRole) return false;
+    return true;
+  });
+
+  // Installed IDs + HF repos for "Already installed" state across both tabs
+  $: installedIds = new Set<string>([
+    ...models.map((m) => m.id),
+    ...models.filter((m) => m.hf_repo).map((m) => m.hf_repo as string),
+  ]);
+
+  // Real HF sizes: populated in the background after catalog loads
+  // key = hf_repo, value = bytes
+  let catalogSizes: Record<string, number> = {};
+  let catalogSizesReady = false;  // false = fetch still in flight
+
+  async function fetchCatalog() {
+    if (catalogFetched) return; // lazy — fetch only on first visit
+    loadingCatalog = true;
+    catalogError   = null;
+    try {
+      const res = await getCatalog(platformFormat);
+      catalogEntries = res.entries;
+      catalogFetched = true;
+      // Fire background size fetch — cards update reactively as data arrives
+      fetchHfSizesBatch(res.entries.map((e) => e.hf_repo)).then((sizes) => {
+        catalogSizes = sizes;
+        catalogSizesReady = true;
+      });
+    } catch (e) {
+      catalogError = String(e);
+      catalogSizesReady = true; // avoid perpetual loading skeleton on error
+    } finally {
+      loadingCatalog = false;
+    }
+  }
+
+  function onTabChange(tab: Tab) {
+    activeTab = tab;
+    if (tab === 'recommended') fetchCatalog();
+  }
+
+  function onCatalogPulled() {
+    fetchModels(); // refresh so "installed" badges update everywhere
+  }
+
   // ── Discover ───────────────────────────────────────────────────────────────
-  let searchQuery = '';
-  let searchResults: HfModel[] = [];
-  let searching = false;
+  let searchQuery    = '';
+  let searchResults: CatalogEntry[] = []; // reuse CatalogEntry shape
+  let searching      = false;
   let searchError: string | null = null;
   let searchTimer: ReturnType<typeof setTimeout>;
 
-  interface HfModel {
-    id: string; author: string; downloads: number;
-    lastModified: string; tags: string[]; size_gb?: number;
+  // The HF API model shape (internal, before conversion)
+  interface HfApiModel {
+    id: string;
+    downloads: number;
+    lastModified: string;
+    tags?: string[];
+    gated?: boolean;
   }
 
-  $: engineFilter = (() => {
+  // Engine Format hint for HF search filter badge tooltip
+  $: engineFormat = (() => {
     const id = $statusStore.engine_id.toLowerCase();
-    if (id.includes('mlx'))              return 'mlx';
+    if (id.includes('mlx'))                      return 'mlx';
     if (id.includes('llama') || id.includes('gguf')) return 'gguf';
-    return '';
+    return platformFormat; // fallback to hardware-detected
   })();
 
-  $: vramGb = $hardwareStore?.vram_gb ?? 0;
+  /** Infer role from HF tags/model ID — mirrors server-side infer_role() */
+  function inferRole(modelId: string, tags: string[]): string {
+    const s = [modelId, ...tags].join(' ').toLowerCase();
+    if (s.includes('rerank') || s.includes('reranker')) return 'rerank';
+    if (s.includes('vl-embed') || s.includes('vl_embed')) return 'vision';
+    if (s.includes('embed') || s.includes('embedding'))   return 'embed';
+    if (s.includes('vision') || s.includes('-vl') || s.includes('vision-language')) return 'vision';
+    if (s.includes('code') || s.includes('coder')) return 'code';
+    return 'chat';
+  }
 
-  function vramBadge(sizeGb?: number): { label: string; cls: string } {
-    if (!sizeGb || !vramGb) return { label: '?',           cls: 'badge--grey'  };
-    if (sizeGb <= vramGb * 0.7) return { label: '✓ Fits',     cls: 'badge--green' };
-    if (sizeGb <= vramGb)       return { label: '⚠ Marginal', cls: 'badge--amber' };
-    return                             { label: '✗ Too large', cls: 'badge--red'   };
+  // Discover sizes: populated from HF siblings data returned in the search response
+  let discoverSizes: Record<string, number> = {};
+  let discoverSizesReady = false;
+
+  /** Convert a raw HF API model into a CatalogEntry so CatalogCard can be reused */
+  function hfToEntry(m: HfApiModel): CatalogEntry {
+    const safeTags = m.tags ?? [];
+
+    // Tags: split model id on '/' and '-' for meaningful chips, supplement with HF tags
+    const idParts = m.id.split('/').pop()?.split(/[-_]/) ?? [];
+    const tags = [...new Set([...idParts, ...safeTags.slice(0, 4)])].slice(0, 6);
+
+    return {
+      shortcut: m.id,
+      hf_repo:  m.id,
+      format:   engineFormat,
+      tags,
+      role:     inferRole(m.id, safeTags),
+    };
   }
 
   function onSearchInput() {
@@ -74,35 +166,42 @@
   async function doSearch() {
     if (!searchQuery.trim()) return;
     searching = true; searchError = null;
+    discoverSizes = {};
+    discoverSizesReady = false;
     try {
-      const filter = engineFilter ? `&filter=${engineFilter}` : '';
+      const filter = engineFormat ? `&filter=${engineFormat}` : '';
       const url = `https://huggingface.co/api/models?search=${encodeURIComponent(searchQuery)}&limit=20&sort=downloads${filter}`;
-      const data = await (await fetch(url)).json();
-      searchResults = data.map((m: Record<string,unknown>) => ({
-        id: m.id, author: (m.id as string).split('/')[0],
-        downloads: m.downloads ?? 0, lastModified: m.lastModified ?? '',
-        tags: m.tags ?? [], size_gb: undefined,
-      }));
-    } catch (e) { searchError = String(e); }
-    finally     { searching = false; }
+      const data: HfApiModel[] = await (await fetch(url)).json();
+      searchResults = data.map(hfToEntry);
+      // Batch-fetch real sizes from individual model API (search API doesn't expose usedStorage)
+      fetchHfSizesBatch(searchResults.map((e) => e.hf_repo)).then((sizes) => {
+        discoverSizes = sizes;
+        discoverSizesReady = true;
+      });
+    } catch (e) {
+      searchError = String(e);
+      discoverSizesReady = true;
+    } finally {
+      searching = false;
+    }
   }
-
-  function pullFromDiscover(id: string) { activeTab = 'add'; pullPrefill = id; }
 
   // ── Add ────────────────────────────────────────────────────────────────────
   let pullPrefill = '';
   function onPullDone() { fetchModels(); activeTab = 'installed'; }
 
   const TABS: { id: Tab; label: string }[] = [
-    { id: 'installed', label: 'Installed' },
-    { id: 'discover',  label: 'Discover'  },
-    { id: 'add',       label: 'Add Custom'},
+    { id: 'installed',   label: 'Installed'   },
+    { id: 'recommended', label: 'Recommended' },
+    { id: 'discover',    label: 'Discover'    },
+    { id: 'add',         label: 'Add Custom'  },
   ];
+
+  const ROLE_FILTERS = ['chat', 'embed', 'rerank', 'vision', 'code'];
 </script>
 
 <svelte:head><title>LMForge — Model Library</title></svelte:head>
 
-<!-- Renders inside .content-region from +layout.svelte — no sidebar here -->
 <div class="page">
 
   <!-- Toolbar -->
@@ -122,11 +221,17 @@
         id="tab-{t.id}" role="tab"
         aria-selected={activeTab === t.id}
         class="tab-btn" class:active={activeTab === t.id}
-        onclick={() => (activeTab = t.id)}
+        onclick={() => onTabChange(t.id)}
       >
         {t.label}
         {#if t.id === 'installed' && models.length > 0}
           <span class="tab-count">{models.length}</span>
+        {/if}
+        {#if t.id === 'recommended' && catalogEntries.length > 0}
+          <span class="tab-count">{catalogEntries.length}</span>
+        {/if}
+        {#if t.id === 'discover' && searchResults.length > 0}
+          <span class="tab-count">{searchResults.length}</span>
         {/if}
       </button>
     {/each}
@@ -135,7 +240,7 @@
   <!-- Tab panels -->
   <div class="tab-body">
 
-    <!-- Installed -->
+    <!-- ── Installed ── -->
     {#if activeTab === 'installed'}
       {#if loadingModels}
         <div class="loading-grid">
@@ -152,9 +257,9 @@
         <div class="empty-full">
           <div class="es-icon">📦</div>
           <h3>No models installed</h3>
-          <p>Pull a model from the <strong>Discover</strong> tab or add a custom one.</p>
-          <button class="btn btn--primary" onclick={() => (activeTab = 'discover')}>
-            Browse Discover →
+          <p>Browse <strong>Recommended</strong> for curated models, or search <strong>Discover</strong> for anything on HuggingFace.</p>
+          <button class="btn btn--primary" onclick={() => onTabChange('recommended')}>
+            Browse Recommended →
           </button>
         </div>
       {:else}
@@ -165,73 +270,155 @@
         </div>
       {/if}
 
-    <!-- Discover -->
-    {:else if activeTab === 'discover'}
-      <div class="discover-panel">
-        <div class="search-row">
-          <input
-            id="discover-search" type="search"
-            class="search-input"
-            placeholder="Search HuggingFace (e.g. Qwen3, Llama, Mistral)…"
-            bind:value={searchQuery}
-            oninput={onSearchInput}
-            onkeydown={(e) => e.key === 'Enter' && doSearch()}
-          />
-          {#if engineFilter}
-            <span class="badge badge--blue" title="Pre-filtered for your engine">{engineFilter}</span>
-          {/if}
-          <button class="btn btn--primary"
-            onclick={doSearch}
-            disabled={searching || searchQuery.trim().length < 2}>
-            {searching ? '…' : 'Search'}
-          </button>
+    <!-- ── Recommended ── -->
+    {:else if activeTab === 'recommended'}
+      {#if loadingCatalog}
+        <div class="loading-grid">
+          {#each Array(6) as _}
+            <div class="skeleton" style="height:130px;border-radius:var(--radius-lg);"></div>
+          {/each}
         </div>
 
-        {#if searchError}
-          <div class="tab-error">{searchError}</div>
-        {:else if searching}
-          <div class="loading-grid">
-            {#each Array(4) as _}
-              <div class="skeleton" style="height:80px;border-radius:var(--radius-lg);"></div>
+      {:else if catalogError}
+        <div class="tab-error" role="alert">
+          Failed to load recommended models: {catalogError}
+          <button class="btn btn--ghost btn--sm" onclick={() => { catalogFetched = false; fetchCatalog(); }} style="margin-top:10px;">Retry</button>
+        </div>
+
+      {:else}
+        <!-- Role filter + count -->
+        <div class="filter-bar">
+          <div class="filter-group">
+            <span class="filter-label">Role</span>
+            <button class="filter-pill" class:active={catalogRole === ''} onclick={() => catalogRole = ''}>All</button>
+            {#each ROLE_FILTERS as r}
+              <button class="filter-pill" class:active={catalogRole === r} onclick={() => catalogRole = r}>{r}</button>
             {/each}
           </div>
-        {:else if searchResults.length === 0 && searchQuery.trim().length >= 2}
-          <div class="empty-full"><p>No results for "<strong>{searchQuery}</strong>"</p></div>
+          <span class="filter-count">{filteredCatalog.length} models · {platformFormat.toUpperCase()}</span>
+        </div>
+
+        {#if filteredCatalog.length === 0}
+          <div class="empty-full">
+            <div class="es-icon">🔍</div>
+            <h3>No matches</h3>
+            <p>Try changing the role filter.</p>
+          </div>
         {:else}
-          <div class="hf-grid">
-            {#each searchResults as m}
-              {@const vb = vramBadge(m.size_gb)}
-              <div class="hf-card">
-                <div class="hf-card-top">
-                  <span class="hf-id mono">{m.id}</span>
-                  <span class="badge {vb.cls}">{vb.label}</span>
-                </div>
-                <div class="hf-meta">↓ {m.downloads.toLocaleString()} downloads
-                  {#if m.tags.length > 0} · {m.tags.slice(0,3).join(', ')}{/if}
-                </div>
-                <button class="btn btn--ghost btn--sm"
-                  style="margin-top:auto;align-self:flex-start;"
-                  onclick={() => pullFromDiscover(m.id)}>
-                  Pull →
-                </button>
-              </div>
+          <div class="model-grid" role="list">
+            {#each filteredCatalog as entry (entry.shortcut + entry.format)}
+              <CatalogCard
+                {entry}
+                {installedIds}
+                onPulled={onCatalogPulled}
+                sizeBytes={catalogSizesReady ? (catalogSizes[entry.hf_repo] ?? null) : undefined}
+              />
             {/each}
+          </div>
+        {/if}
+      {/if}
+
+    <!-- ── Discover ── -->
+    {:else if activeTab === 'discover'}
+      <div class="discover-panel">
+
+        <!-- Search bar -->
+        <div class="search-header">
+          <div class="search-row">
+            <input
+              id="discover-search" type="search"
+              class="search-input"
+              placeholder="Search HuggingFace (e.g. Qwen3, Llama, Mistral, nomic-embed)…"
+              bind:value={searchQuery}
+              oninput={onSearchInput}
+              onkeydown={(e) => e.key === 'Enter' && doSearch()}
+            />
+            <button
+              class="btn btn--primary"
+              onclick={doSearch}
+              disabled={searching || searchQuery.trim().length < 2}
+            >
+              {searching ? '…' : 'Search'}
+            </button>
+          </div>
+
+          <!-- Info bar: engine filter hint + HF tooltip -->
+          <div class="search-info">
+            {#if engineFormat}
+              <span class="info-chip">
+                <span class="info-dot"></span>
+                Filtering for <strong>{engineFormat.toUpperCase()}</strong> models compatible with your engine
+              </span>
+            {/if}
+            <a
+              href="https://huggingface.co/models"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="hf-link"
+              title="Browse all models on HuggingFace"
+            >
+              <span class="hf-logo">🤗</span> HuggingFace
+            </a>
+          </div>
+        </div>
+
+        <!-- Results -->
+        {#if searchError}
+          <div class="tab-error" role="alert">{searchError}</div>
+        {:else if searching}
+          <div class="loading-grid">
+            {#each Array(6) as _}
+              <div class="skeleton" style="height:130px;border-radius:var(--radius-lg);"></div>
+            {/each}
+          </div>
+        {:else if searchResults.length > 0}
+          <div class="search-results-header">
+            <span class="filter-count">{searchResults.length} results for "<strong>{searchQuery}</strong>"</span>
+          </div>
+          <div class="model-grid" role="list">
+            {#each searchResults as entry (entry.hf_repo)}
+              <CatalogCard
+                {entry}
+                {installedIds}
+                onPulled={onCatalogPulled}
+                showHfLink={true}
+                sizeBytes={discoverSizesReady ? (discoverSizes[entry.hf_repo] ?? null) : undefined}
+              />
+            {/each}
+          </div>
+        {:else if searchQuery.trim().length >= 2}
+          <div class="empty-full">
+            <div class="es-icon">🔍</div>
+            <h3>No results</h3>
+            <p>No {engineFormat.toUpperCase()} models found for "<strong>{searchQuery}</strong>".<br/>Try a broader term or <a href="https://huggingface.co/models" target="_blank" rel="noopener">browse HuggingFace directly</a>.</p>
+          </div>
+        {:else}
+          <!-- Landing state — no search yet -->
+          <div class="discover-landing">
+            <div class="landing-icon">🤗</div>
+            <h3>Search HuggingFace</h3>
+            <p>Find any model by name, family, or task. Results are pre-filtered for <strong>{engineFormat.toUpperCase()}</strong> models compatible with your engine.</p>
+            <div class="suggest-chips">
+              {#each ['Qwen3', 'Llama', 'Gemma', 'Mistral', 'nomic-embed', 'bge-reranker'] as term}
+                <button
+                  class="suggest-chip"
+                  onclick={() => { searchQuery = term; doSearch(); }}
+                >{term}</button>
+              {/each}
+            </div>
           </div>
         {/if}
       </div>
 
-    <!-- Add -->
+    <!-- ── Add Custom ── -->
     {:else}
-      <div class="add-panel">
-        <PullPanel prefill={pullPrefill} on:done={onPullDone} />
-      </div>
+      <PullPanel prefill={pullPrefill} ondone={onPullDone} />
     {/if}
 
   </div><!-- /tab-body -->
 </div><!-- /page -->
 
 <style>
-  /* Renders inside .content-region (flex col, full height) from layout */
   .page { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 
   /* Toolbar */
@@ -271,15 +458,39 @@
   /* Tab body */
   .tab-body { flex: 1; overflow-y: auto; padding: 18px 20px; }
 
+  /* ── Filter bar (shared: Recommended + Discover results) ─────────────────── */
+  .filter-bar {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    margin-bottom: 16px;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+  .filter-group { display: flex; align-items: center; gap: 5px; }
+  .filter-label { font-size: 10.5px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.5px; margin-right: 2px; }
+  .filter-pill {
+    padding: 3px 10px; background: none;
+    border: 1px solid var(--border); border-radius: 99px;
+    color: var(--text-3); font-size: 11.5px; cursor: pointer;
+    transition: all 110ms ease;
+  }
+  .filter-pill:hover { border-color: var(--border-2); color: var(--text-2); }
+  .filter-pill.active {
+    background: var(--accent); border-color: var(--accent);
+    color: var(--bg); font-weight: 600;
+  }
+  .filter-count { margin-left: auto; font-size: 11px; color: var(--text-3); }
+
   /* Grids */
   .model-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 12px;
   }
   .loading-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 12px;
   }
 
@@ -291,7 +502,7 @@
     display: flex; flex-direction: column;
   }
 
-  /* Empty full-panel state */
+  /* Empty */
   .empty-full {
     display: flex; flex-direction: column; align-items: center;
     justify-content: center; min-height: 200px; gap: 12px;
@@ -299,35 +510,82 @@
   }
   .es-icon { font-size: 40px; }
   .empty-full h3 { font-size: 15px; color: var(--text); }
-  .empty-full p  { font-size: 13px; color: var(--text-2); max-width: 280px; }
+  .empty-full p  { font-size: 13px; color: var(--text-2); max-width: 300px; line-height: 1.5; }
+  .empty-full a  { color: var(--accent-2); }
 
-  /* Discover */
+  /* ── Discover ─────────────────────────────────────────────────────────────── */
   .discover-panel { display: flex; flex-direction: column; gap: 16px; }
-  .search-row     { display: flex; gap: 8px; align-items: center; }
+
+  .search-header {
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .search-row { display: flex; gap: 8px; align-items: center; }
   .search-input {
     flex: 1;
     background: var(--surface-2); border: 1px solid var(--border-2);
     border-radius: var(--radius-sm); color: var(--text);
     font-family: var(--font-sans); font-size: 12.5px;
-    padding: 7px 10px; outline: none;
+    padding: 8px 12px; outline: none;
     transition: border-color 110ms ease; user-select: text;
   }
   .search-input:focus { border-color: var(--accent); }
   .search-input::placeholder { color: var(--text-3); }
 
-  .hf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
-  .hf-card {
-    background: var(--surface-2); border: 1px solid var(--border);
-    border-radius: var(--radius-lg); padding: 12px;
-    display: flex; flex-direction: column; gap: 6px;
-    transition: border-color 140ms ease, transform 140ms ease;
-    animation: fade-in 180ms ease;
+  /* Engine info bar */
+  .search-info {
+    display: flex; align-items: center; gap: 12px;
+    padding: 6px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
   }
-  .hf-card:hover { border-color: var(--border-2); transform: translateY(-1px); }
-  .hf-card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  .hf-id  { font-size: 12px; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-  .hf-meta { font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .info-chip {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11.5px; color: var(--text-2); flex: 1;
+  }
+  .info-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent); flex-shrink: 0;
+    box-shadow: 0 0 4px var(--accent);
+  }
+  .hf-link {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 11.5px; color: var(--text-3);
+    text-decoration: none; white-space: nowrap;
+    transition: color 110ms ease;
+  }
+  .hf-link:hover { color: var(--accent-2); }
+  .hf-logo { font-size: 13px; }
+
+  /* Search results header */
+  .search-results-header {
+    display: flex; justify-content: flex-end; margin-bottom: 4px;
+  }
+
+  /* ── Landing state ─────────────────────────────────────────────────────────── */
+  .discover-landing {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; min-height: 280px; gap: 14px; text-align: center;
+  }
+  .landing-icon { font-size: 48px; }
+  .discover-landing h3 { font-size: 16px; font-weight: 600; color: var(--text); }
+  .discover-landing p  { font-size: 13px; color: var(--text-2); max-width: 340px; line-height: 1.6; }
+
+  .suggest-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 4px; }
+  .suggest-chip {
+    padding: 5px 14px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 99px; color: var(--text-2);
+    font-size: 12px; font-family: var(--font-mono); cursor: pointer;
+    transition: all 120ms ease;
+  }
+  .suggest-chip:hover {
+    border-color: var(--accent); color: var(--accent-2);
+    background: var(--surface-3);
+    transform: translateY(-1px);
+  }
 
   /* Add custom */
-  .add-panel { max-width: 640px; }
+
+
 </style>

@@ -216,7 +216,13 @@
           <div class="hw-card">
             <div class="hwc-head">
               <div class="hwc-title-row">
-                <span class="hwc-icon">⬡</span>
+                <span class="hwc-icon">
+                  <!-- cpu-chip icon -->
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"
+                       stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;" aria-hidden="true">
+                    <path d="M8 3H7a2 2 0 00-2 2v5a2 2 0 01-2 2 2 2 0 012 2v5c0 1.1.9 2 2 2h1M16 3h1a2 2 0 012 2v5a2 2 0 002 2 2 2 0 00-2 2v5a2 2 0 01-2 2h-1M12 7v10M9 7h6M9 11h6M9 15h6"/>
+                  </svg>
+                </span>
                 <span class="hwc-title">GPU</span>
                 <span class="hwc-sub">{hw.gpu_vendor ? hw.gpu_vendor.toUpperCase() : '—'}{#if hw.unified_mem} · Unified{/if}</span>
               </div>

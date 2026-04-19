@@ -32,15 +32,17 @@
     "_comment_embed": "--- Embedding models (GGUF format, served by llama.cpp with --embeddings) ---",
     "nomic-embed-text:v1.5": "nomic-ai/nomic-embed-text-v1.5-GGUF",
     "nomic-embed-text:v2": "nomic-ai/nomic-embed-text-v2-moe-GGUF",
-    "nomic-modernbert-embed": "nomic-ai/nomic-modernbert-embed-base-GGUF",
-    "bge-m3": "gpustack/bge-m3-GGUF",
-    "gte-qwen2.5:1.5b": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+    "nomic-modernbert-embed:f16": "nomic-ai/nomic-modernbert-embed-base-GGUF",
+    "bge-m3:f16": "gpustack/bge-m3-GGUF",
+    "qwen3-embed:0.6b:q4": "Qwen/Qwen3-Embedding-0.6B-GGUF",
+    "qwen3-embed:4b:q4": "Qwen/Qwen3-Embedding-4B-GGUF",
+    "qwen3-embed:8b:q4": "Qwen/Qwen3-Embedding-8B-GGUF",
 
     "_comment_rerank": "--- Re-ranking models (GGUF, llama.cpp only via --reranking; 501 on oMLX/SGLang) ---",
-    "bge-reranker-v2-m3": "gpustack/bge-reranker-v2-m3-GGUF",
-    "bge-reranker:large": "gpustack/bge-reranker-large-GGUF",
-    "jina-reranker-v2": "gpustack/jina-reranker-v2-base-multilingual-GGUF",
-    "qwen3-reranker:0.6b": "Qwen/Qwen3-Reranker-0.6B-GGUF",
-    "qwen3-reranker:1.7b": "Qwen/Qwen3-Reranker-1.7B-GGUF",
-    "qwen3-reranker:4b": "Qwen/Qwen3-Reranker-4B-GGUF"
+    "bge-reranker-v2-m3:f16": "gpustack/bge-reranker-v2-m3-GGUF",
+    "bge-reranker:large:f16": "gpustack/bge-reranker-large-GGUF",
+    "jina-reranker-v2:f16": "gpustack/jina-reranker-v2-base-multilingual-GGUF",
+    "qwen3-reranker:0.6b:q4": "Qwen/Qwen3-Reranker-0.6B-GGUF",
+    "qwen3-reranker:1.7b:q4": "Qwen/Qwen3-Reranker-1.7B-GGUF",
+    "qwen3-reranker:4b:q4": "Qwen/Qwen3-Reranker-4B-GGUF"
 }

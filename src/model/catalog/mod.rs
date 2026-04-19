@@ -96,6 +96,87 @@ pub fn bundled_shortcuts(format_str: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+// ── UI catalog listing ────────────────────────────────────────────────────────
+
+/// A structured catalog entry returned by `GET /lf/catalog`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CatalogEntry {
+    /// The shortcut key, e.g. `"qwen3:8b:4bit"`.
+    pub shortcut: String,
+    /// The resolved HuggingFace repo, e.g. `"mlx-community/Qwen3-8B-4bit"`.
+    pub hf_repo: String,
+    /// Engine format: `"mlx"` or `"gguf"`.
+    pub format: String,
+    /// Tags derived by splitting the shortcut on `':'`, e.g. `["qwen3","8b","4bit"]`.
+    pub tags: Vec<String>,
+    /// Inferred capability role: `"chat"`, `"embed"`, `"rerank"`, `"vision"`, or `"code"`.
+    pub role: String,
+}
+
+/// Return all catalog entries for the requested format(s).
+/// Pass an empty string to get entries from both `mlx` and `gguf` catalogs.
+/// `_comment_*` keys and entries without a '/' in the value are silently skipped.
+/// Results are sorted by shortcut name.
+pub fn list_for_ui(format: &str) -> Vec<CatalogEntry> {
+    let formats: &[(&str, &str)] = match format.to_lowercase().as_str() {
+        "mlx"  => &[("mlx",  BUNDLED_MLX)],
+        "gguf" => &[("gguf", BUNDLED_GGUF)],
+        _      => &[("mlx",  BUNDLED_MLX), ("gguf", BUNDLED_GGUF)],
+    };
+
+    let mut entries: Vec<CatalogEntry> = Vec::new();
+
+    for &(fmt, content) in formats {
+        let map: HashMap<String, String> = match serde_json::from_str(content) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        for (shortcut, hf_repo) in map {
+            if shortcut.starts_with('_') { continue; } // skip _comment_ keys
+            if !hf_repo.contains('/') { continue; }    // skip comment values
+
+            let tags: Vec<String> = shortcut.split(':').map(str::to_string).collect();
+            let role = infer_role(&shortcut, &hf_repo);
+
+            entries.push(CatalogEntry {
+                shortcut,
+                hf_repo,
+                format: fmt.to_string(),
+                tags,
+                role,
+            });
+        }
+    }
+
+    entries.sort_by(|a, b| a.shortcut.cmp(&b.shortcut));
+    entries
+}
+
+/// Infer the primary capability role from keywords in the shortcut + repo name.
+fn infer_role(shortcut: &str, repo: &str) -> String {
+    let s = format!("{shortcut} {repo}").to_lowercase();
+    if s.contains("rerank") || s.contains("reranker") {
+        return "rerank".to_string();
+    }
+    // vl-embed must come before the generic embed check
+    if s.contains("vl-embed") || s.contains("vl_embed") {
+        return "vision".to_string();
+    }
+    if s.contains("embed") || s.contains("embedding") {
+        return "embed".to_string();
+    }
+    if s.contains("vision") || s.contains("-vl") || s.contains("_vl") {
+        return "vision".to_string();
+    }
+    if s.contains("code") || s.contains("coder") {
+        return "code".to_string();
+    }
+    "chat".to_string()
+}
+
+// ── Legacy safety net ─────────────────────────────────────────────────────────
+
 /// Minimal hard-coded fallback for edge cases where even the bundled catalog fails.
 fn legacy_curations(normalized: &str, format_str: &str) -> Option<String> {
     match format_str {

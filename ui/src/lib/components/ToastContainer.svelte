@@ -36,22 +36,36 @@
   .toast {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     padding: 10px 14px;
     border-radius: var(--radius);
-    border: 1px solid transparent;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-left-width: 3px;
     font-size: 12.5px;
     font-weight: 500;
-    box-shadow: var(--shadow);
+    /* Solid opaque surface — never transparent */
+    background: #2c2c32;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.55), 0 1px 4px rgba(0,0,0,0.35);
     pointer-events: all;
-    animation: slide-in-up 200ms ease;
-    max-width: 340px;
+    animation: slide-in-up 200ms cubic-bezier(0.22, 1, 0.36, 1);
+    max-width: 360px;
+    min-width: 220px;
+    /* Text is always near-white for readability */
+    color: rgba(255, 255, 255, 0.90);
   }
 
-  .toast--success { background: var(--success-dim); border-color: var(--success); color: var(--success); }
-  .toast--error   { background: var(--danger-dim);  border-color: var(--danger);  color: var(--danger); }
-  .toast--warn    { background: var(--warn-dim);    border-color: var(--warn);    color: var(--warn); }
-  .toast--info    { background: var(--accent-dim);  border-color: var(--accent);  color: var(--accent-2); }
+  /* Left-border accent + icon color differ per kind */
+  .toast--success { border-left-color: var(--success); }
+  .toast--success .toast-icon { color: var(--success); }
+
+  .toast--error   { border-left-color: var(--danger); }
+  .toast--error   .toast-icon { color: var(--danger); }
+
+  .toast--warn    { border-left-color: var(--warn); }
+  .toast--warn    .toast-icon { color: var(--warn); }
+
+  .toast--info    { border-left-color: var(--accent); }
+  .toast--info    .toast-icon { color: var(--accent-2); }
 
   .toast-icon { font-size: 13px; flex-shrink: 0; }
   .toast-msg  { flex: 1; line-height: 1.4; }
@@ -59,13 +73,17 @@
   .toast-close {
     background: none;
     border: none;
-    color: inherit;
+    color: rgba(255, 255, 255, 0.38);
     cursor: pointer;
-    opacity: 0.6;
     font-size: 11px;
     padding: 0 2px;
     flex-shrink: 0;
-    transition: opacity 100ms;
+    transition: color 100ms;
   }
-  .toast-close:hover { opacity: 1; }
+  .toast-close:hover { color: rgba(255, 255, 255, 0.75); }
+
+  @keyframes slide-in-up {
+    from { opacity: 0; transform: translateY(10px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0)    scale(1); }
+  }
 </style>

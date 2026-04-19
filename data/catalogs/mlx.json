@@ -10,21 +10,17 @@
     "qwen3.5:4b:6bit": "mlx-community/Qwen3.5-4B-6bit",
     "qwen3.5:9b:4bit": "mlx-community/Qwen3.5-9B-OptiQ-4bit",
     "qwen3.5:9b:6bit": "mlx-community/Qwen3.5-9B-6bit",
-    "qwen3.5": "mlx-community/Qwen3.5-4B-4bit",
 
     "gemma4:e2b:4bit": "mlx-community/gemma-4-e2b-it-4bit",
     "gemma4:e4b:4bit": "mlx-community/gemma-4-e4b-it-4bit",
     "gemma4:e4b:6bit": "mlx-community/gemma-4-e4b-it-6bit",
-    "gemma4:e4b": "mlx-community/gemma-4-e4b-it-4bit",
 
     "gemma3:1b:4bit": "mlx-community/gemma-3-1b-it-4bit",
     "gemma3:4b:4bit": "mlx-community/gemma-3-4b-it-4bit",
     "gemma3:12b:4bit": "mlx-community/gemma-3-12b-it-4bit",
-    "gemma3:4b": "mlx-community/gemma-3-4b-it-4bit",
 
     "minimax_m2.7:229b:5bit": "mlx-community/MiniMax-M2.7-5bit",
     "minimax_m2.7:229b:4bit": "mlx-community/MiniMax-M2.7-4bit",
-    "minimax_m2.7:229b": "mlx-community/MiniMax-M2.7-4bit",
 
     "phi4:4b:4bit": "mlx-community/Phi-4-mini-instruct-4bit",
     "phi4:14b:4bit": "mlx-community/phi-4-4bit",
@@ -40,18 +36,13 @@
     "nomic-modernbert-embed:8bit": "mlx-community/nomicai-modernbert-embed-base-8bit",
     "snowflake-arctic-embed-l:v2:4bit": "mlx-community/snowflake-arctic-embed-l-v2.0-4bit",
     "snowflake-arctic-embed-l:v2:8bit": "mlx-community/snowflake-arctic-embed-l-v2.0-8bit",
-    "snowflake-arctic-embed-l:v2": "mlx-community/snowflake-arctic-embed-l-v2.0-4bit",
     "qwen3-embed:0.6b:4bit": "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
     "qwen3-embed:0.6b:8bit": "mlx-community/Qwen3-Embedding-0.6B-8bit",
     "qwen3-embed:4b:4bit": "mlx-community/Qwen3-Embedding-4B-4bit-DWQ",
     "qwen3-embed:8b:4bit": "mlx-community/Qwen3-Embedding-8B-4bit-DWQ",
-    "qwen3-embed:0.6b": "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
-    "qwen3-embed:4b": "mlx-community/Qwen3-Embedding-4B-4bit-DWQ",
-    "qwen3-embed:8b": "mlx-community/Qwen3-Embedding-8B-4bit-DWQ",
 
     "_comment_vl_embed": "--- Multimodal (vision+text) embedding — different use case from text-only embed ---",
     "qwen3-vl-embed:2b:4bit": "mlx-community/Qwen3-VL-Embedding-2B-4bit",
     "qwen3-vl-embed:2b:6bit": "mlx-community/Qwen3-VL-Embedding-2B-6bit",
-    "qwen3-vl-embed:2b:8bit": "mlx-community/Qwen3-VL-Embedding-2B-8bit",
-    "qwen3-vl-embed:2b": "mlx-community/Qwen3-VL-Embedding-2B-4bit"
+    "qwen3-vl-embed:2b:8bit": "mlx-community/Qwen3-VL-Embedding-2B-8bit"
 }

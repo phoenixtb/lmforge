@@ -163,6 +163,117 @@ if [ "$OS" = "Linux" ]; then
     fi
 fi
 
+# ── Linux: GPU probe advisory ──────────────────────────────────────────────────
+# LMForge uses nvidia-smi / rocm-smi to display live GPU stats in the UI and
+# to make VRAM-aware model scheduling decisions.
+#
+# These tools ship with GPU driver packages, NOT with LMForge itself.
+# We NEVER install GPU drivers automatically — that is too invasive and can
+# break an existing driver stack. Instead we:
+#   • Detect the GPU vendor via lspci (if available)
+#   • Check whether the management CLI is in PATH
+#   • If missing, install the lightweight *utils* package (not the full driver)
+#     on supported distros, or print clear manual instructions otherwise.
+if [ "$OS" = "Linux" ]; then
+    echo ""
+    info "Checking GPU tooling..."
+
+    # Detect GPU vendor from PCI device list (best-effort — lspci may not exist)
+    HAS_NVIDIA=0
+    HAS_AMD=0
+    if command -v lspci &>/dev/null; then
+        lspci_out="$(lspci 2>/dev/null)"
+        echo "$lspci_out" | grep -qi "nvidia"                                  && HAS_NVIDIA=1
+        echo "$lspci_out" | grep -qi "\(amd\|radeon\|advanced micro devices\)" && HAS_AMD=1
+    fi
+
+    # ── NVIDIA ────────────────────────────────────────────────────────────────
+    if [ "$HAS_NVIDIA" = "1" ]; then
+        info "NVIDIA GPU detected."
+        if command -v nvidia-smi &>/dev/null; then
+            success "nvidia-smi found — GPU stats will be available."
+        else
+            warn "NVIDIA GPU detected but nvidia-smi is not in PATH."
+            warn "Without it LMForge cannot display GPU utilisation or make VRAM-aware scheduling decisions."
+            echo ""
+            echo "  LMForge will NOT install GPU drivers automatically."
+            echo "  To enable GPU stats, install the NVIDIA utilities package for your distro:"
+            echo ""
+
+            INSTALLED_NVIDIA_UTILS=0
+            if command -v apt-get &>/dev/null; then
+                # Find the highest available nvidia-utils-<ver> for the installed driver.
+                NVIDIA_VER="$(apt-cache search nvidia-utils 2>/dev/null \
+                    | grep -oP 'nvidia-utils-\K[0-9]+' | sort -rn | head -1)"
+                if [ -n "$NVIDIA_VER" ]; then
+                    NVIDIA_UTILS_PKG="nvidia-utils-${NVIDIA_VER}"
+                    echo "    Install (Ubuntu/Debian):  sudo apt-get install -y ${NVIDIA_UTILS_PKG}"
+                    echo ""
+                    printf "  Install %s now? [y/N] " "$NVIDIA_UTILS_PKG"
+                    read -r REPLY </dev/tty
+                    if [ "$REPLY" = "y" ] || [ "$REPLY" = "Y" ]; then
+                        if sudo apt-get install -y "$NVIDIA_UTILS_PKG" 2>/dev/null; then
+                            success "nvidia-smi installed via ${NVIDIA_UTILS_PKG}."
+                            INSTALLED_NVIDIA_UTILS=1
+                        else
+                            warn "apt-get install failed. Please install manually."
+                        fi
+                    fi
+                else
+                    echo "    sudo apt-get install nvidia-utils-<version>"
+                    echo "    (replace <version> with your driver series, e.g. 535, 550, 570)"
+                fi
+            elif command -v dnf &>/dev/null; then
+                echo "    Install (Fedora/RHEL):  sudo dnf install -y akmod-nvidia xorg-x11-drv-nvidia-cuda-libs"
+                echo "    RPM Fusion guide:       https://rpmfusion.org/Howto/NVIDIA"
+            elif command -v pacman &>/dev/null; then
+                echo "    Install (Arch):         sudo pacman -S nvidia-utils"
+            else
+                echo "    See: https://www.nvidia.com/Download/index.aspx"
+            fi
+
+            if [ "$INSTALLED_NVIDIA_UTILS" = "0" ]; then
+                echo ""
+                warn "GPU stats will be unavailable until nvidia-smi is installed."
+                warn "You can install it later and restart LMForge — no reinstall needed."
+            fi
+        fi
+
+    # ── AMD ───────────────────────────────────────────────────────────────────
+    elif [ "$HAS_AMD" = "1" ]; then
+        info "AMD GPU detected."
+        if command -v rocm-smi &>/dev/null; then
+            success "rocm-smi found — GPU stats will be available."
+        else
+            warn "AMD GPU detected but rocm-smi is not in PATH."
+            warn "Without it LMForge cannot display GPU utilisation or make VRAM-aware scheduling decisions."
+            echo ""
+            echo "  To enable GPU stats, install ROCm SMI for your distro:"
+            echo ""
+            if command -v apt-get &>/dev/null; then
+                echo "    sudo apt-get install -y rocm-smi-lib"
+            elif command -v dnf &>/dev/null; then
+                echo "    sudo dnf install -y rocm-smi"
+            elif command -v pacman &>/dev/null; then
+                echo "    sudo pacman -S rocm-smi-lib"
+            fi
+            echo "    Full guide: https://rocm.docs.amd.com/en/latest/deploy/linux/quick_start.html"
+            echo ""
+            warn "GPU stats will be unavailable until rocm-smi is installed."
+            warn "You can install it later and restart LMForge — no reinstall needed."
+        fi
+
+    # ── No discrete GPU / lspci unavailable ───────────────────────────────────
+    else
+        if command -v lspci &>/dev/null; then
+            info "No discrete NVIDIA/AMD GPU detected — LMForge will use CPU inference."
+        else
+            info "lspci not available — cannot auto-detect GPU. Install 'pciutils' for GPU detection."
+            info "If you have a GPU, install nvidia-smi or rocm-smi manually to enable GPU stats."
+        fi
+    fi
+fi
+
 
 # ── Post-install setup ─────────────────────────────────────────────────────────
 info "Creating LMForge data directories..."

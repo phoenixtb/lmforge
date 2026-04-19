@@ -4,15 +4,14 @@
   import { activeModelId } from '$lib/stores/status';
   import { toast } from '$lib/stores/toasts';
   import { switchModel, deleteModel } from '$lib/api';
-  import { createEventDispatcher } from 'svelte';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
   export let model: ModelEntry;
   export let onDeleted: (id: string) => void = () => {};
 
-  const dispatch = createEventDispatcher();
-
-  let switching = false;
-  let deleting  = false;
+  let switching    = false;
+  let deleting     = false;
+  let showConfirm  = false;
 
   $: isActive   = $activeModelId === model.id;
   $: sizeLabel  = model.size_bytes > 0 ? fmtBytes(model.size_bytes) : '—';
@@ -36,13 +35,13 @@
     }
   }
 
-  async function handleDelete() {
+  function requestDelete() {
     if (deleting) return;
-    // We use a simple confirm for now; dialog plugin will replace this in Phase 4
-    const confirmed = window.confirm(
-      `Delete "${model.id}"?\n\nThis will remove the model from the index and delete its files from disk.`
-    );
-    if (!confirmed) return;
+    showConfirm = true;
+  }
+
+  async function confirmDelete() {
+    showConfirm = false;
     deleting = true;
     try {
       await deleteModel(model.id);
@@ -55,6 +54,16 @@
     }
   }
 </script>
+
+<ConfirmDialog
+  open={showConfirm}
+  title="Delete model?"
+  message={`"${model.id}" will be removed from the index and its files deleted from disk. This cannot be undone.`}
+  confirmLabel="Delete"
+  danger={true}
+  onconfirm={confirmDelete}
+  oncancel={() => showConfirm = false}
+/>
 
 <div class="model-card" class:active={isActive} role="listitem">
   <div class="card-top">
@@ -100,7 +109,7 @@
       </button>
       <button
         class="btn btn--danger btn--sm"
-        onclick={handleDelete}
+        onclick={requestDelete}
         disabled={deleting}
         title="Delete model"
       >

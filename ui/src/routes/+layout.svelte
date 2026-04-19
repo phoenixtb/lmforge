@@ -75,7 +75,7 @@
   <!-- ── Connecting splash (first 2-4s before first health event) ── -->
   <div class="daemon-screen">
     <div class="daemon-card">
-      <div class="lf-logo">⬡</div>
+      <img src="/lmforge-logo.png" alt="LMForge" class="lf-logo" />
       <h1>LMForge</h1>
       <p class="status-line connecting">Connecting to engine…</p>
       <div class="spinner"></div>
@@ -86,7 +86,7 @@
   <!-- ── Engine offline screen ── -->
   <div class="daemon-screen">
     <div class="daemon-card">
-      <div class="lf-logo offline">⬡</div>
+      <img src="/lmforge-logo.png" alt="LMForge" class="lf-logo offline" />
       <h1>LMForge</h1>
       <p class="status-line offline">Engine not running</p>
       <p class="hint">
@@ -157,11 +157,15 @@
   }
 
   .lf-logo {
-    font-size: 42px; line-height: 1;
-    color: var(--accent, #6ee7b7);
-    filter: drop-shadow(0 0 18px rgba(110,231,183,0.35));
+    width: 72px;
+    height: 72px;
+    border-radius: 16px;
+    object-fit: contain;
+    filter: drop-shadow(0 0 20px rgba(90, 160, 255, 0.45));
   }
-  .lf-logo.offline { color: var(--text-3, #555); filter: none; }
+  .lf-logo.offline {
+    filter: grayscale(1) opacity(0.45);
+  }
 
   .daemon-card h1 {
     margin: 0; font-size: 22px; font-weight: 700;

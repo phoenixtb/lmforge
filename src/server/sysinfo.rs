@@ -143,32 +143,79 @@ fn sample_model_procs(slot_info: &[(String, u16)]) -> Vec<ModelProcMem> {
 
 // ── GPU probe (macOS) ─────────────────────────────────────────────────────────
 
-#[allow(dead_code)]
-const PROBE_COMPILE_TIME_PATH: Option<&str> = option_env!("LMFORGE_GPU_PROBE_PATH");
 const PROBE_BIN_NAME: &str = "lmforge-gpu-probe-aarch64-apple-darwin";
+
+/// Returns the embedded Swift GPU probe bytes, or `None` if the probe was not
+/// compiled (swiftc unavailable, non-macOS CI, etc.).
+///
+/// `include_bytes!` requires a string literal known at compile time, so we use
+/// `option_env!` to detect whether the path was baked in by `build.rs`, and
+/// `include_bytes!` is only reached when the env var is present.
+#[cfg(target_os = "macos")]
+fn probe_bytes() -> Option<&'static [u8]> {
+    // LMFORGE_GPU_PROBE_PATH is emitted by build.rs via `cargo:rustc-env=…`
+    // only when `swiftc` succeeds. When absent, `option_env!` returns None and
+    // the `include_bytes!` arm is never compiled (dead code elimination).
+    if option_env!("LMFORGE_GPU_PROBE_PATH").is_none() {
+        return None;
+    }
+    // Safety: the `is_none()` guard above ensures the env var is present, so
+    // `env!` cannot panic here.
+    Some(include_bytes!(env!("LMFORGE_GPU_PROBE_PATH")))
+}
+
+/// Ensure the embedded probe binary is written to `~/.lmforge/bin/` and is
+/// executable. Returns the path on success. Idempotent — skips the write if
+/// the file already exists at the same size.
+#[cfg(target_os = "macos")]
+fn ensure_probe_extracted() -> Option<std::path::PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bytes = probe_bytes()?;
+
+    let home = std::env::var("HOME").ok()?;
+    let bin_dir = std::path::PathBuf::from(home).join(".lmforge").join("bin");
+    std::fs::create_dir_all(&bin_dir).ok()?;
+    let dest = bin_dir.join(PROBE_BIN_NAME);
+
+    // Only write if the file is absent or has a different size (i.e. stale).
+    let needs_write = dest
+        .metadata()
+        .map(|m| m.len() != bytes.len() as u64)
+        .unwrap_or(true);
+
+    if needs_write {
+        std::fs::write(&dest, bytes).ok()?;
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).ok()?;
+    }
+
+    Some(dest)
+}
 
 #[cfg(target_os = "macos")]
 fn find_probe() -> Option<std::path::PathBuf> {
-    if let Some(p) = PROBE_COMPILE_TIME_PATH {
-        let pb = std::path::Path::new(p);
+    // 1. Runtime env override — allows pointing at a custom build during development.
+    if let Ok(p) = std::env::var("LMFORGE_GPU_PROBE_PATH") {
+        let pb = std::path::Path::new(&p);
         if pb.exists() {
             return Some(pb.to_path_buf());
         }
     }
+
+    // 2. Embedded bytes → extracted to ~/.lmforge/bin/ (primary path for all installs).
+    if let Some(p) = ensure_probe_extracted() {
+        return Some(p);
+    }
+
+    // 3. Sibling of the current executable (fallback for production layouts where
+    //    both binaries are installed side-by-side in /usr/local/bin etc.).
     if let Ok(exe) = std::env::current_exe() {
         let c = exe.with_file_name(PROBE_BIN_NAME);
         if c.exists() {
             return Some(c);
         }
     }
-    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
-        let c = std::path::PathBuf::from(&manifest)
-            .join("ui/src-tauri/binaries")
-            .join(PROBE_BIN_NAME);
-        if c.exists() {
-            return Some(c);
-        }
-    }
+
     None
 }
 

@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod catalog;
 pub mod health;
 pub mod native;
 pub mod ollama;
@@ -131,6 +132,7 @@ pub fn build_router(state: AppState) -> Router {
             get(native::config_get).post(native::config_update),
         )
         .route("/lf/shutdown", post(native::shutdown))
+        .route("/lf/catalog", get(catalog::catalog_list))
         // Health
         .route("/health", get(health::health))
         // State

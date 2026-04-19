@@ -1,25 +1,66 @@
-/// Root lmforge crate build script.
-/// On macOS: emits LMFORGE_GPU_PROBE_PATH pointing to the pre-compiled Swift probe
-/// so that server/sysinfo.rs can locate it via option_env!() without runtime path
-/// searching in dev mode.  The probe must already be compiled by the tauri-ui
-/// build.rs (which runs first thanks to Cargo's dependency ordering).
+/// LMForge core build script.
 ///
-/// On other platforms: this file is a no-op (no Swift, no GPU probe).
+/// On macOS: compiles `gpu_probe/main.swift` → `gpu_probe_bin/lmforge-gpu-probe-{triple}`
+/// and emits `LMFORGE_GPU_PROBE_PATH` so that `server/sysinfo.rs` can embed the bytes
+/// at compile time via `include_bytes!(env!("LMFORGE_GPU_PROBE_PATH"))`.
+///
+/// On other platforms: no-op (Linux/Windows use nvidia-smi / rocm-smi at runtime).
 fn main() {
     #[cfg(target_os = "macos")]
-    emit_probe_path();
+    compile_gpu_probe();
 }
 
 #[cfg(target_os = "macos")]
-fn emit_probe_path() {
+fn compile_gpu_probe() {
+    use std::process::Command;
+
     let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let src = format!("{manifest}/gpu_probe/main.swift");
+    let out_dir = format!("{manifest}/gpu_probe_bin");
 
-    // The probe lives in the adjacent ui/src-tauri/binaries/ directory.
-    let probe = format!("{manifest}/ui/src-tauri/binaries/lmforge-gpu-probe-aarch64-apple-darwin");
+    // Trigger rebuild only when the Swift source changes.
+    println!("cargo:rerun-if-changed={src}");
 
-    println!("cargo:rerun-if-changed={probe}");
+    if !std::path::Path::new(&src).exists() {
+        println!("cargo:warning=gpu_probe/main.swift not found — GPU probe unavailable");
+        return;
+    }
 
-    if std::path::Path::new(&probe).exists() {
-        println!("cargo:rustc-env=LMFORGE_GPU_PROBE_PATH={probe}");
+    // Target triple for the binary name (Tauri sidecar naming convention).
+    let arch = if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "x86_64"
+    };
+    let bin_name = format!("lmforge-gpu-probe-{arch}-apple-darwin");
+    let out_path = format!("{out_dir}/{bin_name}");
+
+    std::fs::create_dir_all(&out_dir).ok();
+
+    let status = Command::new("swiftc")
+        .args([
+            "-O",
+            "-o",
+            &out_path,
+            &src,
+            "-framework",
+            "IOKit",
+            "-framework",
+            "Foundation",
+        ])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            println!("cargo:warning=lmforge-gpu-probe compiled → {out_path}");
+            // Expose the absolute path so sysinfo.rs can embed the bytes at compile time.
+            println!("cargo:rustc-env=LMFORGE_GPU_PROBE_PATH={out_path}");
+        }
+        Ok(s) => {
+            println!("cargo:warning=swiftc exited {s} — GPU probe will be unavailable");
+        }
+        Err(e) => {
+            println!("cargo:warning=swiftc not found ({e}) — GPU probe will be unavailable");
+        }
     }
 }

@@ -128,15 +128,6 @@ export interface ModelEntry {
   added_at: string;
 }
 
-export interface PullProgress {
-  file: string;
-  downloaded_bytes: number;
-  total_bytes: number;
-  speed_bps: number;
-  done: boolean;
-  error?: string;
-}
-
 // ─── REST helpers ─────────────────────────────────────────────────────────────
 
 async function get<T>(path: string): Promise<T> {
@@ -194,14 +185,48 @@ export const getConfig = (): Promise<unknown> => get('/lf/config');
 /** POST /lf/shutdown — graceful daemon shutdown */
 export const shutdown = (): Promise<{ status: string }> => post('/lf/shutdown');
 
+/** A single entry from the curated model catalog */
+export interface CatalogEntry {
+  shortcut: string;     // e.g. "qwen3:8b:4bit"
+  hf_repo: string;      // e.g. "mlx-community/Qwen3-8B-4bit"
+  format: string;       // "mlx" | "gguf"
+  tags: string[];       // ["qwen3", "8b", "4bit"]
+  role: string;         // "chat" | "embed" | "rerank" | "vision" | "code"
+}
+
+export interface CatalogResponse {
+  entries: CatalogEntry[];
+}
+
+/** GET /lf/catalog[?format=mlx|gguf] — curated model shortcuts */
+export const getCatalog = (format?: string): Promise<CatalogResponse> =>
+  get(`/lf/catalog${format ? `?format=${encodeURIComponent(format)}` : ''}`);
+
 // ─── SSE: model pull progress ─────────────────────────────────────────────────
 
 /**
+ * The shape the UI uses internally to track pull progress.
+ * Mapped from the Rust DownloadProgress enum variants emitted by /lf/model/pull.
+ */
+export interface PullProgress {
+  file: string;
+  downloaded_bytes: number;
+  total_bytes: number;
+  speed_bps: number;
+  done: boolean;
+  error?: string;
+}
+
+/**
  * POST /lf/model/pull — starts a model download and streams SSE progress.
- * Returns a cancel function that closes the underlying EventSource.
+ * Returns a cancel function.
  *
- * Note: model pull uses a POST body so we open a fetch stream manually
- * rather than EventSource (which only supports GET).
+ * The backend emits Rust enum variants over SSE:
+ *   {"Started":{"repo":"...","files":3}}
+ *   {"FileProgress":{"file":"config.json","downloaded":1024,"total":2048}}
+ *   {"FileCompleted":{"file":"config.json"}}
+ *   {"Completed":{"repo":"...","total_bytes":123456}}
+ *   {"Failed":{"error":"..."}}
  */
 export function pullModel(
   modelId: string,
@@ -211,6 +236,13 @@ export function pullModel(
 ): () => void {
   let cancelled = false;
   const controller = new AbortController();
+
+  // Track per-file speed
+  let lastBytes = 0;
+  let lastTime = Date.now();
+  let currentSpeed = 0;
+  let currentTotal = 0;
+  let currentFile = '';
 
   (async () => {
     try {
@@ -226,6 +258,9 @@ export function pullModel(
         return;
       }
 
+      // Emit a synthetic "connecting" progress immediately so the UI shows activity.
+      onProgress({ file: 'Resolving model…', downloaded_bytes: 0, total_bytes: 0, speed_bps: 0, done: false });
+
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
@@ -239,13 +274,63 @@ export function pullModel(
         buf = lines.pop() ?? '';
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const progress: PullProgress = JSON.parse(line.slice(6));
-              onProgress(progress);
-              if (progress.done) { onDone(); return; }
-              if (progress.error) { onError(progress.error); return; }
-            } catch { /* malformed line */ }
+          if (!line.startsWith('data: ')) continue;
+          let payload: Record<string, unknown>;
+          try {
+            payload = JSON.parse(line.slice(6));
+          } catch {
+            continue;
+          }
+
+          // ── Rust enum variant dispatch ────────────────────────────────────
+          if ('Started' in payload) {
+            const v = payload['Started'] as { repo: string; files: number };
+            onProgress({
+              file: `Preparing ${v.files} file${v.files === 1 ? '' : 's'} from ${v.repo}…`,
+              downloaded_bytes: 0, total_bytes: 0, speed_bps: 0, done: false
+            });
+
+          } else if ('FileProgress' in payload) {
+            const v = payload['FileProgress'] as { file: string; downloaded: number; total: number };
+            currentFile = v.file;
+            currentTotal = v.total;
+
+            // Compute speed
+            const now = Date.now();
+            const dt = (now - lastTime) / 1000;
+            if (dt > 0.1) {
+              currentSpeed = Math.max(0, (v.downloaded - lastBytes) / dt);
+              lastBytes = v.downloaded;
+              lastTime = now;
+            }
+
+            onProgress({
+              file: v.file,
+              downloaded_bytes: v.downloaded,
+              total_bytes: v.total,
+              speed_bps: currentSpeed,
+              done: false,
+            });
+
+          } else if ('FileCompleted' in payload) {
+            const v = payload['FileCompleted'] as { file: string };
+            onProgress({
+              file: `✓ ${v.file}`,
+              downloaded_bytes: currentTotal,
+              total_bytes: currentTotal,
+              speed_bps: 0,
+              done: false,
+            });
+            lastBytes = 0; lastTime = Date.now();
+
+          } else if ('Completed' in payload) {
+            onDone();
+            return;
+
+          } else if ('Failed' in payload) {
+            const v = payload['Failed'] as { error: string };
+            onError(v.error);
+            return;
           }
         }
       }
@@ -266,6 +351,53 @@ export function fmtBytes(bytes: number): string {
   if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
   return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+}
+
+/**
+ * Fetch the total disk size (in bytes) for a single HuggingFace model repo.
+ *
+ * Important: HF's `usedStorage` field double-counts LFS blobs (once for the
+ * LFS pointer, once for the actual stored bytes), so it is ~2× the real size.
+ * Summing `siblings[].size` from the `?blobs=true` endpoint gives the correct
+ * on-disk figure that matches what LMForge actually downloads.
+ *
+ * Returns null on error or if no size data is available.
+ */
+export async function fetchHfModelSize(hfRepo: string): Promise<number | null> {
+  try {
+    const res = await fetch(`https://huggingface.co/api/models/${hfRepo}?blobs=true`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const siblings: { size?: number }[] = data.siblings ?? [];
+    const total = siblings.reduce((sum, s) => sum + (s.size ?? 0), 0);
+    return total > 0 ? total : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Batch-fetch HF model sizes for a list of repos in parallel.
+ * Returns a map of hfRepo → bytes.  Failed lookups are silently omitted.
+ */
+export async function fetchHfSizesBatch(
+  hfRepos: string[]
+): Promise<Record<string, number>> {
+  const results = await Promise.allSettled(
+    hfRepos.map(async (repo) => {
+      const bytes = await fetchHfModelSize(repo);
+      return { repo, bytes };
+    })
+  );
+  const map: Record<string, number> = {};
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value.bytes != null) {
+      map[r.value.repo] = r.value.bytes;
+    }
+  }
+  return map;
 }
 
 /** Format seconds → "3h 24m" */

@@ -6,6 +6,10 @@
 /target/
 ui/src-tauri/target/
 
+# GPU probe compiled output (built from gpu_probe/main.swift by build.rs)
+# Source is tracked; compiled binary is not.
+/gpu_probe_bin/
+
 # Keep Cargo.lock (single binary app — lock file aids reproducibility)
 # Cargo.lock   ← intentionally NOT ignored
 
