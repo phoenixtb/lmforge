@@ -190,8 +190,11 @@ fn legacy_curations(normalized: &str, format_str: &str) -> Option<String> {
             "qwencode3:8bit" => Some("bartowski/Qwen3-Coder-Next-GGUF".to_string()),
             // :q4 → :4bit rename (v0.1.0); redirect old keys to new GGUF repos
             "qwen3-embed:0.6b:q4"    => Some("Qwen/Qwen3-Embedding-0.6B-GGUF".to_string()),
-            "qwen3-embed:4b:q4"      => Some("Qwen/Qwen3-Embedding-4B-GGUF".to_string()),
-            "qwen3-embed:8b:q4"      => Some("Qwen/Qwen3-Embedding-8B-GGUF".to_string()),
+            // :4bit alias for 0.6B — no Q4 exists; select_gguf_files falls back to Q8_0 with warning
+            "qwen3-embed:0.6b:4bit"  => Some("Qwen/Qwen3-Embedding-0.6B-GGUF".to_string()),
+            "qwen3-embed:0.6b:8bit"  => Some("Qwen/Qwen3-Embedding-0.6B-GGUF".to_string()), // renamed :8bit → :q8
+            "qwen3-embed:4b:q4"      => Some("bartowski/Qwen3-Embedding-4B-GGUF".to_string()),
+            "qwen3-embed:8b:q4"      => Some("bartowski/Qwen3-Embedding-8B-GGUF".to_string()),
             "qwen3-reranker:0.6b:q4" => Some("Qwen/Qwen3-Reranker-0.6B-GGUF".to_string()),
             "qwen3-reranker:1.7b:q4" => Some("Qwen/Qwen3-Reranker-1.7B-GGUF".to_string()),
             "qwen3-reranker:4b:q4"   => Some("Qwen/Qwen3-Reranker-4B-GGUF".to_string()),
@@ -239,7 +242,10 @@ mod tests {
         let map: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
         assert!(map.contains_key("qwen3.5:4b:4bit"),      "GGUF missing LLM_MODEL");
         assert!(map.contains_key("qwen3.5:2b:4bit"),      "GGUF missing LLM_FALLBACK_MODEL");
-        assert!(map.contains_key("qwen3-embed:0.6b:4bit"),"GGUF missing LLM_EMBED_MODEL");
+        // LLM_EMBED_MODEL (qwen3-embed:0.6b:4bit) resolves via legacy alias; live catalog has :q8
+        assert!(map.contains_key("qwen3-embed:0.6b:q8"),  "GGUF missing primary embed (0.6B Q8)");
+        assert!(legacy_curations("qwen3-embed:0.6b:4bit", "gguf").is_some(),
+            "Legacy alias for LLM_EMBED_MODEL must resolve");
     }
 
     #[test]
@@ -256,10 +262,14 @@ mod tests {
     fn test_embed_keys_are_consistent_across_catalogs() {
         let gguf: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
         let mlx:  HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
-        for key in &["qwen3-embed:0.6b:4bit", "qwen3-embed:4b:4bit", "qwen3-embed:8b:4bit"] {
+        // 4B and 8B embed models exist in both catalogs with matching :4bit keys
+        for key in &["qwen3-embed:4b:4bit", "qwen3-embed:8b:4bit"] {
             assert!(gguf.contains_key(*key), "GGUF missing embed key: {}", key);
             assert!(mlx.contains_key(*key),  "MLX  missing embed key: {}", key);
         }
+        // 0.6B: GGUF has :q8/:f16 only (no Q4 in HF repo); MLX has :4bit and :8bit
+        assert!(gguf.contains_key("qwen3-embed:0.6b:q8"),
+            "GGUF must have 0.6B :q8 (the actual available quantization)");
     }
 
     #[test]
@@ -386,10 +396,14 @@ mod tests {
     fn test_legacy_q4_embed_keys_resolve() {
         assert_eq!(legacy_curations("qwen3-embed:0.6b:q4", "gguf"),
             Some("Qwen/Qwen3-Embedding-0.6B-GGUF".to_string()));
+        // :4bit alias for 0.6B also exists (no Q4 in repo, falls back to Q8_0 at runtime)
+        assert_eq!(legacy_curations("qwen3-embed:0.6b:4bit", "gguf"),
+            Some("Qwen/Qwen3-Embedding-0.6B-GGUF".to_string()));
+        // 4B/8B now point to bartowski for proper Q4 availability
         assert_eq!(legacy_curations("qwen3-embed:4b:q4", "gguf"),
-            Some("Qwen/Qwen3-Embedding-4B-GGUF".to_string()));
+            Some("bartowski/Qwen3-Embedding-4B-GGUF".to_string()));
         assert_eq!(legacy_curations("qwen3-embed:8b:q4", "gguf"),
-            Some("Qwen/Qwen3-Embedding-8B-GGUF".to_string()));
+            Some("bartowski/Qwen3-Embedding-8B-GGUF".to_string()));
     }
 
     #[test]
@@ -416,7 +430,8 @@ mod tests {
 
     #[test]
     fn test_legacy_unknown_keys_return_none() {
-        assert_eq!(legacy_curations("qwen3-embed:0.6b:4bit", "gguf"), None); // new key, not legacy
+        // :q8 is now a live catalog key, not a legacy alias — must return None from legacy
+        assert_eq!(legacy_curations("qwen3-embed:0.6b:q8", "gguf"), None);
         assert_eq!(legacy_curations("nonexistent:model", "gguf"), None);
     }
 
@@ -428,8 +443,11 @@ mod tests {
             Some("Qwen/Qwen3.5-4B-GGUF".to_string()));
         assert_eq!(resolve_from_bundled("qwen3.5:2b:4bit", "gguf"),
             Some("Qwen/Qwen3.5-2B-GGUF".to_string()));
-        assert_eq!(resolve_from_bundled("qwen3-embed:0.6b:4bit", "gguf"),
+        // 0.6B uses :q8 in the live catalog (no Q4 exists in repo)
+        assert_eq!(resolve_from_bundled("qwen3-embed:0.6b:q8", "gguf"),
             Some("Qwen/Qwen3-Embedding-0.6B-GGUF".to_string()));
+        // :4bit resolves via legacy_curations, not bundled catalog
+        assert_eq!(resolve_from_bundled("qwen3-embed:0.6b:4bit", "gguf"), None);
     }
 
     #[test]
@@ -466,7 +484,7 @@ mod tests {
         let find = |key: &str| entries.iter().find(|e| e.shortcut == key)
             .unwrap_or_else(|| panic!("list_for_ui missing entry: {}", key));
 
-        assert_eq!(find("qwen3-embed:0.6b:4bit").role, "embed");
+        assert_eq!(find("qwen3-embed:0.6b:q8").role, "embed");
         assert_eq!(find("qwen3-reranker:0.6b:4bit").role, "rerank");
         assert_eq!(find("jina-reranker-v2:multilingual:f16").role, "rerank");
         assert_eq!(find("qwen3.5:4b:4bit").role, "chat");
