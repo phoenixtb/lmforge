@@ -16,7 +16,7 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
         crate::model::resolver::resolve(model_input, &engine_format, &catalogs_dir).await?;
     let model_id = resolved.id;
 
-    let mut idx = crate::model::index::ModelIndex::load(&config.data_dir())?;
+    let idx = crate::model::index::ModelIndex::load(&config.data_dir())?;
     if idx.get(&model_id).is_none() {
         println!("\nModel '{}' is not installed locally.", model_id);
         print!("Would you like to pull it now? [y/N]: ");

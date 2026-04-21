@@ -2,7 +2,6 @@ use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{Response, StatusCode, header};
 use axum::response::IntoResponse;
-use tokio_stream::StreamExt;
 use tracing::{error, info, warn};
 
 use super::AppState;

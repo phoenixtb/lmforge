@@ -79,6 +79,7 @@ pub struct EngineManager {
     data_dir: PathBuf,
     logs_dir: PathBuf,
     pub state: Arc<RwLock<EngineState>>,
+    #[allow(dead_code)] // retained for planned restart-supervision logic
     max_restarts: u32,
     health_interval_secs: u64,
     active_slots: std::collections::HashMap<String, ActiveSlot>,

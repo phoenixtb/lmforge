@@ -83,7 +83,7 @@ pub async fn resolve(
 /// Resolve an HF repo — query the API for file listing.
 /// `quant_hint` comes from the catalog shortcut (e.g. "4bit", "f16") and
 /// is used to select the right GGUF file(s) from multi-quant repos.
-async fn resolve_hf_repo(repo: &str, engine_format: &str, quant_hint: Option<&str>) -> Result<ResolvedModel> {
+async fn resolve_hf_repo(repo: &str, _engine_format: &str, quant_hint: Option<&str>) -> Result<ResolvedModel> {
     let api_url = format!("https://huggingface.co/api/models/{}", repo);
     info!(repo, "Resolving HuggingFace repo");
 

@@ -25,6 +25,7 @@ pub struct ActiveEngine {
     pub model_id: String,
 }
 
+#[allow(async_fn_in_trait)]
 pub trait EngineAdapter: Send + Sync {
     /// Attempt a native pull for this engine.
     ///

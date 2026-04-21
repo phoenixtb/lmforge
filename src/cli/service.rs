@@ -134,8 +134,10 @@ fn uninstall_launchd() -> Result<()> {
 
 // --- Linux Systemd (User) ---
 
+#[cfg(target_os = "linux")]
 static SYSTEMD_SERVICE: &str = "lmforge.service";
 
+#[cfg(target_os = "linux")]
 fn systemd_unit_path() -> Result<PathBuf> {
     Ok(home_dir()?
         .join(".config")
@@ -144,6 +146,7 @@ fn systemd_unit_path() -> Result<PathBuf> {
         .join(SYSTEMD_SERVICE))
 }
 
+#[cfg(target_os = "linux")]
 fn install_systemd(exe_path: &str) -> Result<()> {
     let unit_path = systemd_unit_path()?;
 
@@ -192,6 +195,7 @@ WantedBy=default.target
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn uninstall_systemd() -> Result<()> {
     let unit_path = systemd_unit_path()?;
     if unit_path.exists() {
@@ -210,6 +214,7 @@ fn uninstall_systemd() -> Result<()> {
 
 // --- Windows Scheduled Task ---
 
+#[cfg(windows)]
 static WINDOWS_TASK_NAME: &str = "LMForge Daemon";
 
 /// Register a Windows Scheduled Task that runs `lmforge start --foreground`

@@ -72,6 +72,10 @@ lto = true
 strip = true
 codegen-units = 1
 
+[features]
+# Enable Tauri IPC event bridging when embedded in the desktop app.
+tauri-embed = []
+
 [workspace]
 members = [
     ".",
