@@ -42,7 +42,8 @@ pub async fn resolve(
 ) -> Result<ResolvedModel> {
     // HuggingFace repo
     if input.contains('/') && !input.contains("://") {
-        let mut rm = resolve_hf_repo(input, engine_format).await?;
+        // Direct HF repo — no quant hint available
+        let mut rm = resolve_hf_repo(input, engine_format, None).await?;
         rm.id = input.to_string();
         return Ok(rm);
     }
@@ -79,8 +80,10 @@ pub async fn resolve(
     resolve_logical_name(input, engine_format, catalogs_dir).await
 }
 
-/// Resolve an HF repo — query the API for file listing
-async fn resolve_hf_repo(repo: &str, engine_format: &str) -> Result<ResolvedModel> {
+/// Resolve an HF repo — query the API for file listing.
+/// `quant_hint` comes from the catalog shortcut (e.g. "4bit", "f16") and
+/// is used to select the right GGUF file(s) from multi-quant repos.
+async fn resolve_hf_repo(repo: &str, engine_format: &str, quant_hint: Option<&str>) -> Result<ResolvedModel> {
     let api_url = format!("https://huggingface.co/api/models/{}", repo);
     info!(repo, "Resolving HuggingFace repo");
 
@@ -134,8 +137,8 @@ async fn resolve_hf_repo(repo: &str, engine_format: &str) -> Result<ResolvedMode
         ModelFormat::Safetensors
     };
 
-    // Get file listing
-    let files: Vec<String> = data["siblings"]
+    // Collect all files that match the format, then apply quant filtering for GGUF
+    let all_format_files: Vec<String> = data["siblings"]
         .as_array()
         .unwrap_or(&vec![])
         .iter()
@@ -143,6 +146,14 @@ async fn resolve_hf_repo(repo: &str, engine_format: &str) -> Result<ResolvedMode
         .filter(|f| should_download_file(f, format))
         .map(|f| f.to_string())
         .collect();
+
+    let files = if format == ModelFormat::Gguf {
+        // For GGUF repos, select only the files matching the requested quantization.
+        // This prevents downloading f16 + Q8 + Q4 all at once.
+        select_gguf_files(&all_format_files, quant_hint)
+    } else {
+        all_format_files
+    };
 
     // Derive a friendly dir name
     let dir_name = repo.split('/').last().unwrap_or(repo).to_lowercase();
@@ -166,7 +177,11 @@ async fn resolve_logical_name(
     if let Some(repo) =
         crate::model::catalog::load_catalog_and_resolve(name, engine_format, catalogs_dir).await
     {
-        let mut rm = resolve_hf_repo(&repo, engine_format).await?;
+        // Extract quantization tag from the shortcut so the downloader selects
+        // the right GGUF file (e.g. ":4bit" → Q4_K_S, ":8bit" → Q8_0).
+        let quant_hint = extract_quant_hint(name);
+        debug!(name, ?quant_hint, "Extracted quant hint from catalog shortcut");
+        let mut rm = resolve_hf_repo(&repo, engine_format, quant_hint).await?;
         rm.id = name.to_string();
         return Ok(rm);
     }
@@ -192,16 +207,105 @@ async fn resolve_logical_name(
     );
 }
 
-/// Determine which files to download based on format
+
+
+fn detect_format_from_engine(engine_format: &str) -> ModelFormat {
+    match engine_format {
+        "mlx"  => ModelFormat::Mlx,
+        "gguf" => ModelFormat::Gguf,
+        _      => ModelFormat::Safetensors,
+    }
+}
+
+/// Extract a quantization token from a catalog shortcut.
+/// e.g. "qwen3-embed:0.6b:4bit" → Some("4bit")
+///      "bge-m3:f16"            → Some("f16")
+///      "nomic-embed-text:v1.5" → None
+fn extract_quant_hint(shortcut: &str) -> Option<&str> {
+    shortcut.split(':').find(|part| {
+        matches!(*part, "4bit" | "5bit" | "6bit" | "8bit" | "f16" | "bf16")
+    })
+}
+
+/// Return ordered GGUF filename substrings for a given quant tag.
+/// The first pattern that matches a file in the repo is used.
+fn gguf_patterns_for_quant(quant: &str) -> &'static [&'static str] {
+    match quant {
+        "4bit" => &["Q4_K_S", "Q4_K_M", "Q4_K"],
+        "5bit" => &["Q5_K_S", "Q5_K_M", "Q5_K"],
+        "6bit" => &["Q6_K"],
+        "8bit" => &["Q8_0"],
+        "f16" | "bf16" => &["F16", "BF16", "f16", "bf16"],
+        _ => &[],
+    }
+}
+
+/// Select the right GGUF files given a quant hint.
+///
+/// - If a quant hint is present, tries each pattern in priority order and
+///   returns the first set of files that match. Supports split shards.
+/// - Falls back through Q4_K_S → Q4_K_M → Q8_0 → smallest file if the
+///   exact quant is unavailable, printing a clear warning.
+/// - If no hint (direct HF repo pull), defaults to Q4_K_S → Q4_K_M to
+///   avoid downloading every quant in the repo.
+fn select_gguf_files(all_gguf: &[String], quant_hint: Option<&str>) -> Vec<String> {
+    // Helper: find all files containing a case-insensitive pattern
+    let matches_pattern = |files: &[String], pat: &str| -> Vec<String> {
+        let pat_up = pat.to_uppercase();
+        files
+            .iter()
+            .filter(|f| f.to_uppercase().contains(&pat_up))
+            .cloned()
+            .collect()
+    };
+
+    // Determine which patterns to try first
+    let requested_patterns: &[&str] = quant_hint
+        .map(gguf_patterns_for_quant)
+        .unwrap_or(&["Q4_K_S", "Q4_K_M"]); // default for bare HF repo pulls
+
+    for &pat in requested_patterns {
+        let found = matches_pattern(all_gguf, pat);
+        if !found.is_empty() {
+            return found;
+        }
+    }
+
+    // Requested quant not found → warn and fall back
+    if let Some(q) = quant_hint {
+        eprintln!(
+            "\n  ⚠  Quantization '{}' not available in this repo.",
+            q
+        );
+        eprintln!("     Attempting fallback (Q4_K_S → Q4_K_M → Q8_0) …");
+        for &pat in &["Q4_K_S", "Q4_K_M", "Q8_0"] {
+            let found = matches_pattern(all_gguf, pat);
+            if !found.is_empty() {
+                eprintln!("     Using: {:?}", found);
+                return found;
+            }
+        }
+    }
+
+    // Last resort: return everything (repo has unusual naming)
+    eprintln!(
+        "  ⚠  Could not identify a specific quantization file. Downloading all GGUF files."
+    );
+    all_gguf.to_vec()
+}
+
+/// Determine which files to download.
+/// For GGUF, quant filtering is handled by select_gguf_files; this function
+/// only decides format-level inclusion (MLX / safetensors).
 fn should_download_file(filename: &str, format: ModelFormat) -> bool {
     match format {
         ModelFormat::Mlx => {
-            // MLX: download all model files
             filename.ends_with(".safetensors")
                 || filename.ends_with(".json")
                 || filename.ends_with(".jinja")
                 || filename == "tokenizer.model"
         }
+        // GGUF: selection is done by select_gguf_files, not here
         ModelFormat::Gguf => filename.ends_with(".gguf"),
         ModelFormat::Safetensors => {
             filename.ends_with(".safetensors")
@@ -211,17 +315,11 @@ fn should_download_file(filename: &str, format: ModelFormat) -> bool {
     }
 }
 
-fn detect_format_from_engine(engine_format: &str) -> ModelFormat {
-    match engine_format {
-        "mlx" => ModelFormat::Mlx,
-        "gguf" => ModelFormat::Gguf,
-        _ => ModelFormat::Safetensors,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── should_download_file ──────────────────────────────────────────────────
 
     #[test]
     fn test_should_download_mlx() {
@@ -242,5 +340,123 @@ mod tests {
     fn test_detect_format() {
         assert_eq!(detect_format_from_engine("mlx"), ModelFormat::Mlx);
         assert_eq!(detect_format_from_engine("gguf"), ModelFormat::Gguf);
+    }
+
+    // ── extract_quant_hint ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_extract_quant_hint_4bit() {
+        assert_eq!(extract_quant_hint("qwen3-embed:0.6b:4bit"), Some("4bit"));
+        assert_eq!(extract_quant_hint("qwen3.5:4b:4bit"), Some("4bit"));
+    }
+
+    #[test]
+    fn test_extract_quant_hint_8bit() {
+        assert_eq!(extract_quant_hint("qwen3-embed:0.6b:8bit"), Some("8bit"));
+    }
+
+    #[test]
+    fn test_extract_quant_hint_f16() {
+        assert_eq!(extract_quant_hint("bge-m3:f16"), Some("f16"));
+        assert_eq!(extract_quant_hint("nomic-modernbert-embed:f16"), Some("f16"));
+    }
+
+    #[test]
+    fn test_extract_quant_hint_none() {
+        // Version tag like v1.5 must not be confused with a quant
+        assert_eq!(extract_quant_hint("nomic-embed-text:v1.5"), None);
+        assert_eq!(extract_quant_hint("jina-reranker-v2:multilingual"), None);
+        assert_eq!(extract_quant_hint("llama4:17b:4bit:scout"), Some("4bit"));
+    }
+
+    // ── gguf_patterns_for_quant ───────────────────────────────────────────────
+
+    #[test]
+    fn test_gguf_patterns_4bit() {
+        let p = gguf_patterns_for_quant("4bit");
+        assert!(p.contains(&"Q4_K_S"));
+        assert!(p.contains(&"Q4_K_M"));
+    }
+
+    #[test]
+    fn test_gguf_patterns_unknown_is_empty() {
+        assert!(gguf_patterns_for_quant("3bit").is_empty());
+        assert!(gguf_patterns_for_quant("").is_empty());
+    }
+
+    // ── select_gguf_files ─────────────────────────────────────────────────────
+
+    fn gguf_repo_files() -> Vec<String> {
+        vec![
+            "Qwen3-Embedding-0.6B-Q4_K_S.gguf".to_string(),
+            "Qwen3-Embedding-0.6B-Q8_0.gguf".to_string(),
+            "Qwen3-Embedding-0.6B-F16.gguf".to_string(),
+        ]
+    }
+
+    #[test]
+    fn test_select_gguf_4bit_picks_q4_ks() {
+        let files = select_gguf_files(&gguf_repo_files(), Some("4bit"));
+        assert_eq!(files, vec!["Qwen3-Embedding-0.6B-Q4_K_S.gguf"]);
+    }
+
+    #[test]
+    fn test_select_gguf_8bit_picks_q8() {
+        let files = select_gguf_files(&gguf_repo_files(), Some("8bit"));
+        assert_eq!(files, vec!["Qwen3-Embedding-0.6B-Q8_0.gguf"]);
+    }
+
+    #[test]
+    fn test_select_gguf_f16_picks_f16() {
+        let files = select_gguf_files(&gguf_repo_files(), Some("f16"));
+        assert_eq!(files, vec!["Qwen3-Embedding-0.6B-F16.gguf"]);
+    }
+
+    #[test]
+    fn test_select_gguf_4bit_fallback_when_q4ks_missing() {
+        // Repo only has Q4_K_M and Q8 — should fall back to Q4_K_M
+        let files = vec![
+            "model-Q4_K_M.gguf".to_string(),
+            "model-Q8_0.gguf".to_string(),
+        ];
+        let selected = select_gguf_files(&files, Some("4bit"));
+        assert_eq!(selected, vec!["model-Q4_K_M.gguf"]);
+    }
+
+    #[test]
+    fn test_select_gguf_no_hint_defaults_to_q4ks() {
+        // Direct HF repo pull (no shortcut): should default to Q4_K_S
+        let files = select_gguf_files(&gguf_repo_files(), None);
+        assert_eq!(files, vec!["Qwen3-Embedding-0.6B-Q4_K_S.gguf"]);
+    }
+
+    #[test]
+    fn test_select_gguf_no_hint_falls_back_to_q4km() {
+        // No Q4_K_S available: default falls back to Q4_K_M
+        let files = vec![
+            "model-Q4_K_M.gguf".to_string(),
+            "model-F16.gguf".to_string(),
+        ];
+        let selected = select_gguf_files(&files, None);
+        assert_eq!(selected, vec!["model-Q4_K_M.gguf"]);
+    }
+
+    #[test]
+    fn test_select_gguf_requested_quant_missing_falls_back() {
+        // Repo only has F16 — 4bit fallback chain eventually lands on best available
+        let files = vec!["model-F16.gguf".to_string()];
+        let selected = select_gguf_files(&files, Some("4bit"));
+        // Falls back through Q4_K_S→Q4_K_M→Q8_0, none found, last-resort: all files
+        assert_eq!(selected, vec!["model-F16.gguf"]);
+    }
+
+    #[test]
+    fn test_select_gguf_picks_correct_not_f16_when_4bit_requested() {
+        // The bug: before fix, ALL files were downloaded including F16 and Q8
+        let all_files = gguf_repo_files();
+        let selected = select_gguf_files(&all_files, Some("4bit"));
+        assert!(!selected.iter().any(|f| f.contains("F16")),  "Must not download F16 when 4bit requested");
+        assert!(!selected.iter().any(|f| f.contains("Q8_0")), "Must not download Q8_0 when 4bit requested");
+        assert!(selected.iter().any(|f| f.contains("Q4_K_S")), "Must download Q4_K_S for 4bit");
     }
 }
