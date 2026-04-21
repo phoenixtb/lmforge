@@ -213,3 +213,272 @@ fn legacy_curations(normalized: &str, format_str: &str) -> Option<String> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── JSON validity ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_bundled_gguf_catalog_is_valid_json() {
+        let result: Result<HashMap<String, String>, _> = serde_json::from_str(BUNDLED_GGUF);
+        assert!(result.is_ok(), "GGUF catalog is not valid JSON: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_bundled_mlx_catalog_is_valid_json() {
+        let result: Result<HashMap<String, String>, _> = serde_json::from_str(BUNDLED_MLX);
+        assert!(result.is_ok(), "MLX catalog is not valid JSON: {:?}", result.err());
+    }
+
+    // ── Three critical shortcuts must exist in both catalogs ──────────────────
+
+    #[test]
+    fn test_primary_models_exist_in_gguf() {
+        let map: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        assert!(map.contains_key("qwen3.5:4b:4bit"),      "GGUF missing LLM_MODEL");
+        assert!(map.contains_key("qwen3.5:2b:4bit"),      "GGUF missing LLM_FALLBACK_MODEL");
+        assert!(map.contains_key("qwen3-embed:0.6b:4bit"),"GGUF missing LLM_EMBED_MODEL");
+    }
+
+    #[test]
+    fn test_primary_models_exist_in_mlx() {
+        let map: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
+        assert!(map.contains_key("qwen3.5:4b:4bit"),      "MLX missing LLM_MODEL");
+        assert!(map.contains_key("qwen3.5:2b:4bit"),      "MLX missing LLM_FALLBACK_MODEL");
+        assert!(map.contains_key("qwen3-embed:0.6b:4bit"),"MLX missing LLM_EMBED_MODEL");
+    }
+
+    // ── Cross-catalog key consistency (same key works on all platforms) ────────
+
+    #[test]
+    fn test_embed_keys_are_consistent_across_catalogs() {
+        let gguf: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        let mlx:  HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
+        for key in &["qwen3-embed:0.6b:4bit", "qwen3-embed:4b:4bit", "qwen3-embed:8b:4bit"] {
+            assert!(gguf.contains_key(*key), "GGUF missing embed key: {}", key);
+            assert!(mlx.contains_key(*key),  "MLX  missing embed key: {}", key);
+        }
+    }
+
+    #[test]
+    fn test_inference_keys_are_consistent_across_catalogs() {
+        let gguf: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        let mlx:  HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
+        for key in &["qwen3:1.7b:4bit", "qwen3:4b:4bit", "qwen3:8b:4bit",
+                     "qwen3-coder:next:4bit", "qwen3-coder:next:8bit"] {
+            assert!(gguf.contains_key(*key), "GGUF missing key: {}", key);
+            assert!(mlx.contains_key(*key),  "MLX  missing key: {}", key);
+        }
+    }
+
+    // ── Renamed keys must NOT appear in the live catalogs ─────────────────────
+
+    #[test]
+    fn test_no_legacy_q4_suffix_in_catalogs() {
+        let gguf: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        let mlx:  HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
+        for (fmt, map) in &[("gguf", &gguf), ("mlx", &mlx)] {
+            for key in map.keys() {
+                assert!(!key.ends_with(":q4"), "{} catalog has legacy :q4 key: {}", fmt, key);
+            }
+        }
+    }
+
+    #[test]
+    fn test_no_qwencode3_keys_in_live_catalogs() {
+        let gguf: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        let mlx:  HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
+        for (fmt, map) in &[("gguf", &gguf), ("mlx", &mlx)] {
+            for key in map.keys() {
+                assert!(!key.starts_with("qwencode3"),
+                    "{} catalog still has legacy qwencode3 key: {}", fmt, key);
+            }
+        }
+    }
+
+    // ── Reranker catalog correctness ──────────────────────────────────────────
+
+    #[test]
+    fn test_gguf_has_reranker_models() {
+        let map: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        assert!(map.contains_key("jina-reranker-v2:multilingual:f16"));
+        assert!(map.contains_key("qwen3-reranker:0.6b:4bit"));
+        assert!(map.contains_key("qwen3-reranker:1.7b:4bit"));
+        assert!(map.contains_key("qwen3-reranker:4b:4bit"));
+    }
+
+    #[test]
+    fn test_mlx_has_jina_reranker_only() {
+        let map: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
+        // Jina (encoder-based) — confirmed supported by oMLX 0.3.6
+        assert!(map.contains_key("jina-reranker-v2:multilingual"),
+            "MLX catalog must contain Jina reranker (oMLX 0.3.6 JinaForRanking support)");
+        // Qwen3-Reranker (decoder-based) — NOT supported by oMLX; should be absent
+        assert!(!map.contains_key("qwen3-reranker:0.6b:4bit"),
+            "Generative decoder rerankers must NOT be in MLX catalog (oMLX doesn't support them)");
+    }
+
+    // ── Small models for 4 GB VRAM / Q4_K_S tier ─────────────────────────────
+
+    #[test]
+    fn test_small_models_for_constrained_hardware() {
+        let gguf: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        assert!(gguf.contains_key("qwen3:1.7b:4bit"), "Missing 1.7B model for 4GB VRAM tier");
+        assert!(gguf.contains_key("qwen3:4b:4bit"),   "Missing 4B model for 4GB VRAM tier");
+        assert!(gguf.contains_key("gemma3:1b:4bit"),  "Missing 1B model for minimal hardware");
+    }
+
+    // ── bundled_shortcuts filters comment keys ────────────────────────────────
+
+    #[test]
+    fn test_bundled_shortcuts_excludes_comment_keys() {
+        for fmt in &["gguf", "mlx"] {
+            let shortcuts = bundled_shortcuts(fmt);
+            for key in &shortcuts {
+                assert!(!key.starts_with('_'),
+                    "{} shortcuts contain comment key: {}", fmt, key);
+            }
+            assert!(!shortcuts.is_empty(), "{} shortcuts should not be empty", fmt);
+            assert!(shortcuts.contains(&"qwen3.5:4b:4bit".to_string()),
+                "{} shortcuts missing qwen3.5:4b:4bit", fmt);
+        }
+    }
+
+    // ── infer_role ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_infer_role_embed() {
+        assert_eq!(infer_role("qwen3-embed:0.6b:4bit", "Qwen/Qwen3-Embedding-0.6B-GGUF"), "embed");
+        assert_eq!(infer_role("nomic-embed-text:v1.5", "nomic-ai/nomic-embed-text-v1.5-GGUF"), "embed");
+        assert_eq!(infer_role("snowflake-arctic-embed-l:v2:4bit", "mlx-community/snowflake-arctic-embed-l-v2.0-4bit"), "embed");
+    }
+
+    #[test]
+    fn test_infer_role_rerank() {
+        assert_eq!(infer_role("jina-reranker-v2:multilingual", "jinaai/jina-reranker-v2-base-multilingual"), "rerank");
+        assert_eq!(infer_role("qwen3-reranker:0.6b:4bit", "Qwen/Qwen3-Reranker-0.6B-GGUF"), "rerank");
+        assert_eq!(infer_role("bge-reranker-v2-m3:f16", "gpustack/bge-reranker-v2-m3-GGUF"), "rerank");
+    }
+
+    #[test]
+    fn test_infer_role_chat() {
+        assert_eq!(infer_role("qwen3.5:4b:4bit", "Qwen/Qwen3.5-4B-GGUF"), "chat");
+        assert_eq!(infer_role("llama3.1:8b:4bit", "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF"), "chat");
+        assert_eq!(infer_role("gemma3:4b:4bit", "bartowski/gemma-3-4b-it-GGUF"), "chat");
+    }
+
+    #[test]
+    fn test_infer_role_code() {
+        assert_eq!(infer_role("qwen3-coder:next:4bit", "bartowski/Qwen3-Coder-Next-GGUF"), "code");
+    }
+
+    #[test]
+    fn test_infer_role_vision_vl_embed() {
+        // vl-embed must be "vision", not "embed" (multimodal, different use case)
+        assert_eq!(infer_role("qwen3-vl-embed:2b:4bit", "mlx-community/Qwen3-VL-Embedding-2B-4bit"), "vision");
+    }
+
+    // ── legacy_curations backward compatibility ───────────────────────────────
+
+    #[test]
+    fn test_legacy_q4_embed_keys_resolve() {
+        assert_eq!(legacy_curations("qwen3-embed:0.6b:q4", "gguf"),
+            Some("Qwen/Qwen3-Embedding-0.6B-GGUF".to_string()));
+        assert_eq!(legacy_curations("qwen3-embed:4b:q4", "gguf"),
+            Some("Qwen/Qwen3-Embedding-4B-GGUF".to_string()));
+        assert_eq!(legacy_curations("qwen3-embed:8b:q4", "gguf"),
+            Some("Qwen/Qwen3-Embedding-8B-GGUF".to_string()));
+    }
+
+    #[test]
+    fn test_legacy_q4_reranker_keys_resolve() {
+        assert_eq!(legacy_curations("qwen3-reranker:0.6b:q4", "gguf"),
+            Some("Qwen/Qwen3-Reranker-0.6B-GGUF".to_string()));
+        assert_eq!(legacy_curations("qwen3-reranker:1.7b:q4", "gguf"),
+            Some("Qwen/Qwen3-Reranker-1.7B-GGUF".to_string()));
+        assert_eq!(legacy_curations("qwen3-reranker:4b:q4", "gguf"),
+            Some("Qwen/Qwen3-Reranker-4B-GGUF".to_string()));
+    }
+
+    #[test]
+    fn test_legacy_qwencode3_resolves_to_qwen3_coder() {
+        assert_eq!(legacy_curations("qwencode3:4bit", "gguf"),
+            Some("bartowski/Qwen3-Coder-Next-GGUF".to_string()));
+        assert_eq!(legacy_curations("qwencode3:8bit", "gguf"),
+            Some("bartowski/Qwen3-Coder-Next-GGUF".to_string()));
+        assert_eq!(legacy_curations("qwencode3:4bit", "mlx"),
+            Some("mlx-community/Qwen3-Coder-Next-4bit".to_string()));
+        assert_eq!(legacy_curations("qwencode3:8bit", "mlx"),
+            Some("mlx-community/Qwen3-Coder-Next-8bit".to_string()));
+    }
+
+    #[test]
+    fn test_legacy_unknown_keys_return_none() {
+        assert_eq!(legacy_curations("qwen3-embed:0.6b:4bit", "gguf"), None); // new key, not legacy
+        assert_eq!(legacy_curations("nonexistent:model", "gguf"), None);
+    }
+
+    // ── resolve_from_bundled ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_from_bundled_gguf_finds_primary_models() {
+        assert_eq!(resolve_from_bundled("qwen3.5:4b:4bit", "gguf"),
+            Some("Qwen/Qwen3.5-4B-GGUF".to_string()));
+        assert_eq!(resolve_from_bundled("qwen3.5:2b:4bit", "gguf"),
+            Some("Qwen/Qwen3.5-2B-GGUF".to_string()));
+        assert_eq!(resolve_from_bundled("qwen3-embed:0.6b:4bit", "gguf"),
+            Some("Qwen/Qwen3-Embedding-0.6B-GGUF".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_from_bundled_mlx_finds_primary_models() {
+        assert_eq!(resolve_from_bundled("qwen3.5:4b:4bit", "mlx"),
+            Some("mlx-community/Qwen3.5-4B-4bit".to_string()));
+        assert_eq!(resolve_from_bundled("qwen3-embed:0.6b:4bit", "mlx"),
+            Some("mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ".to_string()));
+        assert_eq!(resolve_from_bundled("jina-reranker-v2:multilingual", "mlx"),
+            Some("jinaai/jina-reranker-v2-base-multilingual".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_from_bundled_old_q4_key_returns_none() {
+        // Old :q4 keys must NOT resolve from the live catalog (only from legacy_curations)
+        assert_eq!(resolve_from_bundled("qwen3-embed:0.6b:q4", "gguf"), None);
+        assert_eq!(resolve_from_bundled("qwencode3:4bit", "gguf"), None);
+    }
+
+    // ── list_for_ui ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_list_for_ui_excludes_comment_keys() {
+        let entries = list_for_ui("gguf");
+        for e in &entries {
+            assert!(!e.shortcut.starts_with('_'),
+                "list_for_ui returned comment key: {}", e.shortcut);
+        }
+    }
+
+    #[test]
+    fn test_list_for_ui_assigns_correct_roles() {
+        let entries = list_for_ui("gguf");
+        let find = |key: &str| entries.iter().find(|e| e.shortcut == key)
+            .unwrap_or_else(|| panic!("list_for_ui missing entry: {}", key));
+
+        assert_eq!(find("qwen3-embed:0.6b:4bit").role, "embed");
+        assert_eq!(find("qwen3-reranker:0.6b:4bit").role, "rerank");
+        assert_eq!(find("jina-reranker-v2:multilingual:f16").role, "rerank");
+        assert_eq!(find("qwen3.5:4b:4bit").role, "chat");
+        assert_eq!(find("qwen3-coder:next:4bit").role, "code");
+    }
+
+    #[test]
+    fn test_list_for_ui_is_sorted() {
+        let entries = list_for_ui("gguf");
+        let shortcuts: Vec<&str> = entries.iter().map(|e| e.shortcut.as_str()).collect();
+        let mut sorted = shortcuts.clone();
+        sorted.sort();
+        assert_eq!(shortcuts, sorted, "list_for_ui must return entries sorted by shortcut");
+    }
+}
