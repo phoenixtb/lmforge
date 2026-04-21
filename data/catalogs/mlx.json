@@ -51,9 +51,6 @@
     "qwen3-vl-embed:2b:6bit": "mlx-community/Qwen3-VL-Embedding-2B-6bit",
     "qwen3-vl-embed:2b:8bit": "mlx-community/Qwen3-VL-Embedding-2B-8bit",
 
-    "_comment_rerank": "--- Re-ranking models (oMLX native; Jina v3 support added in oMLX 0.3.6) ---",
-    "jina-reranker-v2:multilingual": "jinaai/jina-reranker-v2-base-multilingual",
-    "qwen3-reranker:0.6b:4bit": "mlx-community/Qwen3-Reranker-0.6B-4bit",
-    "qwen3-reranker:1.7b:4bit": "mlx-community/Qwen3-Reranker-1.7B-4bit",
-    "qwen3-reranker:4b:4bit": "mlx-community/Qwen3-Reranker-4B-4bit"
+    "_comment_rerank": "--- Re-ranking models (oMLX 0.3.6+ — JinaForRanking architecture only) ---",
+    "jina-reranker-v2:multilingual": "jinaai/jina-reranker-v2-base-multilingual"
 }

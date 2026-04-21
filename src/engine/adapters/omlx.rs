@@ -41,16 +41,17 @@ impl EngineAdapter for OmlxAdapter {
         logs_dir: &Path,
         role: ModelRole,
     ) -> Result<ActiveEngine> {
-        if role == ModelRole::Rerank {
-            anyhow::bail!(
-                "Re-ranking is not supported by oMLX v0.3.0. \
-                 It is available on platforms using llama.cpp."
-            );
-        }
-
-        // Chat and Embed: oMLX is a multi-model server — it discovers models from
-        // subdirectories of --model-dir and dispatches by subdir name. No extra flags needed.
-        // oMLX auto-detects embed vs chat from each model's own config.json.
+        // ModelRole::Rerank — oMLX 0.3.6+ supports Jina-architecture rerankers
+        // (JinaForRanking) natively. oMLX auto-detects the model type from each model's
+        // config.json, so no extra CLI flag is required here, just like embedding models.
+        //
+        // Note: Generative decoder-based rerankers (Qwen3-Reranker) are NOT supported
+        // by oMLX as of v0.3.6 — those should only be pulled with the GGUF catalog and
+        // served by llama.cpp via --reranking. If a user attempts to load one, oMLX will
+        // emit a clear architecture error from its own config.json parsing.
+        //
+        // Chat and Embed: oMLX discovers models from subdirectories of --model-dir and
+        // dispatches by subdir name. oMLX auto-detects embed vs chat from config.json.
         let models_parent_dir = model_subdir
             .parent()
             .ok_or_else(|| anyhow::anyhow!("Invalid model directory structure"))?;
