@@ -63,10 +63,22 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
         "  CPU:        {} ({} cores)",
         profile.cpu_model, profile.cpu_cores
     );
-    println!(
-        "  Quant tier: {}",
-        crate::hardware::vram::quant_tier(profile.vram_gb)
-    );
+    let tier = crate::hardware::vram::quant_tier(profile.vram_gb, profile.total_ram_gb);
+    match tier {
+        Some(t) => println!("  Quant tier: {}", t),
+        None => {
+            println!("  Quant tier: ⚠  Below minimum");
+            eprintln!();
+            eprintln!("  ⚠  Warning: This system is below the minimum recommended specification");
+            eprintln!("     for LLM inference (8 GB RAM or 3 GB VRAM).");
+            eprintln!();
+            eprintln!("     LMForge will still install the engine. You can:");
+            eprintln!("     • Run a small model manually:  lmforge pull <model>");
+            eprintln!("       (look for 1B or 3B models with Q4_K_S quantization)");
+            eprintln!("     • Upgrade to a machine with ≥ 8 GB RAM for a better experience");
+            eprintln!();
+        }
+    }
     println!();
 
     // Engine selection

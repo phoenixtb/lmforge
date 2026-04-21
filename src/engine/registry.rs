@@ -48,6 +48,10 @@ pub struct EngineConfig {
     pub release_url: Option<String>,
     #[serde(default)]
     pub asset_pattern: Option<String>,
+    /// Windows only: pattern for the CUDA runtime DLL zip (e.g. "cudart-llama-bin-win-{cuda_variant}")
+    /// Must be downloaded alongside the main binary zip and extracted to the same directory.
+    #[serde(default)]
+    pub cudart_pattern: Option<String>,
 
     // Runtime
     pub model_format: String,
@@ -307,7 +311,7 @@ mod tests {
         let registry = EngineRegistry::load(None).unwrap();
         let selected = registry.select(&apple_silicon()).unwrap();
         assert_eq!(selected.id, "omlx");
-        assert_eq!(selected.version, "0.3.0");
+        assert_eq!(selected.version, "0.3.6");
     }
 
     #[test]
@@ -345,8 +349,8 @@ mod tests {
     #[test]
     fn test_pinned_versions() {
         let registry = EngineRegistry::load(None).unwrap();
-        assert_eq!(registry.get("omlx").unwrap().version, "0.3.0");
-        assert_eq!(registry.get("llamacpp").unwrap().version, "b8558");
-        assert_eq!(registry.get("sglang").unwrap().version, "0.5.9");
+        assert_eq!(registry.get("omlx").unwrap().version, "0.3.6");
+        assert_eq!(registry.get("llamacpp").unwrap().version, "b8870");
+        assert_eq!(registry.get("sglang").unwrap().version, "0.5.10.post1");
     }
 }

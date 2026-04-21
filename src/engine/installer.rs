@@ -336,9 +336,9 @@ async fn install_via_binary(
 
     let binary_name = engine.binary.as_ref().context("No binary name specified")?;
 
-    // Resolve platform string
-    let platform = resolve_platform_string(profile)?;
-    let asset_name = asset_pattern.replace("{platform}", &platform);
+    // Resolve platform string and file extension
+    let (platform, extension) = resolve_platform(profile)?;
+    let asset_name = format!("{}.{}", asset_pattern.replace("{platform}", &platform), extension);
     let download_url = format!("{}/{}", release_url, asset_name);
 
     println!("  ⚙ Downloading {} from:", engine.name);
@@ -350,38 +350,68 @@ async fn install_via_binary(
 
     let archive_path = engines_dir.join(&asset_name);
 
-    // Download the archive
+    // Download the main binary archive
     download_file(&download_url, &archive_path).await?;
+
+    // On Windows CUDA builds, also download the CUDA runtime DLL package (cudart).
+    // Without this, llama-server.exe will fail with "cudart64_*.dll not found".
+    let cudart_archive_path = if profile.os == Os::Windows
+        && profile.gpu_vendor == crate::hardware::probe::GpuVendor::Nvidia
+    {
+        if let Some(ref cudart_pattern) = engine.cudart_pattern {
+            let cuda_variant = detect_windows_cuda_variant();
+            let cudart_name = format!(
+                "{}.zip",
+                cudart_pattern.replace("{cuda_variant}", &cuda_variant)
+            );
+            let cudart_url = format!("{}/{}", release_url, cudart_name);
+            let cudart_path = engines_dir.join(&cudart_name);
+            println!("  ⚙ Downloading CUDA runtime DLLs from:");
+            println!("    {}", cudart_url);
+            download_file(&cudart_url, &cudart_path).await?;
+            Some(cudart_path)
+        } else {
+            warn!("No cudart_pattern configured — GPU may fail to initialize on Windows");
+            None
+        }
+    } else {
+        None
+    };
 
     // Extract the archive
     println!("  ⚙ Extracting...");
     let extract_dir = engines_dir.join(format!("{}-extract", engine.id));
     std::fs::create_dir_all(&extract_dir)?;
 
-    let status = tokio::process::Command::new("tar")
-        .args([
-            "xzf",
-            &archive_path.to_string_lossy(),
-            "-C",
-            &extract_dir.to_string_lossy(),
-        ])
-        .status()
-        .await
-        .context("Failed to extract archive")?;
+    extract_archive(&archive_path, &extract_dir, profile).await?;
 
-    if !status.success() {
-        bail!("Failed to extract {}", asset_name);
+    // On Windows CUDA: extract cudart DLLs into the same directory so the
+    // binary can find cudart64_*.dll at startup.
+    if let Some(ref cudart_path) = cudart_archive_path {
+        extract_archive(cudart_path, &extract_dir, profile).await?;
     }
 
+    // Resolve the binary name (add .exe on Windows)
+    let resolved_binary = if profile.os == Os::Windows {
+        format!("{}.exe", binary_name)
+    } else {
+        binary_name.to_string()
+    };
+
     // Find the binary in the extracted directory
-    let found_binary = find_binary_in_dir(&extract_dir, binary_name)?;
-    let dest_path = engines_dir.join(binary_name);
+    let found_binary = find_binary_in_dir(&extract_dir, &resolved_binary)?;
+    let dest_path = engines_dir.join(&resolved_binary);
 
     // Copy binary to engines directory
     std::fs::copy(&found_binary, &dest_path)
         .context("Failed to copy binary to engines directory")?;
 
-    // Make executable
+    // On Windows CUDA: copy DLLs alongside the binary so they are co-located
+    if cudart_archive_path.is_some() {
+        copy_dlls_to_dir(&extract_dir, &engines_dir)?;
+    }
+
+    // Make executable on Unix
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -390,8 +420,11 @@ async fn install_via_binary(
         std::fs::set_permissions(&dest_path, perms)?;
     }
 
-    // Cleanup
+    // Cleanup archives and temp extract dir
     let _ = std::fs::remove_file(&archive_path);
+    if let Some(cudart_path) = cudart_archive_path {
+        let _ = std::fs::remove_file(cudart_path);
+    }
     let _ = std::fs::remove_dir_all(&extract_dir);
 
     let path = dest_path.to_string_lossy().to_string();
@@ -451,27 +484,134 @@ async fn download_file(url: &str, dest: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Resolve platform string for llama.cpp release assets
-fn resolve_platform_string(profile: &HardwareProfile) -> Result<String> {
-    let platform = match (profile.os, profile.arch) {
-        (Os::Darwin, Arch::Aarch64) => "macos-arm64",
-        (Os::Darwin, Arch::X86_64) => "macos-x64",
+/// Resolve the platform identifier string and file extension for a given hardware profile.
+/// Returns (platform_string, extension) e.g. ("ubuntu-vulkan-x64", "tar.gz").
+fn resolve_platform(profile: &HardwareProfile) -> Result<(String, &'static str)> {
+    let (platform, ext) = match (profile.os, profile.arch) {
+        (Os::Darwin, Arch::Aarch64) => ("macos-arm64".to_string(), "tar.gz"),
+        (Os::Darwin, Arch::X86_64) => ("macos-x64".to_string(), "tar.gz"),
         (Os::Linux, Arch::X86_64) => {
-            if profile.gpu_vendor == crate::hardware::probe::GpuVendor::Nvidia {
-                "ubuntu-x64-cuda"
+            // llama.cpp dropped the Linux CUDA pre-built binary starting ~b8370.
+            // The Vulkan binary is the GPU-accelerated option for Linux (NVIDIA/AMD/Intel).
+            // CPU-only fallback for non-GPU systems.
+            let p = if profile.gpu_vendor == crate::hardware::probe::GpuVendor::Nvidia
+                || profile.gpu_vendor == crate::hardware::probe::GpuVendor::Amd
+            {
+                "ubuntu-vulkan-x64"
             } else {
                 "ubuntu-x64"
-            }
+            };
+            (p.to_string(), "tar.gz")
         }
-        (Os::Linux, Arch::Aarch64) => "ubuntu-arm64",
-        (Os::Windows, Arch::X86_64) => "win-x64",
+        (Os::Linux, Arch::Aarch64) => ("ubuntu-arm64".to_string(), "tar.gz"),
+        (Os::Windows, Arch::X86_64) => {
+            // Windows ships CUDA-accelerated and CPU-only variants as .zip files.
+            let p = if profile.gpu_vendor == crate::hardware::probe::GpuVendor::Nvidia {
+                // Detect CUDA version and pick the matching CUDA runtime variant.
+                let cuda_variant = detect_windows_cuda_variant();
+                format!("win-cuda-{}-x64", cuda_variant)
+            } else {
+                // CPU-only fallback (no GPU or AMD — Vulkan not yet in Windows prebuilt)
+                "win-cpu-x64".to_string()
+            };
+            (p, "zip")
+        }
+        (Os::Windows, Arch::Aarch64) => ("win-cpu-arm64".to_string(), "zip"),
         _ => bail!(
             "No pre-built binary available for {:?} {:?}",
             profile.os,
             profile.arch
         ),
     };
-    Ok(platform.to_string())
+    Ok((platform, ext))
+}
+
+/// Detect the CUDA version installed on Windows by querying nvidia-smi.
+/// Returns "13.1" for CUDA 13.x, "12.4" as the default for CUDA 12.x or unknown.
+/// These correspond to the two CUDA variants shipped in llama.cpp Windows releases.
+fn detect_windows_cuda_variant() -> String {
+    if let Ok(output) = std::process::Command::new("nvidia-smi").output() {
+        if let Ok(stdout) = String::from_utf8(output.stdout) {
+            for line in stdout.lines() {
+                // nvidia-smi header contains "CUDA Version: X.Y"
+                if let Some(idx) = line.find("CUDA Version:") {
+                    let ver_str = line[idx + 13..].trim();
+                    let major: u32 = ver_str
+                        .split('.')
+                        .next()
+                        .unwrap_or("12")
+                        .parse()
+                        .unwrap_or(12);
+                    let variant = if major >= 13 { "13.1" } else { "12.4" };
+                    debug!(cuda_version = ver_str, variant, "Detected Windows CUDA variant");
+                    return variant.to_string();
+                }
+            }
+        }
+    }
+    warn!("Could not detect CUDA version via nvidia-smi; defaulting to CUDA 12.4 variant");
+    "12.4".to_string()
+}
+
+/// Extract an archive (.tar.gz or .zip) into the target directory.
+async fn extract_archive(
+    archive: &std::path::Path,
+    dest: &std::path::Path,
+    profile: &HardwareProfile,
+) -> Result<()> {
+    let archive_str = archive.to_string_lossy().to_string();
+    let dest_str = dest.to_string_lossy().to_string();
+
+    let is_zip = archive_str.ends_with(".zip");
+
+    if is_zip && profile.os == Os::Windows {
+        // Use PowerShell's Expand-Archive (available on Windows 10+)
+        let status = tokio::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!("Expand-Archive -Force -Path '{}' -DestinationPath '{}'", archive_str, dest_str),
+            ])
+            .status()
+            .await
+            .context("Failed to run PowerShell Expand-Archive")?;
+        if !status.success() {
+            bail!("Failed to extract zip: {}", archive_str);
+        }
+    } else {
+        // Unix: tar handles .tar.gz
+        let status = tokio::process::Command::new("tar")
+            .args(["xzf", &archive_str, "-C", &dest_str])
+            .status()
+            .await
+            .context("Failed to extract tar.gz archive")?;
+        if !status.success() {
+            bail!("Failed to extract archive: {}", archive_str);
+        }
+    }
+    Ok(())
+}
+
+/// Copy all DLL files from a source directory tree into the destination directory.
+/// Used on Windows to place CUDA runtime DLLs alongside the llama-server.exe binary.
+fn copy_dlls_to_dir(src_dir: &std::path::Path, dest_dir: &std::path::Path) -> Result<()> {
+    for entry in walkdir(src_dir)? {
+        if entry
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("dll"))
+            .unwrap_or(false)
+        {
+            if let Some(fname) = entry.file_name() {
+                let dest = dest_dir.join(fname);
+                std::fs::copy(&entry, &dest).with_context(|| {
+                    format!("Failed to copy DLL {} to engines dir", entry.display())
+                })?;
+                debug!(dll = ?fname, "Copied CUDA runtime DLL");
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Find a binary by name within a directory (recursive)
@@ -625,7 +765,9 @@ mod tests {
             cpu_cores: 14,
             cpu_model: "Apple M3 Max".to_string(),
         };
-        assert_eq!(resolve_platform_string(&profile).unwrap(), "macos-arm64");
+        let (platform, ext) = resolve_platform(&profile).unwrap();
+        assert_eq!(platform, "macos-arm64");
+        assert_eq!(ext, "tar.gz");
     }
 
     #[test]
@@ -641,10 +783,9 @@ mod tests {
             cpu_cores: 16,
             cpu_model: "AMD Ryzen 9".to_string(),
         };
-        assert_eq!(
-            resolve_platform_string(&profile).unwrap(),
-            "ubuntu-x64-cuda"
-        );
+        let (platform, ext) = resolve_platform(&profile).unwrap();
+        assert_eq!(platform, "ubuntu-vulkan-x64");
+        assert_eq!(ext, "tar.gz");
     }
 
     #[test]
@@ -660,6 +801,47 @@ mod tests {
             cpu_cores: 4,
             cpu_model: "Intel i5".to_string(),
         };
-        assert_eq!(resolve_platform_string(&profile).unwrap(), "ubuntu-x64");
+        let (platform, ext) = resolve_platform(&profile).unwrap();
+        assert_eq!(platform, "ubuntu-x64");
+        assert_eq!(ext, "tar.gz");
+    }
+
+    #[test]
+    fn test_resolve_platform_windows_cpu() {
+        let profile = HardwareProfile {
+            os: Os::Windows,
+            arch: Arch::X86_64,
+            is_tegra: false,
+            gpu_vendor: crate::hardware::probe::GpuVendor::None,
+            vram_gb: 0.0,
+            unified_mem: false,
+            total_ram_gb: 16.0,
+            cpu_cores: 8,
+            cpu_model: "Intel i7".to_string(),
+        };
+        let (platform, ext) = resolve_platform(&profile).unwrap();
+        assert_eq!(platform, "win-cpu-x64");
+        assert_eq!(ext, "zip");
+    }
+
+    #[test]
+    fn test_resolve_platform_windows_nvidia_uses_zip() {
+        let profile = HardwareProfile {
+            os: Os::Windows,
+            arch: Arch::X86_64,
+            is_tegra: false,
+            gpu_vendor: crate::hardware::probe::GpuVendor::Nvidia,
+            vram_gb: 3.5,
+            unified_mem: false,
+            total_ram_gb: 24.0,
+            cpu_cores: 20,
+            cpu_model: "12th Gen Intel Core i7-12700H".to_string(),
+        };
+        let (platform, ext) = resolve_platform(&profile).unwrap();
+        // Platform starts with "win-cuda-" and ends with "-x64"
+        assert!(platform.starts_with("win-cuda-"), "Expected win-cuda-*, got {}", platform);
+        assert!(platform.ends_with("-x64"), "Expected *-x64, got {}", platform);
+        // Windows CUDA builds are always .zip
+        assert_eq!(ext, "zip");
     }
 }

@@ -20,6 +20,41 @@ pub fn estimate_vram(profile: &HardwareProfile) -> f32 {
     vram
 }
 
+/// Determine the quantization tier based on available VRAM and RAM.
+///
+/// Returns `None` when the system is below the minimum viable threshold for LLM inference.
+/// Callers should surface a clear warning and let the user decide rather than attempting to
+/// run a Q3 or lower model, which are difficult to find and produce poor output quality.
+///
+/// Minimum viable thresholds (Q4_K_S floor):
+/// - GPU systems:    ≥ 3.0 GB VRAM  (e.g. RTX 3050 4 GB → 3.5 GB usable)
+/// - CPU-only:       ≥ 8.0 GB RAM   (→ 4.0 GB effective at 50% budget)
+///
+/// For CPU-only systems (`vram_gb == 0`): 50% of RAM is used as the effective budget,
+/// leaving headroom for OS, KV cache, and background processes.
+pub fn quant_tier(vram_gb: f32, total_ram_gb: f32) -> Option<&'static str> {
+    let effective_gb = if vram_gb > 0.0 {
+        vram_gb
+    } else {
+        total_ram_gb * 0.5
+    };
+
+    if effective_gb >= 48.0 {
+        Some("fp16") // Full precision — A6000, M2 Ultra 192 GB, or 96 GB+ RAM
+    } else if effective_gb >= 24.0 {
+        Some("Q8_0") // High quality — A10G / RTX 3090, or 48 GB+ RAM
+    } else if effective_gb >= 8.0 {
+        Some("Q4_K_M") // Recommended — RTX 3070/3080/4070, or 16 GB+ RAM
+    } else if effective_gb >= 3.0 {
+        Some("Q4_K_S") // Minimum viable — RTX 3050 4 GB, or 8 GB RAM
+    } else {
+        // Below minimum: < 3 GB VRAM or < 6 GB RAM.
+        // Q3 models are hard to find and produce poor results. Return None
+        // so the caller can warn the user and let them decide.
+        None
+    }
+}
+
 /// Get currently free VRAM in GB at the current moment
 pub fn get_free_vram(profile: &HardwareProfile) -> f32 {
     let free_vram = match profile.gpu_vendor {
@@ -79,7 +114,25 @@ fn estimate_nvidia_vram() -> f32 {
         }
     }
 
-    debug!("nvidia-smi query failed, defaulting VRAM to 0");
+    // Diagnose why nvidia-smi failed
+    let smi_exists = std::process::Command::new("which")
+        .arg("nvidia-smi")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !smi_exists {
+        tracing::warn!(
+            "nvidia-smi not found in PATH. Install the NVIDIA driver utilities \
+             (e.g. `sudo apt install nvidia-utils-535`) and re-run `lmforge init`. \
+             Defaulting VRAM to 0.0 GB — GPU inference will not be configured."
+        );
+    } else {
+        tracing::warn!(
+            "nvidia-smi found but query failed — driver may not be loaded. \
+             Try `nvidia-smi` in a terminal to diagnose. Defaulting VRAM to 0.0 GB."
+        );
+    }
     0.0
 }
 
@@ -164,21 +217,7 @@ fn get_free_amd_vram() -> f32 {
     0.0
 }
 
-/// Determine the quantization tier based on available VRAM.
-/// Used by engine registry to select the right model variant.
-pub fn quant_tier(vram_gb: f32) -> &'static str {
-    if vram_gb >= 48.0 {
-        "fp16" // Full precision (A6000, M2 Ultra 192GB, etc.)
-    } else if vram_gb >= 24.0 {
-        "Q8_0" // High quality quantization
-    } else if vram_gb >= 12.0 {
-        "Q4_K_M" // Good balance of quality and size
-    } else if vram_gb >= 6.0 {
-        "Q4_K_S" // Smaller quantization
-    } else {
-        "Q3_K_S" // Minimum viable quantization
-    }
-}
+
 
 #[cfg(test)]
 mod tests {
@@ -220,28 +259,67 @@ mod tests {
         assert_eq!(vram, 0.0);
     }
 
+    // --- quant_tier tests (GPU path: vram > 0) ---
+
     #[test]
     fn test_quant_tier_48gb() {
-        assert_eq!(quant_tier(48.0), "fp16");
+        assert_eq!(quant_tier(48.0, 64.0), Some("fp16"));
     }
 
     #[test]
     fn test_quant_tier_24gb() {
-        assert_eq!(quant_tier(24.0), "Q8_0");
+        assert_eq!(quant_tier(24.0, 64.0), Some("Q8_0"));
     }
 
     #[test]
     fn test_quant_tier_12gb() {
-        assert_eq!(quant_tier(12.0), "Q4_K_M");
+        assert_eq!(quant_tier(12.0, 32.0), Some("Q4_K_M"));
     }
 
     #[test]
     fn test_quant_tier_8gb() {
-        assert_eq!(quant_tier(8.0), "Q4_K_S");
+        assert_eq!(quant_tier(8.0, 32.0), Some("Q4_K_M")); // exactly at 8 GB threshold
     }
 
     #[test]
-    fn test_quant_tier_4gb() {
-        assert_eq!(quant_tier(4.0), "Q3_K_S");
+    fn test_quant_tier_4gb_vram() {
+        // RTX 3050 4GB → ~3.5 GB usable → Q4_K_S (4-bit minimum)
+        assert_eq!(quant_tier(3.5, 24.0), Some("Q4_K_S"));
+        assert_eq!(quant_tier(4.0, 24.0), Some("Q4_K_S"));
+    }
+
+    #[test]
+    fn test_quant_tier_below_minimum_vram() {
+        // < 3 GB VRAM → below minimum → None (no Q3 recommendation)
+        assert_eq!(quant_tier(2.0, 8.0), None);
+        assert_eq!(quant_tier(1.0, 4.0), None);
+    }
+
+    // --- quant_tier tests (CPU-only path: vram == 0, RAM-based) ---
+
+    #[test]
+    fn test_quant_tier_cpu_only_24gb_ram() {
+        // 24 GB RAM → 12 GB effective → Q4_K_M
+        assert_eq!(quant_tier(0.0, 24.0), Some("Q4_K_M"));
+    }
+
+    #[test]
+    fn test_quant_tier_cpu_only_16gb_ram() {
+        // 16 GB RAM → 8 GB effective → Q4_K_M
+        assert_eq!(quant_tier(0.0, 16.0), Some("Q4_K_M"));
+    }
+
+    #[test]
+    fn test_quant_tier_cpu_only_8gb_ram() {
+        // 8 GB RAM → 4 GB effective → Q4_K_S (minimum viable)
+        assert_eq!(quant_tier(0.0, 8.0), Some("Q4_K_S"));
+    }
+
+    #[test]
+    fn test_quant_tier_cpu_only_below_minimum() {
+        // < 8 GB RAM → below minimum → None (warn user, don't recommend Q3)
+        // 5 GB RAM → 2.5 GB effective → below 3.0 GB threshold → None
+        assert_eq!(quant_tier(0.0, 5.0), None);
+        assert_eq!(quant_tier(0.0, 4.0), None);
     }
 }

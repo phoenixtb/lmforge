@@ -1,11 +1,14 @@
 # LMForge Default Engine Registry
 # All versions pinned to tested releases.
 # Users can override in ~/.lmforge/engines.toml
+#
+# asset_pattern does NOT include the file extension (.tar.gz / .zip).
+# The installer resolves the correct extension per OS at runtime.
 
 [[engine]]
 id              = "omlx"
 name            = "oMLX"
-version         = "0.3.0"
+version         = "0.3.6"
 matches_os      = "darwin"
 matches_arch    = "aarch64"
 install_method  = "brew"
@@ -18,19 +21,19 @@ start_cmd       = "omlx"
 start_args      = ["serve", "--port", "{port}", "--model-dir", "{data_dir}/models"]
 health_endpoint = "/v1/models"
 supports_embeddings = true
-supports_reranking  = false   # Not in oMLX v0.3.0; enable when version supports it
+supports_reranking  = true    # Jina Reranker V3 support added in v0.3.6
 priority        = 10
 
 [[engine]]
 id              = "sglang"
 name            = "SGLang"
-version         = "0.5.9"
+version         = "0.5.10.post1"
 matches_os      = "linux"
 matches_arch    = "x86_64"
 matches_gpu     = "nvidia"
 min_vram_gb     = 24.0
 install_method  = "pip"
-pip_package     = "sglang[all]==0.5.9"
+pip_package     = "sglang[all]==0.5.10.post1"
 preflight       = ["nvcc", "nvidia-smi", "python3"]
 min_disk_gb     = 15
 model_format    = "safetensors"
@@ -39,18 +42,21 @@ start_cmd       = "python3"
 start_args      = ["-m", "sglang.launch_server", "--port", "{port}", "--model-path", "{model_path}"]
 health_endpoint = "/health"
 supports_embeddings = true    # via --is-embedding flag; LMForge injects automatically
-supports_reranking  = false   # Cross-encoder support experimental in v0.5.9; skip
+supports_reranking  = false   # Cross-encoder support experimental in v0.5.10; skip
 priority        = 20
 
 [[engine]]
 id              = "llamacpp"
 name            = "llama.cpp"
-version         = "b8558"
+version         = "b8870"
 matches_fallback = true
 install_method  = "binary"
 binary          = "llama-server"
-release_url     = "https://github.com/ggml-org/llama.cpp/releases/download/b8558"
-asset_pattern   = "llama-b8558-bin-{platform}.tar.gz"
+release_url     = "https://github.com/ggml-org/llama.cpp/releases/download/b8870"
+# {platform} is resolved by the installer; extension (.tar.gz or .zip) is appended by OS
+asset_pattern   = "llama-b8870-bin-{platform}"
+# Windows CUDA builds also require the CUDA runtime DLL package (downloaded separately):
+cudart_pattern  = "cudart-llama-bin-win-{cuda_variant}"
 model_format    = "gguf"
 hf_org          = "bartowski"
 start_cmd       = "llama-server"
