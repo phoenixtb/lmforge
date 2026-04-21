@@ -218,23 +218,30 @@ fn detect_format_from_engine(engine_format: &str) -> ModelFormat {
 }
 
 /// Extract a quantization token from a catalog shortcut.
-/// e.g. "qwen3-embed:0.6b:4bit" → Some("4bit")
-///      "bge-m3:f16"            → Some("f16")
+/// Recognises both the long form (4bit, 8bit) and short form (q4, q8, f16).
+/// e.g. "qwen3-embed:0.6b:q8"  → Some("q8")   → Q8_0
+///      "qwen3-embed:0.6b:4bit" → Some("4bit")  → Q4_K_S
+///      "bge-m3:f16"             → Some("f16")   → F16
 ///      "nomic-embed-text:v1.5" → None
 fn extract_quant_hint(shortcut: &str) -> Option<&str> {
     shortcut.split(':').find(|part| {
-        matches!(*part, "4bit" | "5bit" | "6bit" | "8bit" | "f16" | "bf16")
+        matches!(
+            *part,
+            "4bit" | "5bit" | "6bit" | "8bit"
+                | "q4"  | "q5"  | "q6"  | "q8"
+                | "f16" | "bf16"
+        )
     })
 }
 
 /// Return ordered GGUF filename substrings for a given quant tag.
-/// The first pattern that matches a file in the repo is used.
+/// Accepts both long form ("4bit", "8bit") and short form ("q4", "q8").
 fn gguf_patterns_for_quant(quant: &str) -> &'static [&'static str] {
     match quant {
-        "4bit" => &["Q4_K_S", "Q4_K_M", "Q4_K"],
-        "5bit" => &["Q5_K_S", "Q5_K_M", "Q5_K"],
-        "6bit" => &["Q6_K"],
-        "8bit" => &["Q8_0"],
+        "4bit" | "q4" => &["Q4_K_S", "Q4_K_M", "Q4_K"],
+        "5bit" | "q5" => &["Q5_K_S", "Q5_K_M", "Q5_K"],
+        "6bit" | "q6" => &["Q6_K"],
+        "8bit" | "q8" => &["Q8_0"],
         "f16" | "bf16" => &["F16", "BF16", "f16", "bf16"],
         _ => &[],
     }
@@ -353,6 +360,13 @@ mod tests {
     #[test]
     fn test_extract_quant_hint_8bit() {
         assert_eq!(extract_quant_hint("qwen3-embed:0.6b:8bit"), Some("8bit"));
+    }
+
+    #[test]
+    fn test_extract_quant_hint_q8_shortform() {
+        // Catalog keys use "q8" short form — must be recognized
+        assert_eq!(extract_quant_hint("qwen3-embed:0.6b:q8"), Some("q8"));
+        assert_eq!(extract_quant_hint("qwen3-reranker:0.6b:q4"), Some("q4"));
     }
 
     #[test]
