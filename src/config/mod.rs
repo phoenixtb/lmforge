@@ -4,7 +4,7 @@ pub mod schema;
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::Cli;
@@ -144,7 +144,9 @@ pub fn load(cli: &Cli) -> Result<LmForgeConfig> {
     }
 
     // Layer 2: Project config (lmforge.yaml in cwd)
-    let project_path = std::env::current_dir()?.join("lmforge.yaml");
+    let project_path = std::env::current_dir()
+        .context("Cannot determine current directory")?
+        .join("lmforge.yaml");
     if project_path.exists() {
         let project = project::load(&project_path)?;
         config = merge_config(config, project);

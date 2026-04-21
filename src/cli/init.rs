@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tracing::info;
 
 use crate::config::LmForgeConfig;
@@ -11,27 +11,30 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     // Ensure data directory exists
     let data_dir = config.data_dir();
     if !data_dir.exists() {
-        std::fs::create_dir_all(&data_dir)?;
-        std::fs::create_dir_all(data_dir.join("engines"))?;
-        std::fs::create_dir_all(data_dir.join("models"))?;
-        std::fs::create_dir_all(data_dir.join("logs"))?;
+        std::fs::create_dir_all(&data_dir)
+            .with_context(|| format!("Cannot create data dir: {}", data_dir.display()))?;
+        std::fs::create_dir_all(data_dir.join("engines"))
+            .with_context(|| format!("Cannot create engines dir: {}", data_dir.display()))?;
+        std::fs::create_dir_all(data_dir.join("models"))
+            .with_context(|| format!("Cannot create models dir: {}", data_dir.display()))?;
+        std::fs::create_dir_all(data_dir.join("logs"))
+            .with_context(|| format!("Cannot create logs dir: {}", data_dir.display()))?;
         info!("Created LMForge data directory at {}", data_dir.display());
     }
 
-    // Ensure catalogs directory exists and write default mlx.json
     let catalogs_dir = config.catalogs_dir();
     if !catalogs_dir.exists() {
-        std::fs::create_dir_all(&catalogs_dir)?;
+        std::fs::create_dir_all(&catalogs_dir)
+            .with_context(|| format!("Cannot create catalogs dir: {}", catalogs_dir.display()))?;
     }
 
-    // Always write the bundled catalog files — the content is embedded at compile time via
-    // include_str!, so this binary always has the freshest version. Overwriting on each init
-    // ensures catalog entries added in newer releases are not silently absent.
     let mlx_defaults = include_str!("../../data/catalogs/mlx.json");
-    std::fs::write(catalogs_dir.join("mlx.json"), mlx_defaults)?;
+    std::fs::write(catalogs_dir.join("mlx.json"), mlx_defaults)
+        .with_context(|| format!("Cannot write mlx.json to {}", catalogs_dir.display()))?;
 
     let gguf_defaults = include_str!("../../data/catalogs/gguf.json");
-    std::fs::write(catalogs_dir.join("gguf.json"), gguf_defaults)?;
+    std::fs::write(catalogs_dir.join("gguf.json"), gguf_defaults)
+        .with_context(|| format!("Cannot write gguf.json to {}", catalogs_dir.display()))?;
 
     // Hardware probe
     println!("⚙ Detecting hardware...");
