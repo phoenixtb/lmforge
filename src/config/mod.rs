@@ -144,12 +144,13 @@ pub fn load(cli: &Cli) -> Result<LmForgeConfig> {
     }
 
     // Layer 2: Project config (lmforge.yaml in cwd)
-    let project_path = std::env::current_dir()
-        .context("Cannot determine current directory")?
-        .join("lmforge.yaml");
-    if project_path.exists() {
-        let project = project::load(&project_path)?;
-        config = merge_config(config, project);
+    // Skip gracefully if the working directory is unavailable (e.g. piped bash execution).
+    if let Ok(cwd) = std::env::current_dir() {
+        let project_path = cwd.join("lmforge.yaml");
+        if project_path.exists() {
+            let project = project::load(&project_path)?;
+            config = merge_config(config, project);
+        }
     }
 
     // Layer 3: CLI flag overrides
