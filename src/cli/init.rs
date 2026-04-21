@@ -43,9 +43,11 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     println!();
 
     // Save hardware profile for later use
-    let profile_json = serde_json::to_string_pretty(&profile)?;
+    let profile_json = serde_json::to_string_pretty(&profile)
+        .context("Failed to serialize hardware profile")?;
     let profile_path = data_dir.join("hardware.json");
-    std::fs::write(&profile_path, &profile_json)?;
+    std::fs::write(&profile_path, &profile_json)
+        .with_context(|| format!("Cannot write hardware.json to {}", profile_path.display()))?;
     info!(path = %profile_path.display(), "Hardware profile saved");
 
     // Print summary
@@ -91,8 +93,9 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
         Some(user_engines_path.as_path())
     } else {
         None
-    })?;
-    let selected = registry.select(&profile)?;
+    })
+    .context("Failed to load engine registry")?;
+    let selected = registry.select(&profile).context("No compatible engine found for this hardware")?;
     println!(
         "  Selected: {} v{} ({})",
         selected.name, selected.version, selected.id
@@ -103,7 +106,9 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
 
     // Engine installation
     println!("⚙ Installing engine...");
-    let install_result = crate::engine::installer::install(selected, &profile, &data_dir).await?;
+    let install_result = crate::engine::installer::install(selected, &profile, &data_dir)
+        .await
+        .with_context(|| format!("Engine installation failed for {}", selected.id))?;
     println!("  Method: {}", install_result.method_used);
     println!();
 
