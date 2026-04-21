@@ -10,17 +10,15 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
 
     // Ensure data directory exists
     let data_dir = config.data_dir();
-    if !data_dir.exists() {
-        std::fs::create_dir_all(&data_dir)
-            .with_context(|| format!("Cannot create data dir: {}", data_dir.display()))?;
-        std::fs::create_dir_all(data_dir.join("engines"))
-            .with_context(|| format!("Cannot create engines dir: {}", data_dir.display()))?;
-        std::fs::create_dir_all(data_dir.join("models"))
-            .with_context(|| format!("Cannot create models dir: {}", data_dir.display()))?;
-        std::fs::create_dir_all(data_dir.join("logs"))
-            .with_context(|| format!("Cannot create logs dir: {}", data_dir.display()))?;
-        info!("Created LMForge data directory at {}", data_dir.display());
-    }
+    // Always ensure all expected subdirs exist — create_dir_all is idempotent.
+    // This also re-creates any dirs that uninstall-core.sh removed (e.g. engines/).
+    std::fs::create_dir_all(data_dir.join("engines"))
+        .with_context(|| format!("Cannot create engines dir: {}", data_dir.display()))?;
+    std::fs::create_dir_all(data_dir.join("models"))
+        .with_context(|| format!("Cannot create models dir: {}", data_dir.display()))?;
+    std::fs::create_dir_all(data_dir.join("logs"))
+        .with_context(|| format!("Cannot create logs dir: {}", data_dir.display()))?;
+    info!("Ensured data directories at {}", data_dir.display());
 
     let catalogs_dir = config.catalogs_dir();
     if !catalogs_dir.exists() {

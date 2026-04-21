@@ -59,7 +59,8 @@ fn install_launchd(exe_path: &str) -> Result<()> {
     let plist_path = launchd_plist_path()?;
 
     if let Some(parent) = plist_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Cannot create LaunchAgents dir: {}", parent.display()))?;
     }
 
     let plist_content = format!(
@@ -96,7 +97,8 @@ fn install_launchd(exe_path: &str) -> Result<()> {
         home_dir()?.to_string_lossy()
     );
 
-    std::fs::write(&plist_path, plist_content)?;
+    std::fs::write(&plist_path, plist_content)
+        .with_context(|| format!("Cannot write launchd plist: {}", plist_path.display()))?;
 
     println!("⚙ Loading macOS Launch Agent...");
     let _ = std::process::Command::new("launchctl")
@@ -105,7 +107,8 @@ fn install_launchd(exe_path: &str) -> Result<()> {
 
     let output = std::process::Command::new("launchctl")
         .args(["load", plist_path.to_str().unwrap()])
-        .output()?;
+        .output()
+        .context("Failed to run launchctl load")?;
 
     if !output.status.success() {
         bail!(

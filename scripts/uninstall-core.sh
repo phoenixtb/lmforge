@@ -116,9 +116,11 @@ $FOUND || warn "lmforge binary not found in standard locations (may already be r
 # ── 6. Remove PATH injection lines from shell profiles ───────────────────────
 section "Cleaning up PATH entries..."
 for profile in "${HOME}/.zshrc" "${HOME}/.bashrc" "${HOME}/.profile"; do
-    if [[ -f "$profile" ]] && grep -q "\.local/bin" "$profile"; then
-        # Remove the "# LMForge" comment + the export PATH line we added
-        sed -i.bak '/^# LMForge$/d; /\.local\/bin.*PATH/d' "$profile" 2>/dev/null || true
+    if [[ -f "$profile" ]] && grep -qE "# LMForge|lmforge" "$profile"; then
+        # Remove the blank line, "# LMForge" comment, and the export PATH line we added.
+        sed -i.bak -e '/^# LMForge$/{ N; d; }' \
+                   -e '/\.local\/bin.*PATH/d' \
+                   -e '/lmforge.*PATH/d' "$profile" 2>/dev/null || true
         rm -f "${profile}.bak"
         info "Cleaned PATH entry from $profile"
     fi
@@ -128,11 +130,16 @@ done
 rm -f "$DATA_DIR/lmforge.pid"   2>/dev/null || true
 rm -f "$DATA_DIR/lmforge.sock"  2>/dev/null || true
 
-# ── 8. Remove engine installs (venvs, downloaded binaries in ~/.lmforge) ──────
+# ── 8. Remove engine installs and extracted probe binary ──────────────────────
 section "Removing installed engines..."
 if [[ -d "$DATA_DIR/engines" ]]; then
     rm -rf "$DATA_DIR/engines"
     info "Removed $DATA_DIR/engines"
+fi
+# Remove the extracted GPU probe binary (small, always safe to remove)
+if [[ -d "$DATA_DIR/bin" ]]; then
+    rm -rf "$DATA_DIR/bin"
+    info "Removed $DATA_DIR/bin"
 fi
 
 # ── 9. Data directory ─────────────────────────────────────────────────────────
