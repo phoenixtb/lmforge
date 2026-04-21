@@ -4,11 +4,11 @@
     "qwen3:4b:4bit": "bartowski/Qwen3-4B-GGUF",
     "qwen3:8b:4bit": "bartowski/Qwen3-8B-GGUF",
 
-    "qwen3.5:2b:4bit": "Qwen/Qwen3.5-2B-GGUF",
-    "qwen3.5:2b:6bit": "Qwen/Qwen3.5-2B-GGUF",
-    "qwen3.5:4b:4bit": "Qwen/Qwen3.5-4B-GGUF",
-    "qwen3.5:4b:6bit": "Qwen/Qwen3.5-4B-GGUF",
-    "qwen3.5:9b:4bit": "bartowski/Qwen3.5-9B-OptiQ-GGUF",
+    "qwen3.5:2b:4bit": "mradermacher/Qwen3.5-2B-GGUF",
+    "qwen3.5:2b:6bit": "mradermacher/Qwen3.5-2B-GGUF",
+    "qwen3.5:4b:4bit": "mradermacher/Qwen3.5-4B-GGUF",
+    "qwen3.5:4b:6bit": "mradermacher/Qwen3.5-4B-GGUF",
+    "qwen3.5:9b:4bit": "bartowski/Qwen3.5-9B-GGUF",
     "qwen3.5:9b:6bit": "bartowski/Qwen3.5-9B-GGUF",
     "qwen3.5:27b:4bit:opus-distilled": "bartowski/Qwen3.5-27B-Claude-4.6-Opus-Distilled-GGUF",
 
@@ -37,20 +37,16 @@
     "_comment_embed": "--- Embedding models (GGUF, served by llama.cpp --embeddings flag) ---",
     "nomic-embed-text:v1.5": "nomic-ai/nomic-embed-text-v1.5-GGUF",
     "nomic-embed-text:v2": "nomic-ai/nomic-embed-text-v2-moe-GGUF",
-    "nomic-modernbert-embed:f16": "nomic-ai/nomic-modernbert-embed-base-GGUF",
-    "nomic-modernbert-embed:4bit": "nomic-ai/nomic-modernbert-embed-base-GGUF",
-    "nomic-modernbert-embed:8bit": "nomic-ai/nomic-modernbert-embed-base-GGUF",
     "bge-m3:f16": "gpustack/bge-m3-GGUF",
     "qwen3-embed:0.6b:q8": "Qwen/Qwen3-Embedding-0.6B-GGUF",
     "qwen3-embed:0.6b:f16": "Qwen/Qwen3-Embedding-0.6B-GGUF",
-    "qwen3-embed:4b:4bit": "bartowski/Qwen3-Embedding-4B-GGUF",
-    "qwen3-embed:8b:4bit": "bartowski/Qwen3-Embedding-8B-GGUF",
+    "qwen3-embed:4b:4bit": "Qwen/Qwen3-Embedding-4B-GGUF",
+    "qwen3-embed:8b:4bit": "Qwen/Qwen3-Embedding-8B-GGUF",
 
     "_comment_rerank": "--- Re-ranking models (GGUF, llama.cpp --reranking flag; stable from b4355+) ---",
     "bge-reranker-v2-m3:f16": "gpustack/bge-reranker-v2-m3-GGUF",
     "bge-reranker:large:f16": "gpustack/bge-reranker-large-GGUF",
     "jina-reranker-v2:multilingual:f16": "gpustack/jina-reranker-v2-base-multilingual-GGUF",
-    "qwen3-reranker:0.6b:4bit": "Qwen/Qwen3-Reranker-0.6B-GGUF",
-    "qwen3-reranker:1.7b:4bit": "Qwen/Qwen3-Reranker-1.7B-GGUF",
-    "qwen3-reranker:4b:4bit": "Qwen/Qwen3-Reranker-4B-GGUF"
+    "qwen3-reranker:0.6b:4bit": "mradermacher/Qwen3-Reranker-0.6B-GGUF",
+    "qwen3-reranker:4b:4bit": "mradermacher/Qwen3-Reranker-4B-GGUF"
 }

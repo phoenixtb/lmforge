@@ -188,16 +188,15 @@ fn legacy_curations(normalized: &str, format_str: &str) -> Option<String> {
             // qwencode3 → qwen3-coder rename (v0.1.0)
             "qwencode3:4bit" => Some("bartowski/Qwen3-Coder-Next-GGUF".to_string()),
             "qwencode3:8bit" => Some("bartowski/Qwen3-Coder-Next-GGUF".to_string()),
-            // :q4 → :4bit rename (v0.1.0); redirect old keys to new GGUF repos
+            // :q4 → catalog keys were renamed/replaced (v0.1.0+)
             "qwen3-embed:0.6b:q4"    => Some("Qwen/Qwen3-Embedding-0.6B-GGUF".to_string()),
-            // :4bit alias for 0.6B — no Q4 exists; select_gguf_files falls back to Q8_0 with warning
-            "qwen3-embed:0.6b:4bit"  => Some("Qwen/Qwen3-Embedding-0.6B-GGUF".to_string()),
+            "qwen3-embed:0.6b:4bit"  => Some("Qwen/Qwen3-Embedding-0.6B-GGUF".to_string()), // no Q4 in repo; falls back to Q8_0
             "qwen3-embed:0.6b:8bit"  => Some("Qwen/Qwen3-Embedding-0.6B-GGUF".to_string()), // renamed :8bit → :q8
-            "qwen3-embed:4b:q4"      => Some("bartowski/Qwen3-Embedding-4B-GGUF".to_string()),
-            "qwen3-embed:8b:q4"      => Some("bartowski/Qwen3-Embedding-8B-GGUF".to_string()),
-            "qwen3-reranker:0.6b:q4" => Some("Qwen/Qwen3-Reranker-0.6B-GGUF".to_string()),
-            "qwen3-reranker:1.7b:q4" => Some("Qwen/Qwen3-Reranker-1.7B-GGUF".to_string()),
-            "qwen3-reranker:4b:q4"   => Some("Qwen/Qwen3-Reranker-4B-GGUF".to_string()),
+            "qwen3-embed:4b:q4"      => Some("Qwen/Qwen3-Embedding-4B-GGUF".to_string()),   // confirmed Q4_K_M
+            "qwen3-embed:8b:q4"      => Some("Qwen/Qwen3-Embedding-8B-GGUF".to_string()),   // confirmed Q4_K_M
+            "qwen3-reranker:0.6b:q4" => Some("mradermacher/Qwen3-Reranker-0.6B-GGUF".to_string()), // confirmed Q4_K_S
+            "qwen3-reranker:4b:q4"   => Some("mradermacher/Qwen3-Reranker-4B-GGUF".to_string()),   // confirmed Q4_K_S
+            // 1.7B reranker removed — no verified GGUF repo with Q4 found
             _ => None,
         },
         "mlx" => match normalized {
@@ -313,10 +312,9 @@ mod tests {
     #[test]
     fn test_gguf_has_reranker_models() {
         let map: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
-        assert!(map.contains_key("jina-reranker-v2:multilingual:f16"));
-        assert!(map.contains_key("qwen3-reranker:0.6b:4bit"));
-        assert!(map.contains_key("qwen3-reranker:1.7b:4bit"));
-        assert!(map.contains_key("qwen3-reranker:4b:4bit"));
+        assert!(map.contains_key("qwen3-reranker:0.6b:4bit"), "missing 0.6B reranker");
+        // 1.7B removed — no verified GGUF repo with Q4 found
+        assert!(map.contains_key("qwen3-reranker:4b:4bit"),   "missing 4B reranker");
     }
 
     #[test]
@@ -399,21 +397,21 @@ mod tests {
         // :4bit alias for 0.6B also exists (no Q4 in repo, falls back to Q8_0 at runtime)
         assert_eq!(legacy_curations("qwen3-embed:0.6b:4bit", "gguf"),
             Some("Qwen/Qwen3-Embedding-0.6B-GGUF".to_string()));
-        // 4B/8B now point to bartowski for proper Q4 availability
+        // 4B/8B now point to official Qwen repos (confirmed Q4_K_M exists)
         assert_eq!(legacy_curations("qwen3-embed:4b:q4", "gguf"),
-            Some("bartowski/Qwen3-Embedding-4B-GGUF".to_string()));
+            Some("Qwen/Qwen3-Embedding-4B-GGUF".to_string()));
         assert_eq!(legacy_curations("qwen3-embed:8b:q4", "gguf"),
-            Some("bartowski/Qwen3-Embedding-8B-GGUF".to_string()));
+            Some("Qwen/Qwen3-Embedding-8B-GGUF".to_string()));
     }
 
     #[test]
     fn test_legacy_q4_reranker_keys_resolve() {
+        // 0.6B and 4B now point to mradermacher (confirmed Q4_K_S exists)
         assert_eq!(legacy_curations("qwen3-reranker:0.6b:q4", "gguf"),
-            Some("Qwen/Qwen3-Reranker-0.6B-GGUF".to_string()));
-        assert_eq!(legacy_curations("qwen3-reranker:1.7b:q4", "gguf"),
-            Some("Qwen/Qwen3-Reranker-1.7B-GGUF".to_string()));
+            Some("mradermacher/Qwen3-Reranker-0.6B-GGUF".to_string()));
         assert_eq!(legacy_curations("qwen3-reranker:4b:q4", "gguf"),
-            Some("Qwen/Qwen3-Reranker-4B-GGUF".to_string()));
+            Some("mradermacher/Qwen3-Reranker-4B-GGUF".to_string()));
+        // 1.7B removed — no verified Q4 source found
     }
 
     #[test]
@@ -440,9 +438,9 @@ mod tests {
     #[test]
     fn test_resolve_from_bundled_gguf_finds_primary_models() {
         assert_eq!(resolve_from_bundled("qwen3.5:4b:4bit", "gguf"),
-            Some("Qwen/Qwen3.5-4B-GGUF".to_string()));
+            Some("mradermacher/Qwen3.5-4B-GGUF".to_string()));
         assert_eq!(resolve_from_bundled("qwen3.5:2b:4bit", "gguf"),
-            Some("Qwen/Qwen3.5-2B-GGUF".to_string()));
+            Some("mradermacher/Qwen3.5-2B-GGUF".to_string()));
         // 0.6B uses :q8 in the live catalog (no Q4 exists in repo)
         assert_eq!(resolve_from_bundled("qwen3-embed:0.6b:q8", "gguf"),
             Some("Qwen/Qwen3-Embedding-0.6B-GGUF".to_string()));
