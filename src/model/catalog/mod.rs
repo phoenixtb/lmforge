@@ -178,11 +178,29 @@ fn infer_role(shortcut: &str, repo: &str) -> String {
 // ── Legacy safety net ─────────────────────────────────────────────────────────
 
 /// Minimal hard-coded fallback for edge cases where even the bundled catalog fails.
+/// Also provides backward-compatibility aliases for renamed shortcuts.
 fn legacy_curations(normalized: &str, format_str: &str) -> Option<String> {
     match format_str {
         "gguf" => match normalized {
-            "qwen3-8b" => Some("bartowski/Qwen3-8B-GGUF".to_string()),
-            "llama-3.1-8b" => Some("bartowski/Meta-Llama-3.1-8B-Instruct-GGUF".to_string()),
+            // Legacy shortcut aliases (kept for backward compatibility)
+            "qwen3-8b"      => Some("bartowski/Qwen3-8B-GGUF".to_string()),
+            "llama-3.1-8b"  => Some("bartowski/Meta-Llama-3.1-8B-Instruct-GGUF".to_string()),
+            // qwencode3 → qwen3-coder rename (v0.1.0)
+            "qwencode3:4bit" => Some("bartowski/Qwen3-Coder-Next-GGUF".to_string()),
+            "qwencode3:8bit" => Some("bartowski/Qwen3-Coder-Next-GGUF".to_string()),
+            // :q4 → :4bit rename (v0.1.0); redirect old keys to new GGUF repos
+            "qwen3-embed:0.6b:q4"    => Some("Qwen/Qwen3-Embedding-0.6B-GGUF".to_string()),
+            "qwen3-embed:4b:q4"      => Some("Qwen/Qwen3-Embedding-4B-GGUF".to_string()),
+            "qwen3-embed:8b:q4"      => Some("Qwen/Qwen3-Embedding-8B-GGUF".to_string()),
+            "qwen3-reranker:0.6b:q4" => Some("Qwen/Qwen3-Reranker-0.6B-GGUF".to_string()),
+            "qwen3-reranker:1.7b:q4" => Some("Qwen/Qwen3-Reranker-1.7B-GGUF".to_string()),
+            "qwen3-reranker:4b:q4"   => Some("Qwen/Qwen3-Reranker-4B-GGUF".to_string()),
+            _ => None,
+        },
+        "mlx" => match normalized {
+            // qwencode3 → qwen3-coder rename (v0.1.0)
+            "qwencode3:4bit" => Some("mlx-community/Qwen3-Coder-Next-4bit".to_string()),
+            "qwencode3:8bit" => Some("mlx-community/Qwen3-Coder-Next-8bit".to_string()),
             _ => None,
         },
         "safetensors" => {
