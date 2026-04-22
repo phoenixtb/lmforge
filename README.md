@@ -394,7 +394,8 @@ cd ui && npm install && npm run tauri build
 
 **Run tests:**
 ```bash
-cargo test                              # unit + mock integration tests
+cargo test --lib                        # unit tests (no engine required)
+cargo test -- --ignored --nocapture     # live catalog verification (network)
 bash tests/multi_model_e2e.sh          # E2E multi-model test suite
 ```
 
@@ -536,6 +537,9 @@ cargo test -- --nocapture
 # Watch mode (requires cargo-watch)
 cargo watch -x check
 cargo watch -x 'test --lib'
+
+# Verify every catalog entry is freely downloadable (hits HuggingFace live)
+cargo test -- --ignored --nocapture
 ```
 
 ---
@@ -575,6 +579,19 @@ bash tests/e2e.sh
 bash tests/multi_model_e2e.sh
 # Reports saved to: tests/integration/reports/
 ```
+
+#### Catalog verification (live HuggingFace check)
+
+Ensures every shortcut in `gguf.json` and `mlx.json` resolves to a real,
+freely downloadable file — no HF token required:
+
+```bash
+# Checks all entries against the live HF CDN (HTTP HEAD, no auth)
+# ✓ 200 = confirmed free   ✗ 401/404 = must be removed from catalog
+cargo test -p lmforge -- --ignored --nocapture
+```
+
+Run this whenever you add or change a catalog entry.
 
 #### Testing with a custom catalog
 
@@ -703,11 +720,13 @@ rm -rf ~/.lmforge/
 
 ```bash
 # Removes target/ — frees several GB; next build takes longer
-cargo clean
+cargo clean --workspace
 
 # Clean only the UI node_modules and dist
-cd ui
-rm -rf node_modules .svelte-kit build
+rm -rf ui/node_modules ui/.svelte-kit ui/build
+
+# Full workspace clean in one shot (Rust + UI)
+cargo clean --workspace && rm -rf ui/node_modules ui/.svelte-kit ui/build
 ```
 
 #### Quick dev reset (no model loss)

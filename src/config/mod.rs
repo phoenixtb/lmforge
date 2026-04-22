@@ -4,7 +4,7 @@ pub mod schema;
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::Cli;
