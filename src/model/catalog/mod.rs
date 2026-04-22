@@ -10,6 +10,37 @@ pub const BUNDLED_MLX: &str = include_str!("../../../data/catalogs/mlx.json");
 /// The bundled default GGUF catalog — embedded at compile time.
 pub const BUNDLED_GGUF: &str = include_str!("../../../data/catalogs/gguf.json");
 
+// ── GGUF raw catalog types ────────────────────────────────────────────────────
+
+/// A single GGUF catalog entry: repo + exact filename to download.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct GgufEntry {
+    pub repo: String,
+    pub file: String,
+}
+
+/// Untagged serde type so we can handle both model entries (`{repo, file}`)
+/// and comment entries (plain strings like `"--- Chat models ---"`).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(untagged)]
+enum RawGgufValue {
+    Entry(GgufEntry),
+    Comment(String),
+}
+
+// ── Public result type returned to the resolver ───────────────────────────────
+
+/// The result of resolving a catalog shortcut.
+#[derive(Debug, Clone)]
+pub enum CatalogResult {
+    /// MLX: download all files from this HuggingFace repo.
+    AllFiles(String),
+    /// GGUF: download exactly this one file from this HuggingFace repo.
+    SingleFile(GgufEntry),
+}
+
+// ── Resolution API ────────────────────────────────────────────────────────────
+
 /// Dynamically resolves a model target shortcut from the JSON catalogs,
 /// according to the engine format.
 ///
@@ -20,26 +51,19 @@ pub async fn load_catalog_and_resolve(
     name: &str,
     format: &str,
     catalogs_dir: &Path,
-) -> Option<String> {
+) -> Option<CatalogResult> {
     let normalized = name.to_lowercase();
     let format_str = format.to_lowercase();
 
     // --- Step 1: Try the runtime file (user may have customised it) ---
     let json_path = catalogs_dir.join(format!("{}.json", format_str));
     if let Ok(content) = tokio::fs::read_to_string(&json_path).await {
-        match serde_json::from_str::<HashMap<String, String>>(&content) {
-            Ok(map) => {
-                debug!(name = %normalized, format = %format_str, source = "file", "Resolving from runtime catalog");
-                if let Some(repo) = map.get(&normalized) {
-                    return Some(repo.clone());
-                }
-                // File exists but key not found — still try the bundled catalog below
-                // in case the runtime file is an older version of the binary's catalog.
-            }
-            Err(e) => {
-                warn!(error = %e, path = %json_path.display(), "Runtime catalog JSON parsing failed; falling back to bundled catalog");
-            }
+        debug!(name = %normalized, format = %format_str, source = "file", "Resolving from runtime catalog");
+        if let Some(result) = resolve_from_content(&content, &normalized, &format_str) {
+            return Some(result);
         }
+        // File exists but key not found — still try bundled below
+        // in case the runtime file is an older version.
     } else {
         debug!(path = %json_path.display(), "Runtime catalog not found; using bundled catalog");
     }
@@ -48,45 +72,64 @@ pub async fn load_catalog_and_resolve(
     resolve_from_bundled(&normalized, &format_str)
 }
 
-/// Resolve against the compile-time embedded catalog for the given format.
-fn resolve_from_bundled(normalized: &str, format_str: &str) -> Option<String> {
-    let content = match format_str {
-        "mlx" => BUNDLED_MLX,
-        "gguf" => BUNDLED_GGUF,
-        _ => return None,
-    };
-
-    match serde_json::from_str::<HashMap<String, String>>(content) {
-        Ok(map) => map.get(normalized).cloned(),
-        Err(e) => {
-            // This can only happen if the source catalog JSON is malformed — caught at compile time
-            // via include_str! but not validated. Log the error and return None.
-            warn!(error = %e, format = %format_str, "Bundled catalog JSON parsing failed (malformed source file)");
-            None
+/// Resolve a key from a JSON string for the given format.
+fn resolve_from_content(content: &str, normalized: &str, format_str: &str) -> Option<CatalogResult> {
+    match format_str {
+        "mlx" => {
+            let map: HashMap<String, String> = serde_json::from_str(content).ok()?;
+            map.get(normalized).cloned().map(CatalogResult::AllFiles)
         }
+        "gguf" => {
+            let map: HashMap<String, RawGgufValue> = serde_json::from_str(content).ok()?;
+            match map.get(normalized)? {
+                RawGgufValue::Entry(e) => Some(CatalogResult::SingleFile(e.clone())),
+                RawGgufValue::Comment(_) => None,
+            }
+        }
+        _ => None,
     }
 }
+
+/// Resolve against the compile-time embedded catalog for the given format.
+pub fn resolve_from_bundled(normalized: &str, format_str: &str) -> Option<CatalogResult> {
+    let content = match format_str {
+        "mlx"  => BUNDLED_MLX,
+        "gguf" => BUNDLED_GGUF,
+        _      => return None,
+    };
+    resolve_from_content(content, normalized, format_str)
+}
+
+// ── Shortcut listing (for suggestions + UI) ───────────────────────────────────
 
 /// All available shortcuts across all bundled catalogs for a given format.
 /// Used to generate helpful suggestions in error messages.
 pub fn bundled_shortcuts(format_str: &str) -> Vec<String> {
     let content = match format_str.to_lowercase().as_str() {
-        "mlx" => BUNDLED_MLX,
+        "mlx"  => BUNDLED_MLX,
         "gguf" => BUNDLED_GGUF,
-        _ => return vec![],
+        _      => return vec![],
     };
 
-    serde_json::from_str::<HashMap<String, String>>(content)
-        .map(|map| {
-            let mut keys: Vec<String> = map
-                .keys()
-                .filter(|k| !k.starts_with('_')) // skip _comment_ keys
-                .cloned()
-                .collect();
-            keys.sort();
-            keys
-        })
-        .unwrap_or_default()
+    let keys: Vec<String> = match format_str {
+        "mlx" => {
+            serde_json::from_str::<HashMap<String, String>>(content)
+                .map(|m| m.into_keys().collect())
+                .unwrap_or_default()
+        }
+        _ => {
+            serde_json::from_str::<HashMap<String, RawGgufValue>>(content)
+                .map(|m| m.into_keys().collect())
+                .unwrap_or_default()
+        }
+    };
+
+    let mut filtered: Vec<String> = keys
+        .into_iter()
+        .filter(|k| !k.starts_with('_'))
+        .collect();
+    filtered.sort();
+    filtered
 }
 
 // ── UI catalog listing ────────────────────────────────────────────────────────
@@ -120,25 +163,41 @@ pub fn list_for_ui(format: &str) -> Vec<CatalogEntry> {
     let mut entries: Vec<CatalogEntry> = Vec::new();
 
     for &(fmt, content) in formats {
-        let map: HashMap<String, String> = match serde_json::from_str(content) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-
-        for (shortcut, hf_repo) in map {
-            if shortcut.starts_with('_') { continue; } // skip _comment_ keys
-            if !hf_repo.contains('/') { continue; }    // skip comment values
-
-            let tags: Vec<String> = shortcut.split(':').map(str::to_string).collect();
-            let role = infer_role(&shortcut, &hf_repo);
-
-            entries.push(CatalogEntry {
-                shortcut,
-                hf_repo,
-                format: fmt.to_string(),
-                tags,
-                role,
-            });
+        match fmt {
+            "mlx" => {
+                let map: HashMap<String, String> = match serde_json::from_str(content) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                for (shortcut, hf_repo) in map {
+                    if shortcut.starts_with('_') { continue; }
+                    if !hf_repo.contains('/') { continue; }
+                    let tags  = shortcut.split(':').map(str::to_string).collect();
+                    let role  = infer_role(&shortcut, &hf_repo);
+                    entries.push(CatalogEntry { shortcut, hf_repo, format: fmt.to_string(), tags, role });
+                }
+            }
+            "gguf" => {
+                let map: HashMap<String, RawGgufValue> = match serde_json::from_str(content) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                for (shortcut, raw) in map {
+                    if shortcut.starts_with('_') { continue; }
+                    let RawGgufValue::Entry(entry) = raw else { continue };
+                    if !entry.repo.contains('/') { continue; }
+                    let tags = shortcut.split(':').map(str::to_string).collect();
+                    let role = infer_role(&shortcut, &entry.repo);
+                    entries.push(CatalogEntry {
+                        shortcut,
+                        hf_repo: entry.repo,
+                        format: fmt.to_string(),
+                        tags,
+                        role,
+                    });
+                }
+            }
+            _ => {}
         }
     }
 
@@ -177,7 +236,7 @@ mod tests {
 
     #[test]
     fn test_bundled_gguf_catalog_is_valid_json() {
-        let result: Result<HashMap<String, String>, _> = serde_json::from_str(BUNDLED_GGUF);
+        let result: Result<HashMap<String, RawGgufValue>, _> = serde_json::from_str(BUNDLED_GGUF);
         assert!(result.is_ok(), "GGUF catalog is not valid JSON: {:?}", result.err());
     }
 
@@ -187,44 +246,61 @@ mod tests {
         assert!(result.is_ok(), "MLX catalog is not valid JSON: {:?}", result.err());
     }
 
+    #[test]
+    fn test_gguf_all_entries_have_repo_and_file() {
+        let map: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        for (key, val) in &map {
+            if key.starts_with('_') { continue; }
+            match val {
+                RawGgufValue::Entry(e) => {
+                    assert!(e.repo.contains('/'), "GGUF entry '{}' has invalid repo: '{}'", key, e.repo);
+                    assert!(e.file.ends_with(".gguf"), "GGUF entry '{}' file must end in .gguf: '{}'", key, e.file);
+                }
+                RawGgufValue::Comment(_) => {
+                    panic!("Non-comment key '{}' has a string value — must be {{repo, file}} object", key);
+                }
+            }
+        }
+    }
+
     // ── Three critical shortcuts must exist in both catalogs ──────────────────
 
     #[test]
     fn test_primary_models_exist_in_gguf() {
-        let map: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
-        assert!(map.contains_key("qwen3.5:4b:4bit"), "GGUF missing LLM_MODEL");
-        assert!(map.contains_key("qwen3.5:2b:4bit"), "GGUF missing LLM_FALLBACK_MODEL");
-        assert!(map.contains_key("qwen3-embed:0.6b:q8"),  "GGUF missing primary embed (0.6B Q8)");
+        let map: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        assert!(map.contains_key("qwen3.5:4b:4bit"),        "GGUF missing LLM_MODEL");
+        assert!(map.contains_key("qwen3.5:2b:4bit"),        "GGUF missing LLM_FALLBACK_MODEL");
+        assert!(map.contains_key("qwen3-embed:0.6b:8bit"), "GGUF missing primary embed (0.6B 8bit)");
     }
 
     #[test]
     fn test_primary_models_exist_in_mlx() {
         let map: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
-        assert!(map.contains_key("qwen3.5:4b:4bit"),      "MLX missing LLM_MODEL");
-        assert!(map.contains_key("qwen3.5:2b:4bit"),      "MLX missing LLM_FALLBACK_MODEL");
-        assert!(map.contains_key("qwen3-embed:0.6b:4bit"),"MLX missing LLM_EMBED_MODEL");
+        assert!(map.contains_key("qwen3.5:4b:4bit"),       "MLX missing LLM_MODEL");
+        assert!(map.contains_key("qwen3.5:2b:4bit"),       "MLX missing LLM_FALLBACK_MODEL");
+        assert!(map.contains_key("qwen3-embed:0.6b:4bit"), "MLX missing LLM_EMBED_MODEL");
     }
 
-    // ── Cross-catalog key consistency (same key works on all platforms) ────────
+    // ── Cross-catalog key consistency ─────────────────────────────────────────
 
     #[test]
     fn test_embed_keys_are_consistent_across_catalogs() {
-        let gguf: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
-        let mlx:  HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
+        let gguf: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        let mlx:  HashMap<String, String>        = serde_json::from_str(BUNDLED_MLX).unwrap();
         // 4B and 8B embed models exist in both catalogs with matching :4bit keys
         for key in &["qwen3-embed:4b:4bit", "qwen3-embed:8b:4bit"] {
             assert!(gguf.contains_key(*key), "GGUF missing embed key: {}", key);
             assert!(mlx.contains_key(*key),  "MLX  missing embed key: {}", key);
         }
-        // 0.6B: GGUF has :q8/:f16 only (no Q4 in HF repo); MLX has :4bit and :8bit
-        assert!(gguf.contains_key("qwen3-embed:0.6b:q8"),
-            "GGUF must have 0.6B :q8 (the actual available quantization)");
+        // 0.6B embed: GGUF uses :8bit (Q8_0 is the small available quant)
+        assert!(gguf.contains_key("qwen3-embed:0.6b:8bit"),
+            "GGUF must have 0.6B :8bit key");
     }
 
     #[test]
     fn test_inference_keys_are_consistent_across_catalogs() {
-        let gguf: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
-        let mlx:  HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
+        let gguf: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        let mlx:  HashMap<String, String>        = serde_json::from_str(BUNDLED_MLX).unwrap();
         for key in &["qwen3:1.7b:4bit", "qwen3:4b:4bit", "qwen3:8b:4bit",
                      "qwen3-coder:next:4bit", "qwen3-coder:next:8bit"] {
             assert!(gguf.contains_key(*key), "GGUF missing key: {}", key);
@@ -235,22 +311,31 @@ mod tests {
     // ── Renamed keys must NOT appear in the live catalogs ─────────────────────
 
     #[test]
+    fn test_no_legacy_q_suffix_in_gguf() {
+        let map: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        for key in map.keys() {
+            assert!(!key.ends_with(":q4"), "GGUF has legacy :q4 key: {}", key);
+            assert!(!key.ends_with(":q8"), "GGUF has legacy :q8 key (should be :8bit): {}", key);
+        }
+    }
+
+    #[test]
     fn test_no_legacy_q4_suffix_in_catalogs() {
-        let gguf: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
-        let mlx:  HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
-        for (fmt, map) in &[("gguf", &gguf), ("mlx", &mlx)] {
-            for key in map.keys() {
-                assert!(!key.ends_with(":q4"), "{} catalog has legacy :q4 key: {}", fmt, key);
-            }
+        let mlx: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
+        for key in mlx.keys() {
+            assert!(!key.ends_with(":q4"), "MLX catalog has legacy :q4 key: {}", key);
         }
     }
 
     #[test]
     fn test_no_qwencode3_keys_in_live_catalogs() {
-        let gguf: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
-        let mlx:  HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
-        for (fmt, map) in &[("gguf", &gguf), ("mlx", &mlx)] {
-            for key in map.keys() {
+        let gguf: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        let mlx:  HashMap<String, String>        = serde_json::from_str(BUNDLED_MLX).unwrap();
+        for (fmt, keys) in &[
+            ("gguf", gguf.keys().map(|s| s.as_str()).collect::<Vec<_>>()),
+            ("mlx",  mlx.keys().map(|s| s.as_str()).collect::<Vec<_>>()),
+        ] {
+            for key in keys {
                 assert!(!key.starts_with("qwencode3"),
                     "{} catalog still has legacy qwencode3 key: {}", fmt, key);
             }
@@ -261,19 +346,16 @@ mod tests {
 
     #[test]
     fn test_gguf_has_reranker_models() {
-        let map: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        let map: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
         assert!(map.contains_key("qwen3-reranker:0.6b:4bit"), "missing 0.6B reranker");
-        // 1.7B removed — no verified GGUF repo with Q4 found
         assert!(map.contains_key("qwen3-reranker:4b:4bit"),   "missing 4B reranker");
     }
 
     #[test]
     fn test_mlx_has_jina_reranker_only() {
         let map: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
-        // Jina (encoder-based) — confirmed supported by oMLX 0.3.6
         assert!(map.contains_key("jina-reranker-v2:multilingual"),
             "MLX catalog must contain Jina reranker (oMLX 0.3.6 JinaForRanking support)");
-        // Qwen3-Reranker (decoder-based) — NOT supported by oMLX; should be absent
         assert!(!map.contains_key("qwen3-reranker:0.6b:4bit"),
             "Generative decoder rerankers must NOT be in MLX catalog (oMLX doesn't support them)");
     }
@@ -282,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_small_models_for_constrained_hardware() {
-        let gguf: HashMap<String, String> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        let gguf: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
         assert!(gguf.contains_key("qwen3:1.7b:4bit"), "Missing 1.7B model for 4GB VRAM tier");
         assert!(gguf.contains_key("qwen3:4b:4bit"),   "Missing 4B model for 4GB VRAM tier");
         assert!(gguf.contains_key("gemma3:1b:4bit"),  "Missing 1B model for minimal hardware");
@@ -308,7 +390,7 @@ mod tests {
 
     #[test]
     fn test_infer_role_embed() {
-        assert_eq!(infer_role("qwen3-embed:0.6b:4bit", "Qwen/Qwen3-Embedding-0.6B-GGUF"), "embed");
+        assert_eq!(infer_role("qwen3-embed:0.6b:8bit", "Qwen/Qwen3-Embedding-0.6B-GGUF"), "embed");
         assert_eq!(infer_role("nomic-embed-text:v1.5", "nomic-ai/nomic-embed-text-v1.5-GGUF"), "embed");
         assert_eq!(infer_role("snowflake-arctic-embed-l:v2:4bit", "mlx-community/snowflake-arctic-embed-l-v2.0-4bit"), "embed");
     }
@@ -322,7 +404,7 @@ mod tests {
 
     #[test]
     fn test_infer_role_chat() {
-        assert_eq!(infer_role("qwen3.5:4b:4bit", "Qwen/Qwen3.5-4B-GGUF"), "chat");
+        assert_eq!(infer_role("qwen3.5:4b:4bit", "mradermacher/Qwen3.5-4B-GGUF"), "chat");
         assert_eq!(infer_role("llama3.1:8b:4bit", "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF"), "chat");
         assert_eq!(infer_role("gemma3:4b:4bit", "bartowski/gemma-3-4b-it-GGUF"), "chat");
     }
@@ -334,41 +416,41 @@ mod tests {
 
     #[test]
     fn test_infer_role_vision_vl_embed() {
-        // vl-embed must be "vision", not "embed" (multimodal, different use case)
         assert_eq!(infer_role("qwen3-vl-embed:2b:4bit", "mlx-community/Qwen3-VL-Embedding-2B-4bit"), "vision");
     }
-
 
     // ── resolve_from_bundled ──────────────────────────────────────────────────
 
     #[test]
     fn test_resolve_from_bundled_gguf_finds_primary_models() {
-        assert_eq!(resolve_from_bundled("qwen3.5:4b:4bit", "gguf"),
-            Some("mradermacher/Qwen3.5-4B-GGUF".to_string()));
-        assert_eq!(resolve_from_bundled("qwen3.5:2b:4bit", "gguf"),
-            Some("mradermacher/Qwen3.5-2B-GGUF".to_string()));
-        // 0.6B uses :q8 in the live catalog (no Q4 exists in repo)
-        assert_eq!(resolve_from_bundled("qwen3-embed:0.6b:q8", "gguf"),
-            Some("Qwen/Qwen3-Embedding-0.6B-GGUF".to_string()));
-        // :4bit resolves via legacy_curations, not bundled catalog
-        assert_eq!(resolve_from_bundled("qwen3-embed:0.6b:4bit", "gguf"), None);
+        let r = resolve_from_bundled("qwen3.5:4b:4bit", "gguf").unwrap();
+        let CatalogResult::SingleFile(e) = r else { panic!("expected SingleFile") };
+        assert_eq!(e.repo, "mradermacher/Qwen3.5-4B-GGUF");
+        assert_eq!(e.file, "Qwen3.5-4B.Q4_K_S.gguf");
+
+        let r2 = resolve_from_bundled("qwen3-embed:0.6b:8bit", "gguf").unwrap();
+        let CatalogResult::SingleFile(e2) = r2 else { panic!("expected SingleFile") };
+        assert_eq!(e2.repo, "Qwen/Qwen3-Embedding-0.6B-GGUF");
+        assert_eq!(e2.file, "Qwen3-Embedding-0.6B-Q8_0.gguf");
     }
 
     #[test]
     fn test_resolve_from_bundled_mlx_finds_primary_models() {
-        assert_eq!(resolve_from_bundled("qwen3.5:4b:4bit", "mlx"),
-            Some("mlx-community/Qwen3.5-4B-4bit".to_string()));
-        assert_eq!(resolve_from_bundled("qwen3-embed:0.6b:4bit", "mlx"),
-            Some("mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ".to_string()));
-        assert_eq!(resolve_from_bundled("jina-reranker-v2:multilingual", "mlx"),
-            Some("jinaai/jina-reranker-v2-base-multilingual".to_string()));
+        let r = resolve_from_bundled("qwen3.5:4b:4bit", "mlx").unwrap();
+        let CatalogResult::AllFiles(repo) = r else { panic!("expected AllFiles") };
+        assert_eq!(repo, "mlx-community/Qwen3.5-4B-4bit");
+
+        let r2 = resolve_from_bundled("jina-reranker-v2:multilingual", "mlx").unwrap();
+        let CatalogResult::AllFiles(repo2) = r2 else { panic!("expected AllFiles") };
+        assert_eq!(repo2, "jinaai/jina-reranker-v2-base-multilingual");
     }
 
     #[test]
-    fn test_resolve_from_bundled_old_q4_key_returns_none() {
-        // Old :q4 keys must NOT resolve from the live catalog (only from legacy_curations)
-        assert_eq!(resolve_from_bundled("qwen3-embed:0.6b:q4", "gguf"), None);
-        assert_eq!(resolve_from_bundled("qwencode3:4bit", "gguf"), None);
+    fn test_resolve_from_bundled_missing_key_returns_none() {
+        assert!(resolve_from_bundled("qwen3-embed:0.6b:q8", "gguf").is_none(),
+            "old :q8 key must not resolve (renamed to :8bit)");
+        assert!(resolve_from_bundled("qwencode3:4bit", "gguf").is_none());
+        assert!(resolve_from_bundled("nonexistent:model", "gguf").is_none());
     }
 
     // ── list_for_ui ───────────────────────────────────────────────────────────
@@ -388,7 +470,7 @@ mod tests {
         let find = |key: &str| entries.iter().find(|e| e.shortcut == key)
             .unwrap_or_else(|| panic!("list_for_ui missing entry: {}", key));
 
-        assert_eq!(find("qwen3-embed:0.6b:q8").role, "embed");
+        assert_eq!(find("qwen3-embed:0.6b:8bit").role, "embed");
         assert_eq!(find("qwen3-reranker:0.6b:4bit").role, "rerank");
         assert_eq!(find("jina-reranker-v2:multilingual:f16").role, "rerank");
         assert_eq!(find("qwen3.5:4b:4bit").role, "chat");

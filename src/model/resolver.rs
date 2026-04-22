@@ -174,16 +174,34 @@ async fn resolve_logical_name(
     engine_format: &str,
     catalogs_dir: &std::path::Path,
 ) -> Result<ResolvedModel> {
-    if let Some(repo) =
+    use crate::model::catalog::CatalogResult;
+
+    if let Some(result) =
         crate::model::catalog::load_catalog_and_resolve(name, engine_format, catalogs_dir).await
     {
-        // Extract quantization tag from the shortcut so the downloader selects
-        // the right GGUF file (e.g. ":4bit" → Q4_K_S, ":8bit" → Q8_0).
-        let quant_hint = extract_quant_hint(name);
-        debug!(name, ?quant_hint, "Extracted quant hint from catalog shortcut");
-        let mut rm = resolve_hf_repo(&repo, engine_format, quant_hint).await?;
-        rm.id = name.to_string();
-        return Ok(rm);
+        match result {
+            // GGUF explicit entry: exact file pinned in catalog — no HF API call needed.
+            CatalogResult::SingleFile(entry) => {
+                let dir_name = name.replace(':', "-");
+                debug!(name, repo = %entry.repo, file = %entry.file, "Resolved GGUF explicit file from catalog");
+                return Ok(ResolvedModel {
+                    id:       name.to_string(),
+                    dir_name,
+                    hf_repo:  entry.repo,
+                    format:   ModelFormat::Gguf,
+                    files:    vec![entry.file],
+                });
+            }
+
+            // MLX (or legacy string): query HF API for file listing as before.
+            CatalogResult::AllFiles(repo) => {
+                let quant_hint = extract_quant_hint(name);
+                debug!(name, ?quant_hint, "Resolved repo from catalog, querying HF API");
+                let mut rm = resolve_hf_repo(&repo, engine_format, quant_hint).await?;
+                rm.id = name.to_string();
+                return Ok(rm);
+            }
+        }
     }
 
     // Build a helpful suggestion list from the bundled catalog so it's always accurate.
