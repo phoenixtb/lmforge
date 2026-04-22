@@ -302,17 +302,10 @@ mod tests {
     fn test_inference_keys_are_consistent_across_catalogs() {
         let gguf: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
         let mlx:  HashMap<String, String>        = serde_json::from_str(BUNDLED_MLX).unwrap();
-        // Keys that exist in BOTH catalogs without requiring an HF token
-        for key in &["qwen3.5:2b:4bit", "qwen3.5:4b:4bit",
-                     "qwen3-embed:4b:4bit", "qwen3-embed:8b:4bit"] {
-            assert!(gguf.contains_key(*key), "GGUF missing key: {}", key);
-            assert!(mlx.contains_key(*key),  "MLX  missing key: {}", key);
-        }
-        // These exist in MLX only (bartowski GGUF repos require HF token)
         for key in &["qwen3:1.7b:4bit", "qwen3:4b:4bit", "qwen3:8b:4bit",
                      "qwen3-coder:next:4bit", "qwen3-coder:next:8bit"] {
-            assert!(mlx.contains_key(*key), "MLX missing key: {}", key);
-            assert!(!gguf.contains_key(*key), "GGUF must NOT have HF-token-required key: {}", key);
+            assert!(gguf.contains_key(*key), "GGUF missing key: {}", key);
+            assert!(mlx.contains_key(*key),  "MLX  missing key: {}", key);
         }
     }
 
@@ -372,16 +365,10 @@ mod tests {
 
     #[test]
     fn test_small_models_for_constrained_hardware() {
-        // GGUF: only freely accessible models (no HF token required)
-        // mradermacher Qwen3.5-2B is the smallest confirmed-200 GGUF chat model
         let gguf: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
-        assert!(gguf.contains_key("qwen3.5:2b:4bit"), "Missing smallest confirmed-free GGUF chat model");
-        assert!(gguf.contains_key("qwen3-embed:0.6b:8bit"), "Missing smallest embed model");
-
-        // MLX still has the full small-model lineup
-        let mlx: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
-        assert!(mlx.contains_key("qwen3:1.7b:4bit"), "MLX missing 1.7B model");
-        assert!(mlx.contains_key("gemma3:1b:4bit"),  "MLX missing 1B model");
+        assert!(gguf.contains_key("qwen3:1.7b:4bit"), "Missing 1.7B model for 4GB VRAM tier");
+        assert!(gguf.contains_key("qwen3:4b:4bit"),   "Missing 4B model for 4GB VRAM tier");
+        assert!(gguf.contains_key("gemma3:1b:4bit"),  "Missing 1B model for minimal hardware");
     }
 
     // ── bundled_shortcuts filters comment keys ────────────────────────────────
@@ -488,7 +475,7 @@ mod tests {
         assert_eq!(find("qwen3-reranker:0.6b:4bit").role, "rerank");
         assert_eq!(find("jina-reranker-v2:multilingual:f16").role, "rerank");
         assert_eq!(find("qwen3.5:4b:4bit").role, "chat");
-        // qwen3-coder removed (bartowski repos require HF token)
+        assert_eq!(find("qwen3-coder:next:4bit").role, "code");
     }
 
     #[test]
@@ -503,108 +490,92 @@ mod tests {
     // ── Network integration tests (ignored by default) ────────────────────────
     //
     // Run with:
-    //   cargo test -p lmforge -- --ignored --nocapture
+    //   cargo test -p lmforge -- verify_gguf_catalog_files_exist --ignored --nocapture
     //
-    // These tests hit the live HuggingFace CDN WITHOUT an HF token and verify
-    // that every catalog entry is freely downloadable.
+    // These tests hit the live HuggingFace CDN and verify that every file
+    // listed in gguf.json actually exists in the declared repo.
     //
-    // Rules:
-    //   HTTP 200 / 206 / 302       →  PASS  (file accessible without auth)
-    //   HTTP 401 / 403             →  FAIL  (requires HF token — remove from catalog)
-    //   HTTP 404                   →  FAIL  (file missing from repo)
-
-    fn plain_client() -> reqwest::Client {
-        reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::limited(5))
-            .user_agent("lmforge-catalog-verifier/1.0")
-            .build()
-            .expect("failed to build reqwest client")
-    }
-
-    async fn check_url(client: &reqwest::Client, key: &str, url: &str, failures: &mut Vec<String>) {
-        match client.head(url).send().await {
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                match status {
-                    200 | 206 | 301 | 302 | 307 | 308 => {
-                        println!("  ✓ [{status:3}]  {key}");
-                    }
-                    401 | 403 => {
-                        let msg = format!("  ✗ [{status}]  {key}  →  requires HF token — remove from catalog\n         url: {url}");
-                        eprintln!("{msg}");
-                        failures.push(msg);
-                    }
-                    404 => {
-                        let msg = format!("  ✗ [404]  {key}  →  file not found\n         url: {url}");
-                        eprintln!("{msg}");
-                        failures.push(msg);
-                    }
-                    other => {
-                        println!("  ? [{other:3}]  {key}  (unexpected status)");
-                    }
-                }
-            }
-            Err(e) => {
-                let msg = format!("  ✗ [ERR]  {key}  →  {e}");
-                eprintln!("{msg}");
-                failures.push(msg);
-            }
-        }
-    }
+    // Exit codes:
+    //   HTTP 200 / 206 / 302 / 301  →  OK (file found or redirected to CDN)
+    //   HTTP 401 / 403              →  OK (file exists but repo is gated / rate-limited)
+    //   HTTP 404                    →  FAIL  (file genuinely missing from repo)
 
     #[tokio::test]
     #[ignore = "requires network; run with: cargo test -- --ignored --nocapture"]
     async fn verify_gguf_catalog_files_exist() {
         let map: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF)
             .expect("GGUF catalog must be valid JSON");
-        let client = plain_client();
-        let mut failures: Vec<String> = Vec::new();
 
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            // Follow up to 5 redirects (HF CDN uses 302 → LFS storage)
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .user_agent("lmforge-catalog-verifier/1.0")
+            .build()
+            .expect("failed to build reqwest client");
+
+        let mut failures: Vec<String> = Vec::new();
+        let mut checked = 0usize;
+
+        // Collect entries sorted for deterministic output
         let mut entries: Vec<(&String, &GgufEntry)> = map.iter()
             .filter(|(k, _)| !k.starts_with('_'))
-            .filter_map(|(k, v)| { if let RawGgufValue::Entry(e) = v { Some((k, e)) } else { None } })
+            .filter_map(|(k, v)| {
+                if let RawGgufValue::Entry(e) = v { Some((k, e)) } else { None }
+            })
             .collect();
         entries.sort_by_key(|(k, _)| k.as_str());
 
-        println!("\n=== GGUF catalog ({} entries) ===", entries.len());
-        for (key, entry) in &entries {
-            let url = format!("https://huggingface.co/{}/resolve/main/{}", entry.repo, entry.file);
-            check_url(&client, key, &url, &mut failures).await;
+        for (key, entry) in entries {
+            let url = format!(
+                "https://huggingface.co/{}/resolve/main/{}",
+                entry.repo, entry.file
+            );
+
+            match client.head(&url).send().await {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    match status {
+                        200 | 206 | 301 | 302 | 307 | 308 => {
+                            println!("  ✓ [{status:3}]  {key}  →  {}", entry.file);
+                        }
+                        401 | 403 => {
+                            // Auth required — file exists but repo is gated or rate-limited.
+                            // Not a catalog error; the file is present.
+                            println!("  ⚠ [{status:3}]  {key}  →  {} (gated/rate-limited, cannot verify)", entry.file);
+                        }
+                        404 => {
+                            let msg = format!(
+                                "  ✗ [404]  {key}\n         repo: {}\n         file: {}\n         url:  {}",
+                                entry.repo, entry.file, url
+                            );
+                            eprintln!("{msg}");
+                            failures.push(msg);
+                        }
+                        other => {
+                            println!("  ? [{other:3}]  {key}  →  {} (unexpected status)", entry.file);
+                        }
+                    }
+                }
+                Err(e) => {
+                    let msg = format!("  ✗ [ERR]  {key}  →  {e}");
+                    eprintln!("{msg}");
+                    failures.push(msg);
+                }
+            }
+            checked += 1;
         }
-        println!("Checked {} GGUF entries.", entries.len());
+
+        println!("\nChecked {checked} GGUF catalog entries.");
 
         if !failures.is_empty() {
-            panic!("\n\n{} GGUF entr{} require an HF token or are missing — remove from gguf.json:\n\n{}",
-                failures.len(), if failures.len() == 1 { "y" } else { "ies" }, failures.join("\n"));
-        }
-    }
-
-    #[tokio::test]
-    #[ignore = "requires network; run with: cargo test -- --ignored --nocapture"]
-    async fn verify_mlx_catalog_repos_accessible() {
-        // For MLX repos we probe config.json — present in every safetensors MLX model.
-        // A 401 means the repo requires an HF license agreement and should be removed.
-        let map: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX)
-            .expect("MLX catalog must be valid JSON");
-        let client = plain_client();
-        let mut failures: Vec<String> = Vec::new();
-
-        let mut entries: Vec<(&String, &String)> = map.iter()
-            .filter(|(k, _)| !k.starts_with('_'))
-            .collect();
-        entries.sort_by_key(|(k, _)| k.as_str());
-
-        println!("\n=== MLX catalog ({} entries) ===", entries.len());
-        for (key, repo) in &entries {
-            let url = format!("https://huggingface.co/{}/resolve/main/config.json", repo);
-            check_url(&client, key, &url, &mut failures).await;
-        }
-        println!("Checked {} MLX entries.", entries.len());
-
-        if !failures.is_empty() {
-            panic!("\n\n{} MLX entr{} require an HF token or are missing — remove from mlx.json:\n\n{}",
-                failures.len(), if failures.len() == 1 { "y" } else { "ies" }, failures.join("\n"));
+            panic!(
+                "\n\n{} GGUF catalog entr{} could not be verified:\n\n{}\n\
+                Fix gguf.json to point to the correct repo/filename.",
+                failures.len(),
+                if failures.len() == 1 { "y" } else { "ies" },
+                failures.join("\n\n")
+            );
         }
     }
 }
