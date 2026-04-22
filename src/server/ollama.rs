@@ -7,6 +7,7 @@ use tracing::debug;
 
 use super::AppState;
 use super::proxy;
+use super::thinking;
 
 /// `POST /api/chat` — Ollama-compatible chat endpoint
 /// Translates between Ollama and OpenAI formats
@@ -25,8 +26,11 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
 
     debug!(model = ?ollama_req.get("model"), "Ollama /api/chat request");
 
-    // Translate to OpenAI format
+    // Translate to OpenAI format (also copies think field if present)
     let mut openai_req = translate_ollama_to_openai(&ollama_req);
+
+    // Capture think intent before apply_think_for_engine removes the field
+    let has_think = thinking::request_has_think(&openai_req);
 
     let model_id = ollama_req
         .get("model")
@@ -54,6 +58,11 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
             models: vec![],
         }
     });
+
+    // Engine-aware think translation (Ollama path was previously missing this entirely)
+    let model_caps = index.get(&model_id).map(|e| &e.capabilities);
+    thinking::apply_think_for_engine(&mut openai_req, &state.engine_config.id, model_caps);
+
     if let Some(entry) = index.get(&model_id) {
         if let Some(dir_name) = std::path::Path::new(&entry.path).file_name() {
             if let Some(obj) = openai_req.as_object_mut() {
@@ -74,14 +83,26 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
     let client = proxy::build_proxy_client();
 
     if is_stream {
-        match proxy::proxy_stream(
-            &client,
-            engine_port,
-            "/v1/chat/completions",
-            Bytes::from(openai_body),
-        )
-        .await
-        {
+        // For oMLX+think, rewrite <think> tags in delta.content into delta.reasoning_content.
+        // All other streaming combinations use plain passthrough.
+        let stream_result = if has_think && state.engine_config.id == "omlx" {
+            proxy::proxy_stream_rewriting_think_tags(
+                &client,
+                engine_port,
+                "/v1/chat/completions",
+                Bytes::from(openai_body),
+            )
+            .await
+        } else {
+            proxy::proxy_stream(
+                &client,
+                engine_port,
+                "/v1/chat/completions",
+                Bytes::from(openai_body),
+            )
+            .await
+        };
+        match stream_result {
             Ok(stream_body) => Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "application/x-ndjson")
@@ -91,6 +112,40 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
                 .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(text))
+                .unwrap(),
+        }
+    } else if has_think {
+        // Non-streaming + think: assemble stream internally, then translate to Ollama format
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            proxy::proxy_request_assembling_stream(
+                &client,
+                engine_port,
+                "/v1/chat/completions",
+                Bytes::from(openai_body),
+            ),
+        )
+        .await
+        {
+            Ok(Ok((status, text))) => {
+                let ollama_resp = translate_openai_to_ollama_chat(&text);
+                Response::builder()
+                    .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(ollama_resp))
+                    .unwrap()
+            }
+            Ok(Err((status, text))) => Response::builder()
+                .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(text))
+                .unwrap(),
+            Err(_elapsed) => Response::builder()
+                .status(StatusCode::GATEWAY_TIMEOUT)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"error":{"message":"Inference timed out after 120 seconds","type":"server_error"}}}"#,
+                ))
                 .unwrap(),
         }
     } else {

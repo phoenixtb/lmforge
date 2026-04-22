@@ -82,21 +82,28 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
         }
     };
 
-    // Translate Ollama-standard `think: true/false` → `chat_template_kwargs.enable_thinking`
-    // and strip `think` so the engine never sees an unknown field.
-    // Must happen before has_think is read so both forms are detected.
-    let has_think = thinking::request_has_think(&body_value);
-    thinking::translate_think_field(&mut body_value);
-
-    let is_stream = body_value
-        .get("stream")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    // Read model_id early — needed for capability lookup before think translation.
     let model_id = body_value
         .get("model")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+
+    // Load the model index early — needed for model capabilities before think translation.
+    let index = load_index(&state.data_dir);
+
+    // Engine-aware think translation:
+    // oMLX  → strip enable_thinking flag; inject <nothink> prefix for think:false on thinking models
+    // other → translate think → chat_template_kwargs.enable_thinking (Jinja-bounded, safe)
+    // Must capture has_think BEFORE apply_think_for_engine removes the field.
+    let has_think = thinking::request_has_think(&body_value);
+    let model_caps = index.get(&model_id).map(|e| &e.capabilities);
+    thinking::apply_think_for_engine(&mut body_value, &state.engine_config.id, model_caps);
+
+    let is_stream = body_value
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let keep_alive = body_value.get("keep_alive").and_then(|v| {
         if v.is_string() {
@@ -115,7 +122,7 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     debug!(stream = is_stream, think = has_think, model = %model_id, "Chat completion request");
 
     // Capability gate: reject embedding and re-ranking models sent to the chat endpoint.
-    let index = load_index(&state.data_dir);
+    // (index already loaded above)
     if let Err(resp) = check_model_role(&index, &model_id, true, false) {
         return resp.into_response();
     }
@@ -151,10 +158,21 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     let client = proxy::build_proxy_client();
 
     if is_stream {
-        // Streaming: pass through directly — oMLX natively emits delta.reasoning_content
-        match proxy::proxy_stream(&client, engine_port, "/v1/chat/completions", forwarded_body)
+        // Streaming: for oMLX+think, rewrite <think> tags in delta.content into
+        // delta.reasoning_content on the fly. For all other combinations, pass through.
+        let stream_result = if has_think && state.engine_config.id == "omlx" {
+            proxy::proxy_stream_rewriting_think_tags(
+                &client,
+                engine_port,
+                "/v1/chat/completions",
+                forwarded_body,
+            )
             .await
-        {
+        } else {
+            proxy::proxy_stream(&client, engine_port, "/v1/chat/completions", forwarded_body)
+                .await
+        };
+        match stream_result {
             Ok(stream_body) => Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "text/event-stream")
@@ -170,24 +188,35 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
         }
     } else if has_think {
         // Non-streaming + thinking: force stream internally so we can accumulate
-        // reasoning_content and content chunks into separate fields
-        match proxy::proxy_request_assembling_stream(
-            &client,
-            engine_port,
-            "/v1/chat/completions",
-            forwarded_body,
+        // reasoning_content and content chunks into separate fields.
+        // Hard 120-second timeout prevents infinite oMLX loops from blocking indefinitely.
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            proxy::proxy_request_assembling_stream(
+                &client,
+                engine_port,
+                "/v1/chat/completions",
+                forwarded_body,
+            ),
         )
         .await
         {
-            Ok((status, text)) => Response::builder()
+            Ok(Ok((status, text))) => Response::builder()
                 .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(text))
                 .unwrap(),
-            Err((status, text)) => Response::builder()
+            Ok(Err((status, text))) => Response::builder()
                 .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(text))
+                .unwrap(),
+            Err(_elapsed) => Response::builder()
+                .status(StatusCode::GATEWAY_TIMEOUT)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"error":{"message":"Inference timed out after 120 seconds","type":"server_error"}}}"#,
+                ))
                 .unwrap(),
         }
     } else {

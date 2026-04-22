@@ -1,5 +1,7 @@
 use tracing::debug;
 
+use crate::model::index::ModelCapabilities;
+
 /// Extract `<think>...</think>` content from inline text.
 /// Returns (reasoning_content, clean_content).
 ///
@@ -116,38 +118,108 @@ pub fn request_has_think(body: &serde_json::Value) -> bool {
     body.get("think").and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
-/// Translate Ollama-standard `think: true/false` into the oMLX
-/// `chat_template_kwargs: {"enable_thinking": ...}` form, then strip `think`
-/// so the engine never sees an unknown field.
+/// Engine-aware think-mode translation. Must be called AFTER `request_has_think` captures
+/// the original client intent, as this function removes the `think` field from the body.
 ///
-/// Rules:
-/// - If `chat_template_kwargs.enable_thinking` is already present → leave it alone.
-/// - If `think` is present and `chat_template_kwargs.enable_thinking` is absent → copy value over.
-/// - Always remove the top-level `think` field before forwarding.
-pub fn translate_think_field(body: &mut serde_json::Value) {
-    let think_val = body.as_object_mut().and_then(|obj| obj.remove("think"));
+/// **oMLX** — only `enable_thinking: false` is safe to forward. `enable_thinking: true`
+/// activates oMLX's extended thinking mode which bypasses the model's generation budget
+/// and causes non-deterministic infinite loops. Confirmed by live engine testing:
+///   • `enable_thinking: true`  → infinite loop — NEVER send
+///   • `enable_thinking: false` → 0 reasoning tokens, terminates cleanly ✓
+///   • no flag                  → natural Qwen3 reasoning, budget enforced by weights ✓
+///
+/// The `<nothink>` prefix approach was also tested empirically and does NOT work —
+/// oMLX renders the partial assistant message as a completed turn then generates a
+/// fresh response with full reasoning regardless.
+///
+/// **llamacpp / sglang** — both engines use HF Jinja templates, budget-bounded and safe.
+/// The top-level `think` field always overrides any existing `chat_template_kwargs`.
+///
+/// **Effective intent**: top-level `think` field > `chat_template_kwargs.enable_thinking`.
+/// If only the kwargs form is present (direct send), that intent is honoured.
+pub fn apply_think_for_engine(
+    body: &mut serde_json::Value,
+    engine_id: &str,
+    model_caps: Option<&ModelCapabilities>,
+) {
+    // Capture think intent from both sources BEFORE any mutation.
+    // Top-level `think` field takes precedence over chat_template_kwargs.enable_thinking.
+    // We read kwargs NOW (before stripping) so a bare `enable_thinking: false` in kwargs
+    // (no `think` field) is not silently lost — that is a meaningful suppress request.
+    let think_from_field = body.as_object_mut().and_then(|obj| obj.remove("think"));
+    let think_bool_from_field = think_from_field.as_ref().and_then(|v| v.as_bool());
 
-    let Some(think_bool) = think_val.as_ref().and_then(|v| v.as_bool()) else {
-        return; // Nothing to translate
-    };
-
-    let obj = body.as_object_mut().unwrap();
-
-    // Only set chat_template_kwargs if enable_thinking is not already there
-    let already_set = obj
+    let think_bool_from_kwargs = body
         .get("chat_template_kwargs")
         .and_then(|k| k.get("enable_thinking"))
-        .is_some();
+        .and_then(|v| v.as_bool());
 
-    if !already_set {
-        let kwargs = obj
-            .entry("chat_template_kwargs")
-            .or_insert_with(|| serde_json::json!({}));
-        if let Some(map) = kwargs.as_object_mut() {
-            map.insert(
-                "enable_thinking".to_string(),
-                serde_json::Value::Bool(think_bool),
-            );
+    // Effective intent: field wins; fall back to kwargs; None = absent
+    let effective_think: Option<bool> = think_bool_from_field.or(think_bool_from_kwargs);
+
+    match engine_id {
+        "omlx" => {
+            // Always strip enable_thinking first — re-apply precisely below.
+            if let Some(obj) = body.as_object_mut() {
+                if let Some(kwargs) = obj
+                    .get_mut("chat_template_kwargs")
+                    .and_then(|k| k.as_object_mut())
+                {
+                    kwargs.remove("enable_thinking");
+                }
+                let empty = obj
+                    .get("chat_template_kwargs")
+                    .and_then(|k| k.as_object())
+                    .map(|m| m.is_empty())
+                    .unwrap_or(false);
+                if empty {
+                    obj.remove("chat_template_kwargs");
+                }
+            }
+
+            match effective_think {
+                Some(false) => {
+                    // Suppress reasoning — only needed for thinking-capable models.
+                    // Non-thinking models (Gemma, Llama, Phi) never generate <think> tokens.
+                    let is_thinking = model_caps.map(|c| c.thinking).unwrap_or(false);
+                    if is_thinking {
+                        if let Some(obj) = body.as_object_mut() {
+                            let kwargs = obj
+                                .entry("chat_template_kwargs")
+                                .or_insert_with(|| serde_json::json!({}));
+                            if let Some(map) = kwargs.as_object_mut() {
+                                map.insert(
+                                    "enable_thinking".to_string(),
+                                    serde_json::Value::Bool(false),
+                                );
+                            }
+                        }
+                    }
+                }
+                Some(true) | None => {
+                    // think:true or absent → omit flag; natural reasoning applies.
+                    // enable_thinking:true is NEVER forwarded to oMLX.
+                }
+            }
+        }
+
+        "llamacpp" | "sglang" => {
+            // If explicit `think` field given, set/override enable_thinking (field always wins).
+            // If only kwargs form was sent directly, leave it as-is (already correct form).
+            if let Some(think) = think_bool_from_field {
+                if let Some(obj) = body.as_object_mut() {
+                    let kwargs = obj
+                        .entry("chat_template_kwargs")
+                        .or_insert_with(|| serde_json::json!({}));
+                    if let Some(map) = kwargs.as_object_mut() {
+                        map.insert("enable_thinking".to_string(), serde_json::Value::Bool(think));
+                    }
+                }
+            }
+        }
+
+        _ => {
+            debug!(engine_id, "Unknown engine ID in apply_think_for_engine — stripping think field only");
         }
     }
 }
@@ -244,44 +316,216 @@ mod tests {
         assert!(request_has_think(&body));
     }
 
-    #[test]
-    fn test_translate_think_field_sets_kwargs() {
-        let mut body = serde_json::json!({"model": "test", "messages": [], "think": true});
-        translate_think_field(&mut body);
+    fn thinking_caps() -> ModelCapabilities {
+        ModelCapabilities {
+            chat: true,
+            embeddings: false,
+            reranking: false,
+            thinking: true,
+            embedding_dims: None,
+            pooling: None,
+        }
+    }
 
-        // think removed
+    fn non_thinking_caps() -> ModelCapabilities {
+        ModelCapabilities {
+            chat: true,
+            embeddings: false,
+            reranking: false,
+            thinking: false,
+            embedding_dims: None,
+            pooling: None,
+        }
+    }
+
+    // ── oMLX case 1: think:true, thinking model → no flag ────────────────────
+
+    #[test]
+    fn test_omlx_think_true_thinking_model_no_flag() {
+        let mut body = serde_json::json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hi"}],
+            "think": true
+        });
+        apply_think_for_engine(&mut body, "omlx", Some(&thinking_caps()));
         assert!(body.get("think").is_none());
-        // chat_template_kwargs set
+        assert!(body.get("chat_template_kwargs").is_none(),
+            "enable_thinking:true must NEVER reach oMLX");
+        assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+    }
+
+    // ── oMLX case 2: think:true, non-thinking model → no flag ────────────────
+
+    #[test]
+    fn test_omlx_think_true_non_thinking_model_no_flag() {
+        let mut body = serde_json::json!({
+            "model": "test", "messages": [], "think": true
+        });
+        apply_think_for_engine(&mut body, "omlx", Some(&non_thinking_caps()));
+        assert!(body.get("think").is_none());
+        assert!(body.get("chat_template_kwargs").is_none());
+    }
+
+    // ── oMLX case 3: think:false, thinking model → enable_thinking:false ─────
+    // Confirmed by direct engine test: 0 reasoning tokens, clean termination.
+
+    #[test]
+    fn test_omlx_think_false_thinking_model_sends_enable_thinking_false() {
+        let mut body = serde_json::json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hi"}],
+            "think": false
+        });
+        apply_think_for_engine(&mut body, "omlx", Some(&thinking_caps()));
+        assert!(body.get("think").is_none());
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false,
+            "enable_thinking:false must be forwarded — empirically confirmed to suppress reasoning");
+        // No <nothink> prefix — tested empirically, does NOT suppress reasoning on oMLX
+        assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+    }
+
+    // ── oMLX case 4: think:false, non-thinking model → no flag ───────────────
+
+    #[test]
+    fn test_omlx_think_false_non_thinking_model_no_flag() {
+        let mut body = serde_json::json!({
+            "model": "test", "messages": [], "think": false
+        });
+        apply_think_for_engine(&mut body, "omlx", Some(&non_thinking_caps()));
+        assert!(body.get("think").is_none());
+        assert!(body.get("chat_template_kwargs").is_none(),
+            "non-thinking model: enable_thinking flag is irrelevant");
+    }
+
+    // ── oMLX case 5: no think field → no flag ────────────────────────────────
+
+    #[test]
+    fn test_omlx_no_think_field_no_flag() {
+        for caps in [Some(thinking_caps()), Some(non_thinking_caps())] {
+            let mut body = serde_json::json!({"model": "test", "messages": []});
+            apply_think_for_engine(&mut body, "omlx", caps.as_ref());
+            assert!(body.get("think").is_none());
+            assert!(body.get("chat_template_kwargs").is_none());
+        }
+    }
+
+    // ── oMLX case 6: direct kwargs.enable_thinking:true → strip (dangerous) ──
+
+    #[test]
+    fn test_omlx_direct_kwargs_enable_thinking_true_stripped() {
+        let mut body = serde_json::json!({
+            "model": "test", "messages": [],
+            "chat_template_kwargs": {"enable_thinking": true}
+        });
+        apply_think_for_engine(&mut body, "omlx", Some(&thinking_caps()));
+        assert!(body.get("chat_template_kwargs").is_none(),
+            "enable_thinking:true sent directly must be stripped (infinite loop risk)");
+    }
+
+    // ── oMLX case 7: direct kwargs.enable_thinking:false → preserve ──────────
+    // Client intent is to suppress reasoning; effective_think = Some(false).
+
+    #[test]
+    fn test_omlx_direct_kwargs_enable_thinking_false_preserved() {
+        let mut body = serde_json::json!({
+            "model": "test", "messages": [],
+            "chat_template_kwargs": {"enable_thinking": false}
+        });
+        apply_think_for_engine(&mut body, "omlx", Some(&thinking_caps()));
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false,
+            "enable_thinking:false sent directly must be honoured");
+    }
+
+    // ── oMLX: other kwargs preserved when enable_thinking is stripped ─────────
+
+    #[test]
+    fn test_omlx_strips_enable_thinking_preserves_other_kwargs() {
+        let mut body = serde_json::json!({
+            "model": "test", "messages": [],
+            "chat_template_kwargs": {"enable_thinking": true, "other_key": "value"}
+        });
+        apply_think_for_engine(&mut body, "omlx", None);
+        assert!(body["chat_template_kwargs"].get("enable_thinking").is_none());
+        assert_eq!(body["chat_template_kwargs"]["other_key"], "value");
+    }
+
+    // ── oMLX: unknown caps (model not in index) → no flag ────────────────────
+
+    #[test]
+    fn test_omlx_think_false_unknown_caps_no_flag() {
+        let mut body = serde_json::json!({"model": "test", "messages": [], "think": false});
+        apply_think_for_engine(&mut body, "omlx", None);
+        // model_caps = None → unwrap_or(false) → not a thinking model → no flag injected
+        assert!(body.get("chat_template_kwargs").is_none());
+    }
+
+    // ── llamacpp / sglang case 8: think:true → enable_thinking:true ──────────
+
+    #[test]
+    fn test_llamacpp_think_true_sets_enable_thinking() {
+        let mut body = serde_json::json!({"model": "test", "messages": [], "think": true});
+        apply_think_for_engine(&mut body, "llamacpp", Some(&thinking_caps()));
+        assert!(body.get("think").is_none());
         assert_eq!(body["chat_template_kwargs"]["enable_thinking"], true);
     }
 
+    // ── llamacpp / sglang case 9: think:false → enable_thinking:false ─────────
+
     #[test]
-    fn test_translate_think_field_false() {
+    fn test_llamacpp_think_false_sets_enable_thinking_false() {
         let mut body = serde_json::json!({"model": "test", "think": false});
-        translate_think_field(&mut body);
+        apply_think_for_engine(&mut body, "llamacpp", None);
         assert!(body.get("think").is_none());
         assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
     }
 
+    // ── llamacpp / sglang case 10: think field overrides existing kwargs ──────
+    // think:false field + existing kwargs:true → false wins (field always wins).
+
     #[test]
-    fn test_translate_think_field_does_not_override_existing_kwargs() {
+    fn test_llamacpp_think_field_overrides_existing_kwargs() {
         let mut body = serde_json::json!({
-            "model": "test",
-            "think": false,
+            "model": "test", "think": false,
             "chat_template_kwargs": {"enable_thinking": true}
         });
-        translate_think_field(&mut body);
-        // Existing explicit kwargs wins; think removed
+        apply_think_for_engine(&mut body, "llamacpp", None);
+        assert!(body.get("think").is_none());
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false,
+            "explicit think field must override existing kwargs.enable_thinking");
+    }
+
+    // ── llamacpp / sglang case 11: no think field, kwargs present → pass through
+
+    #[test]
+    fn test_llamacpp_no_think_field_preserves_existing_kwargs() {
+        let mut body = serde_json::json!({
+            "model": "test",
+            "chat_template_kwargs": {"enable_thinking": false}
+        });
+        apply_think_for_engine(&mut body, "llamacpp", None);
+        assert!(body.get("think").is_none());
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false,
+            "no think field: existing kwargs pass through unchanged");
+    }
+
+    #[test]
+    fn test_sglang_think_true_sets_enable_thinking() {
+        let mut body = serde_json::json!({"model": "test", "think": true});
+        apply_think_for_engine(&mut body, "sglang", None);
         assert!(body.get("think").is_none());
         assert_eq!(body["chat_template_kwargs"]["enable_thinking"], true);
     }
 
+    // ── All engines: absent think = noop ─────────────────────────────────────
+
     #[test]
-    fn test_translate_think_field_no_think_key() {
-        let mut body = serde_json::json!({"model": "test", "messages": []});
-        translate_think_field(&mut body);
-        // No changes
-        assert!(body.get("think").is_none());
-        assert!(body.get("chat_template_kwargs").is_none());
+    fn test_no_think_key_is_noop_for_all_engines() {
+        for engine in ["omlx", "llamacpp", "sglang"] {
+            let mut body = serde_json::json!({"model": "test", "messages": []});
+            apply_think_for_engine(&mut body, engine, None);
+            assert!(body.get("think").is_none());
+            assert!(body.get("chat_template_kwargs").is_none(), "engine={engine}");
+            assert_eq!(body["messages"].as_array().unwrap().len(), 0, "engine={engine}");
+        }
     }
 }

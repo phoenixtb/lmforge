@@ -53,7 +53,7 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
 
     let mut rl = DefaultEditor::new()?;
     let mut messages = vec![];
-    let mut think_mode = true; // Enabled by default
+    let mut think_mode = false; // Off by default; enable with /think on
     let api_url = format!("http://127.0.0.1:{}/v1/chat/completions", config.port);
     let client = reqwest::Client::new();
 
