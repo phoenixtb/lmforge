@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// The bundled default MLX catalog — embedded at compile time.
 /// This is the authoritative fallback used when no runtime catalog file exists.
@@ -25,7 +25,7 @@ pub struct GgufEntry {
 #[serde(untagged)]
 enum RawGgufValue {
     Entry(GgufEntry),
-    Comment(String),
+    Comment(()),
 }
 
 // ── Public result type returned to the resolver ───────────────────────────────
@@ -484,5 +484,97 @@ mod tests {
         let mut sorted = shortcuts.clone();
         sorted.sort();
         assert_eq!(shortcuts, sorted, "list_for_ui must return entries sorted by shortcut");
+    }
+
+    // ── Network integration tests (ignored by default) ────────────────────────
+    //
+    // Run with:
+    //   cargo test -p lmforge -- verify_gguf_catalog_files_exist --ignored --nocapture
+    //
+    // These tests hit the live HuggingFace CDN and verify that every file
+    // listed in gguf.json actually exists in the declared repo.
+    //
+    // Exit codes:
+    //   HTTP 200 / 206 / 302 / 301  →  OK (file found or redirected to CDN)
+    //   HTTP 401 / 403              →  OK (file exists but repo is gated / rate-limited)
+    //   HTTP 404                    →  FAIL  (file genuinely missing from repo)
+
+    #[tokio::test]
+    #[ignore = "requires network; run with: cargo test -- --ignored --nocapture"]
+    async fn verify_gguf_catalog_files_exist() {
+        let map: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF)
+            .expect("GGUF catalog must be valid JSON");
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            // Follow up to 5 redirects (HF CDN uses 302 → LFS storage)
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .user_agent("lmforge-catalog-verifier/1.0")
+            .build()
+            .expect("failed to build reqwest client");
+
+        let mut failures: Vec<String> = Vec::new();
+        let mut checked = 0usize;
+
+        // Collect entries sorted for deterministic output
+        let mut entries: Vec<(&String, &GgufEntry)> = map.iter()
+            .filter(|(k, _)| !k.starts_with('_'))
+            .filter_map(|(k, v)| {
+                if let RawGgufValue::Entry(e) = v { Some((k, e)) } else { None }
+            })
+            .collect();
+        entries.sort_by_key(|(k, _)| k.as_str());
+
+        for (key, entry) in entries {
+            let url = format!(
+                "https://huggingface.co/{}/resolve/main/{}",
+                entry.repo, entry.file
+            );
+
+            match client.head(&url).send().await {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    match status {
+                        200 | 206 | 301 | 302 | 307 | 308 => {
+                            println!("  ✓ [{status:3}]  {key}  →  {}", entry.file);
+                        }
+                        401 | 403 => {
+                            // Auth required — file exists but repo is gated or rate-limited.
+                            // Not a catalog error; the file is present.
+                            println!("  ⚠ [{status:3}]  {key}  →  {} (gated/rate-limited, cannot verify)", entry.file);
+                        }
+                        404 => {
+                            let msg = format!(
+                                "  ✗ [404]  {key}\n         repo: {}\n         file: {}\n         url:  {}",
+                                entry.repo, entry.file, url
+                            );
+                            eprintln!("{msg}");
+                            failures.push(msg);
+                        }
+                        other => {
+                            println!("  ? [{other:3}]  {key}  →  {} (unexpected status)", entry.file);
+                        }
+                    }
+                }
+                Err(e) => {
+                    let msg = format!("  ✗ [ERR]  {key}  →  {e}");
+                    eprintln!("{msg}");
+                    failures.push(msg);
+                }
+            }
+            checked += 1;
+        }
+
+        println!("\nChecked {checked} GGUF catalog entries.");
+
+        if !failures.is_empty() {
+            panic!(
+                "\n\n{} GGUF catalog entr{} could not be verified:\n\n{}\n\
+                Fix gguf.json to point to the correct repo/filename.",
+                failures.len(),
+                if failures.len() == 1 { "y" } else { "ies" },
+                failures.join("\n\n")
+            );
+        }
     }
 }
