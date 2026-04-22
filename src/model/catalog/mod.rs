@@ -25,7 +25,8 @@ pub struct GgufEntry {
 #[serde(untagged)]
 enum RawGgufValue {
     Entry(GgufEntry),
-    Comment(()),
+    #[allow(dead_code)]
+    Comment(String),
 }
 
 // ── Public result type returned to the resolver ───────────────────────────────
