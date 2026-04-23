@@ -33,19 +33,80 @@ pub async fn proxy_request(
         .await
         .map_err(|e| {
             error!(error = %e, "Failed to proxy to engine");
-            (502u16, format!("{{\"error\":{{\"message\":\"Engine unavailable: {}\",\"type\":\"server_error\"}}}}", e))
+            (502u16, format!(r#"{{"error":{{"message":"Engine unavailable: {}","type":"server_error","param":null,"code":null}}}}"#, e))
         })?;
 
     let status = resp.status().as_u16();
     let text = resp.text().await.map_err(|e| {
-        (502, format!("{{\"error\":{{\"message\":\"Failed to read engine response: {}\",\"type\":\"server_error\"}}}}", e))
+        (502, format!(r#"{{"error":{{"message":"Failed to read engine response: {}","type":"server_error","param":null,"code":null}}}}"#, e))
     })?;
 
     if status >= 400 {
         warn!(status, "Engine returned error");
     }
 
-    Ok((status, text))
+    Ok((status, normalise_chat_response(text)))
+}
+
+/// Normalise a raw engine non-streaming chat completion response to be
+/// fully OpenAI API-spec compliant.
+///
+/// Engines (oMLX, llamacpp, etc.) sometimes include fields that the spec
+/// says should be omitted when null, or omit fields the spec requires:
+///
+/// - **C1**: Strip `message.reasoning_content` when null (non-thinking responses
+///   must not have this field — strict-schema clients like Pydantic reject it).
+/// - **C2**: Strip `message.tool_calls` when null (same reason).
+/// - **C3**: Add `logprobs: null` to each choice if the engine omits it.
+/// - **C5**: Add `param: null, code: null` to `error` if present but incomplete.
+///
+/// Passes unknown / non-parseable responses through unchanged.
+pub fn normalise_chat_response(text: String) -> String {
+    let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return text; // Not JSON — pass through as-is
+    };
+
+    // C5: Normalise error object if present
+    if let Some(err) = val.get_mut("error").and_then(|e| e.as_object_mut()) {
+        err.entry("param").or_insert(serde_json::Value::Null);
+        err.entry("code").or_insert(serde_json::Value::Null);
+    }
+
+    // Only normalise if this looks like a chat completion response
+    let is_chat_completion = val
+        .get("object")
+        .and_then(|v| v.as_str())
+        .map(|s| s == "chat.completion")
+        .unwrap_or(false);
+
+    if !is_chat_completion {
+        return serde_json::to_string(&val).unwrap_or(text);
+    }
+
+    if let Some(choices) = val.get_mut("choices").and_then(|c| c.as_array_mut()) {
+        for choice in choices.iter_mut() {
+            // C3: ensure logprobs field is present
+            if let Some(obj) = choice.as_object_mut() {
+                obj.entry("logprobs").or_insert(serde_json::Value::Null);
+
+                // C1, C2: strip null fields from message
+                if let Some(msg) = obj.get_mut("message").and_then(|m| m.as_object_mut()) {
+                    // C1: remove reasoning_content if null
+                    if msg.get("reasoning_content").map(|v| v.is_null()).unwrap_or(false) {
+                        msg.remove("reasoning_content");
+                    }
+                    // C2: remove tool_calls if null
+                    if msg.get("tool_calls").map(|v| v.is_null()).unwrap_or(false) {
+                        msg.remove("tool_calls");
+                    }
+                    // ensure refusal is present (spec field)
+                    msg.entry("refusal").or_insert(serde_json::Value::Null);
+                }
+            }
+        }
+    }
+
+    serde_json::to_string(&val).unwrap_or(text)
 }
 
 /// Proxy a streaming SSE request to the engine backend.
@@ -105,7 +166,10 @@ pub async fn proxy_request_assembling_stream(
     let mut body_val: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
         (
             400u16,
-            format!("{{\"error\":{{\"message\":\"Invalid JSON: {}\"}}}}", e),
+            format!(
+                r#"{{"error":{{"message":"Invalid JSON: {}","type":"invalid_request_error","param":null,"code":null}}}}"#,
+                e
+            ),
         )
     })?;
     if let Some(obj) = body_val.as_object_mut() {
@@ -115,7 +179,7 @@ pub async fn proxy_request_assembling_stream(
         (
             500u16,
             format!(
-                "{{\"error\":{{\"message\":\"JSON serialization failed: {}\"}}}}",
+                r#"{{"error":{{"message":"JSON serialization failed: {}","type":"server_error","param":null,"code":null}}}}"#,
                 e
             ),
         )
@@ -135,7 +199,7 @@ pub async fn proxy_request_assembling_stream(
             (
                 502u16,
                 format!(
-                    "{{\"error\":{{\"message\":\"Engine unavailable: {}\"}}}}",
+                    r#"{{"error":{{"message":"Engine unavailable: {}","type":"server_error","param":null,"code":null}}}}"#,
                     e
                 ),
             )
@@ -161,6 +225,12 @@ pub async fn proxy_request_assembling_stream(
     let mut prompt_tokens: u64 = 0;
     let mut completion_tokens: u64 = 0;
 
+    // Tool-call accumulation.
+    // Key = tool_call index (from delta.tool_calls[i].index).
+    // Each entry: (id, type, function_name, arguments_buf).
+    let mut tool_call_map: std::collections::BTreeMap<u64, (String, String, String, String)> =
+        std::collections::BTreeMap::new();
+
     // Safety limits: abort if generation exceeds these bounds (guards against infinite loops)
     const MAX_DATA_LINES: usize = 4096;
     const MAX_TOTAL_BYTES: usize = 768 * 1024; // 768 KB
@@ -170,7 +240,10 @@ pub async fn proxy_request_assembling_stream(
         let bytes = chunk.map_err(|e| {
             (
                 502u16,
-                format!("{{\"error\":{{\"message\":\"Stream read error: {}\"}}}}", e),
+                format!(
+                    r#"{{"error":{{"message":"Stream read error: {}","type":"server_error","param":null,"code":null}}}}"#,
+                    e
+                ),
             )
         })?;
         buffer.push_str(&String::from_utf8_lossy(&bytes));
@@ -199,7 +272,7 @@ pub async fn proxy_request_assembling_stream(
                 );
                 return Err((
                     504u16,
-                    r#"{"error":{"message":"Generation exceeded safety limits (possible infinite thinking loop)","type":"server_error"}}"#.to_string(),
+                    r#"{"error":{"message":"Generation exceeded safety limits (possible infinite thinking loop)","type":"server_error","param":null,"code":null}}"#.to_string(),
                 ));
             }
 
@@ -223,11 +296,57 @@ pub async fn proxy_request_assembling_stream(
             if let Some(choices) = chunk_val.get("choices").and_then(|c| c.as_array()) {
                 if let Some(choice) = choices.first() {
                     if let Some(delta) = choice.get("delta") {
+                        // Accumulate reasoning and content
                         if let Some(r) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
                             reasoning_buf.push_str(r);
                         }
                         if let Some(c) = delta.get("content").and_then(|v| v.as_str()) {
                             content_buf.push_str(c);
+                        }
+
+                        // Accumulate tool_calls deltas (C2)
+                        // Each delta.tool_calls entry has: index, id (first chunk only),
+                        // type (first chunk only), function.name (first chunk only),
+                        // function.arguments (incremental).
+                        if let Some(tc_arr) =
+                            delta.get("tool_calls").and_then(|v| v.as_array())
+                        {
+                            for tc_delta in tc_arr {
+                                let idx = tc_delta
+                                    .get("index")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let entry = tool_call_map.entry(idx).or_insert_with(|| {
+                                    (
+                                        String::new(), // id
+                                        String::new(), // type
+                                        String::new(), // function.name
+                                        String::new(), // function.arguments
+                                    )
+                                });
+                                if let Some(id) =
+                                    tc_delta.get("id").and_then(|v| v.as_str())
+                                {
+                                    entry.0 = id.to_string();
+                                }
+                                if let Some(t) =
+                                    tc_delta.get("type").and_then(|v| v.as_str())
+                                {
+                                    entry.1 = t.to_string();
+                                }
+                                if let Some(func) = tc_delta.get("function") {
+                                    if let Some(name) =
+                                        func.get("name").and_then(|v| v.as_str())
+                                    {
+                                        entry.2 = name.to_string();
+                                    }
+                                    if let Some(args) =
+                                        func.get("arguments").and_then(|v| v.as_str())
+                                    {
+                                        entry.3.push_str(args);
+                                    }
+                                }
+                            }
                         }
                     }
                     if let Some(fr) = choice.get("finish_reason").and_then(|v| v.as_str()) {
@@ -260,7 +379,60 @@ pub async fn proxy_request_assembling_stream(
         (reasoning_buf, content_buf)
     };
 
-    // Assemble non-streaming response
+    // Build validated tool_calls array (C2).
+    // Safeguard: only include entries that have all required fields (id, type="function",
+    // function.name non-empty, function.arguments valid JSON string). Drop any malformed entry.
+    let tool_calls_val: serde_json::Value = {
+        let valid: Vec<serde_json::Value> = tool_call_map
+            .into_values()
+            .filter_map(|(id, tc_type, name, args)| {
+                // Safeguard: require all three identity fields
+                if id.is_empty() || tc_type.is_empty() || name.is_empty() {
+                    return None;
+                }
+                // Safeguard: arguments must be a valid JSON string (even if "{}")
+                if args.is_empty() {
+                    return None;
+                }
+                Some(serde_json::json!({
+                    "id": id,
+                    "type": tc_type,
+                    "function": {
+                        "name": name,
+                        "arguments": args
+                    }
+                }))
+            })
+            .collect();
+
+        if valid.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::Array(valid)
+        }
+    };
+
+    // Build the message object — only include optional fields when non-null/non-empty (C1/C2)
+    let mut message = serde_json::json!({
+        "role": "assistant",
+        "content": if final_content.is_empty() && tool_calls_val.is_array() {
+            // Tool-call responses have null content per OpenAI spec
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(final_content)
+        },
+        "refusal": serde_json::Value::Null
+    });
+    // C1: reasoning_content only when non-empty (omit null for non-thinking responses)
+    if !final_reasoning.is_empty() {
+        message["reasoning_content"] = serde_json::Value::String(final_reasoning);
+    }
+    // C2: tool_calls only when present and validated
+    if !tool_calls_val.is_null() {
+        message["tool_calls"] = tool_calls_val;
+    }
+
+    // Assemble non-streaming response (C3: logprobs field included)
     let assembled = serde_json::json!({
         "id": completion_id,
         "object": "chat.completion",
@@ -268,12 +440,8 @@ pub async fn proxy_request_assembling_stream(
         "model": model_name,
         "choices": [{
             "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": final_content,
-                "reasoning_content": if final_reasoning.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(final_reasoning) },
-                "tool_calls": null
-            },
+            "message": message,
+            "logprobs": serde_json::Value::Null,
             "finish_reason": finish_reason.unwrap_or_else(|| "stop".to_string())
         }],
         "usage": {

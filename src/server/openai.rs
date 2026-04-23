@@ -41,7 +41,7 @@ fn check_model_role(
             "embedding"
         };
         let body = format!(
-            r#"{{"error":{{"message":"Model '{}' is an {} model and cannot be used for chat completions.","type":"invalid_request_error"}}}}"#,
+            r#"{{"error":{{"message":"Model '{}' is an {} model and cannot be used for chat completions.","type":"invalid_request_error","param":null,"code":null}}}}"#,
             model_id, kind
         );
         return Err(Response::builder()
@@ -53,7 +53,7 @@ fn check_model_role(
 
     if require_embed && !entry.capabilities.embeddings {
         let body = format!(
-            r#"{{"error":{{"message":"Model '{}' does not support embeddings. Use an embedding model such as 'nomic-embed-text:v1.5'.","type":"invalid_request_error"}}}}"#,
+            r#"{{"error":{{"message":"Model '{}' does not support embeddings. Use an embedding model such as 'nomic-embed-text:v1.5'.","type":"invalid_request_error","param":null,"code":null}}}}"#,
             model_id
         );
         return Err(Response::builder()
@@ -75,7 +75,7 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
                 .status(StatusCode::BAD_REQUEST)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(format!(
-                    r#"{{"error":{{"message":"Invalid JSON: {}","type":"invalid_request_error"}}}}"#,
+                    r#"{{"error":{{"message":"Invalid JSON: {}","type":"invalid_request_error","param":null,"code":null}}}}"#,
                     e
                 )))
                 .unwrap();
@@ -150,7 +150,7 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
         Err(e) => {
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from(format!(r#"{{"error":{{"message":"{}"}}}}"#, e)))
+                .body(Body::from(format!(r#"{{"error":{{"message":"{}","type":"server_error","param":null,"code":null}}}}"#, e)))
                 .unwrap();
         }
     };
@@ -215,7 +215,7 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
                 .status(StatusCode::GATEWAY_TIMEOUT)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    r#"{"error":{"message":"Inference timed out after 120 seconds","type":"server_error"}}}"#,
+                    r#"{"error":{"message":"Inference timed out after 120 seconds","type":"server_error","param":null,"code":null}}"#,
                 ))
                 .unwrap(),
         }
@@ -320,7 +320,7 @@ pub async fn embeddings(State(state): State<AppState>, body: Bytes) -> impl Into
             .status(StatusCode::NOT_IMPLEMENTED)
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(format!(
-                r#"{{"error":{{"message":"Embeddings are not supported by {} v{}. This capability is available on oMLX (macOS), SGLang (Linux/NVIDIA), and llama.cpp platforms.","type":"not_supported_error"}}}}"#,
+                r#"{{"error":{{"message":"Embeddings are not supported by {} v{}. This capability is available on oMLX (macOS), SGLang (Linux/NVIDIA), and llama.cpp platforms.","type":"not_supported_error","param":null,"code":null}}}}"#,
                 state.engine_config.name, state.engine_config.version
             )))
             .unwrap()
