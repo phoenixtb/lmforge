@@ -487,7 +487,7 @@ pub async fn proxy_stream_rewriting_think_tags(
         .await
         .map_err(|e| {
             error!(error = %e, "Failed to proxy think-rewrite stream to engine");
-            (502u16, format!("{{\"error\":{{\"message\":\"Engine unavailable: {}\",\"type\":\"server_error\"}}}}", e))
+            (502u16, format!("{{\"error\":\"Engine unavailable: {}\"}}", e))
         })?;
 
     if !resp.status().is_success() {
@@ -499,10 +499,18 @@ pub async fn proxy_stream_rewriting_think_tags(
     let mut byte_stream = resp.bytes_stream();
 
     let output = stream! {
+        // Safety guard — same limits as proxy_request_assembling_stream.
+        // Without these, a runaway oMLX generation streams forever to the client.
+        const MAX_SSE_LINES: usize = 4096;
+        const MAX_TOTAL_BYTES: usize = 768 * 1024; // 768 KB
+        let mut sse_line_count: usize = 0;
+        let mut total_bytes: usize = 0;
+
         let mut line_buf = String::new();
         let mut rewriter = ThinkTagRewriter::new();
+        let mut aborted = false;
 
-        while let Some(chunk_result) = byte_stream.next().await {
+        'outer: while let Some(chunk_result) = byte_stream.next().await {
             let bytes = match chunk_result {
                 Ok(b) => b,
                 Err(e) => {
@@ -510,16 +518,52 @@ pub async fn proxy_stream_rewriting_think_tags(
                     break;
                 }
             };
+            total_bytes += bytes.len();
             line_buf.push_str(&String::from_utf8_lossy(&bytes));
+
+            // Check byte limit first (fast path before line parsing)
+            if total_bytes > MAX_TOTAL_BYTES {
+                warn!(
+                    total_bytes,
+                    "Streaming think-tag rewriter safety limit reached (byte size) — aborting"
+                );
+                aborted = true;
+                break;
+            }
 
             // Process all complete lines
             while let Some(nl) = line_buf.find('\n') {
                 let raw_line = line_buf[..nl].trim_end_matches('\r').to_string();
                 line_buf.drain(..=nl);
 
+                // Count only non-empty data lines against the limit
+                if raw_line.starts_with("data: ") && raw_line != "data: [DONE]" {
+                    sse_line_count += 1;
+                    if sse_line_count > MAX_SSE_LINES {
+                        warn!(
+                            sse_line_count,
+                            "Streaming think-tag rewriter safety limit reached (line count) — aborting"
+                        );
+                        aborted = true;
+                        break 'outer;
+                    }
+                }
+
                 let rewritten = rewrite_sse_line(&raw_line, &mut rewriter);
                 yield Ok::<Bytes, std::io::Error>(Bytes::from(format!("{rewritten}\n")));
             }
+        }
+
+        if aborted {
+            // Emit a terminal error SSE event so the client knows the stream was cut
+            let err = serde_json::json!({
+                "error": {
+                    "message": "Generation exceeded streaming safety limits (possible infinite thinking loop)",
+                    "type": "server_error"
+                }
+            });
+            yield Ok(Bytes::from(format!("data: {}\n\ndata: [DONE]\n\n", serde_json::to_string(&err).unwrap_or_default())));
+            return;
         }
 
         // Flush partial line buffer (rare edge: stream cut without trailing newline)
@@ -531,7 +575,6 @@ pub async fn proxy_stream_rewriting_think_tags(
         // Flush any bytes buffered for partial tag detection
         let (leftover_reasoning, leftover_content) = rewriter.flush();
         if !leftover_reasoning.is_empty() || !leftover_content.is_empty() {
-            // Emit one final delta chunk for the leftover bytes
             let delta = serde_json::json!({
                 "choices": [{
                     "delta": {

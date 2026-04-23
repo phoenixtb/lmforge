@@ -159,7 +159,7 @@ pub fn apply_think_for_engine(
 
     match engine_id {
         "omlx" => {
-            // Always strip enable_thinking first — re-apply precisely below.
+            // Strip enable_thinking first — re-apply precisely below.
             if let Some(obj) = body.as_object_mut() {
                 if let Some(kwargs) = obj
                     .get_mut("chat_template_kwargs")
@@ -175,6 +175,12 @@ pub fn apply_think_for_engine(
                 if empty {
                     obj.remove("chat_template_kwargs");
                 }
+
+                // Strip num_ctx — it's an Ollama-specific context-window parameter.
+                // oMLX uses the OpenAI API and doesn't understand it; context length
+                // is set at model-load time, not per-request. Forwarding it is a noop
+                // at best, and may interact with oMLX's generation budget at worst.
+                obj.remove("num_ctx");
             }
 
             match effective_think {
