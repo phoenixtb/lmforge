@@ -509,14 +509,23 @@ mod tests {
         // Qwen3-Embedding uses the same decoder arch as Qwen3-Chat.
         // Signal A (shortcut containing "embed") must force embeddings=true, chat=false.
         let dir = make_model_dir("signal_a_embed");
-        write_json(&dir, "config.json",
-            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"],"hidden_size":1024}"#);
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"],"hidden_size":1024}"#,
+        );
         write_json(&dir, "tokenizer_config.json", r#"{}"#);
 
         let caps = detect_capabilities(&dir, Some("qwen3-embed:0.6b:4bit"), None);
-        assert!(caps.embeddings, "Signal A: embed shortcut must set embeddings=true");
-        assert!(!caps.chat,      "Signal A: embed shortcut must clear chat=false");
-        assert!(!caps.reranking, "Embed model must not be flagged as reranker");
+        assert!(
+            caps.embeddings,
+            "Signal A: embed shortcut must set embeddings=true"
+        );
+        assert!(!caps.chat, "Signal A: embed shortcut must clear chat=false");
+        assert!(
+            !caps.reranking,
+            "Embed model must not be flagged as reranker"
+        );
         cleanup(&dir);
     }
 
@@ -524,13 +533,22 @@ mod tests {
     fn test_signal_a_reranker_shortcut_overrides_decoder_arch() {
         // Qwen3-Reranker is also decoder-based. Signal A must identify it as a reranker.
         let dir = make_model_dir("signal_a_rerank");
-        write_json(&dir, "config.json",
-            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"]}"#);
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"]}"#,
+        );
         write_json(&dir, "tokenizer_config.json", r#"{}"#);
 
         let caps = detect_capabilities(&dir, Some("qwen3-reranker:0.6b:4bit"), None);
-        assert!(caps.reranking,  "Signal A: reranker shortcut must set reranking=true");
-        assert!(!caps.embeddings,"Reranker must not be flagged as embedding model");
+        assert!(
+            caps.reranking,
+            "Signal A: reranker shortcut must set reranking=true"
+        );
+        assert!(
+            !caps.embeddings,
+            "Reranker must not be flagged as embedding model"
+        );
         cleanup(&dir);
     }
 
@@ -538,14 +556,24 @@ mod tests {
     fn test_signal_a_chat_shortcut_does_not_trigger_embed() {
         // A plain chat shortcut (qwen3.5:4b:4bit) must not activate embed/rerank flags.
         let dir = make_model_dir("signal_a_chat");
-        write_json(&dir, "config.json",
-            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"]}"#);
-        write_json(&dir, "tokenizer_config.json", r#"{"chat_template":"{% for m in messages %}{{m}}{% endfor %}"}"#);
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"]}"#,
+        );
+        write_json(
+            &dir,
+            "tokenizer_config.json",
+            r#"{"chat_template":"{% for m in messages %}{{m}}{% endfor %}"}"#,
+        );
 
         let caps = detect_capabilities(&dir, Some("qwen3.5:4b:4bit"), None);
-        assert!(caps.chat,        "Chat shortcut + chat_template = chat model");
-        assert!(!caps.embeddings, "Chat shortcut must not set embeddings=true");
-        assert!(!caps.reranking,  "Chat shortcut must not set reranking=true");
+        assert!(caps.chat, "Chat shortcut + chat_template = chat model");
+        assert!(
+            !caps.embeddings,
+            "Chat shortcut must not set embeddings=true"
+        );
+        assert!(!caps.reranking, "Chat shortcut must not set reranking=true");
         cleanup(&dir);
     }
 
@@ -558,8 +586,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let caps = detect_capabilities(&dir, None, Some("Qwen/Qwen3-Embedding-0.6B-GGUF"));
-        assert!(caps.embeddings, "Signal B: 'Embedding' in repo name must set embeddings=true");
-        assert!(!caps.chat,      "Signal B: embedding dir must clear chat=false");
+        assert!(
+            caps.embeddings,
+            "Signal B: 'Embedding' in repo name must set embeddings=true"
+        );
+        assert!(!caps.chat, "Signal B: embedding dir must clear chat=false");
         cleanup(&dir);
     }
 
@@ -567,9 +598,19 @@ mod tests {
     fn test_signal_b_reranker_in_repo_name() {
         let dir = make_model_dir("signal_b_rerank");
         // No config.json — GGUF scenario
-        let caps = detect_capabilities(&dir, None, Some("jinaai/jina-reranker-v2-base-multilingual"));
-        assert!(caps.reranking,   "Signal B: 'reranker' in repo must set reranking=true");
-        assert!(!caps.embeddings, "Signal B: reranker must not be flagged as embed");
+        let caps = detect_capabilities(
+            &dir,
+            None,
+            Some("jinaai/jina-reranker-v2-base-multilingual"),
+        );
+        assert!(
+            caps.reranking,
+            "Signal B: 'reranker' in repo must set reranking=true"
+        );
+        assert!(
+            !caps.embeddings,
+            "Signal B: reranker must not be flagged as embed"
+        );
         cleanup(&dir);
     }
 
@@ -580,13 +621,19 @@ mod tests {
         // Decoder arch (sets chat=true) + embed in repo (sets embed=true) → contradictory.
         // Signal C: no chat_template in tokenizer_config.json → clears chat=false.
         let dir = make_model_dir("signal_c_tiebreak");
-        write_json(&dir, "config.json",
-            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"],"hidden_size":1024}"#);
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"],"hidden_size":1024}"#,
+        );
         write_json(&dir, "tokenizer_config.json", r#"{}"#); // no chat_template key
 
         let caps = detect_capabilities(&dir, None, Some("Qwen/Qwen3-Embedding-0.6B-GGUF"));
         assert!(caps.embeddings, "Signal B+C: repo name sets embed=true");
-        assert!(!caps.chat,      "Signal C: no chat_template must clear chat=false");
+        assert!(
+            !caps.chat,
+            "Signal C: no chat_template must clear chat=false"
+        );
         cleanup(&dir);
     }
 
@@ -596,12 +643,18 @@ mod tests {
     fn test_signal_d_is_embedding_flag() {
         let dir = make_model_dir("signal_d_is_embed");
         write_json(&dir, "generation_config.json", r#"{"is_embedding":true}"#);
-        write_json(&dir, "config.json",
-            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"],"hidden_size":768}"#);
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"],"hidden_size":768}"#,
+        );
 
         let caps = detect_capabilities(&dir, None, None);
-        assert!(caps.embeddings, "Signal D: is_embedding=true must set embeddings=true");
-        assert!(!caps.chat,      "Signal D: is_embedding must clear chat=false");
+        assert!(
+            caps.embeddings,
+            "Signal D: is_embedding=true must set embeddings=true"
+        );
+        assert!(!caps.chat, "Signal D: is_embedding must clear chat=false");
         cleanup(&dir);
     }
 
@@ -610,15 +663,25 @@ mod tests {
     #[test]
     fn test_encoder_reranker_detected_from_config() {
         let dir = make_model_dir("encoder_reranker");
-        write_json(&dir, "config.json", r#"{
+        write_json(
+            &dir,
+            "config.json",
+            r#"{
             "model_type": "bert",
             "architectures": ["BertForSequenceClassification"],
             "num_labels": 1
-        }"#);
+        }"#,
+        );
 
         let caps = detect_capabilities(&dir, None, None);
-        assert!(caps.reranking,  "ForSequenceClassification + num_labels=1 → reranker");
-        assert!(!caps.embeddings,"Reranker must not be flagged as embedding model");
+        assert!(
+            caps.reranking,
+            "ForSequenceClassification + num_labels=1 → reranker"
+        );
+        assert!(
+            !caps.embeddings,
+            "Reranker must not be flagged as embedding model"
+        );
         cleanup(&dir);
     }
 
@@ -626,14 +689,21 @@ mod tests {
     fn test_encoder_classifier_with_multiple_labels_is_not_reranker() {
         // num_labels > 1 = multi-class classifier, not a relevance reranker
         let dir = make_model_dir("multi_class_classifier");
-        write_json(&dir, "config.json", r#"{
+        write_json(
+            &dir,
+            "config.json",
+            r#"{
             "model_type": "bert",
             "architectures": ["BertForSequenceClassification"],
             "num_labels": 5
-        }"#);
+        }"#,
+        );
 
         let caps = detect_capabilities(&dir, None, None);
-        assert!(!caps.reranking, "num_labels=5 must not be flagged as re-ranker");
+        assert!(
+            !caps.reranking,
+            "num_labels=5 must not be flagged as re-ranker"
+        );
         cleanup(&dir);
     }
 
@@ -642,14 +712,23 @@ mod tests {
     #[test]
     fn test_thinking_detected_on_chat_model() {
         let dir = make_model_dir("thinking_chat");
-        write_json(&dir, "config.json",
-            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"]}"#);
-        write_json(&dir, "tokenizer_config.json",
-            r#"{"chat_template":"...<think>...</think>...","enable_thinking":true}"#);
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"]}"#,
+        );
+        write_json(
+            &dir,
+            "tokenizer_config.json",
+            r#"{"chat_template":"...<think>...</think>...","enable_thinking":true}"#,
+        );
 
         let caps = detect_capabilities(&dir, Some("qwen3:8b:4bit"), None);
-        assert!(caps.chat,    "Thinking model must still be a chat model");
-        assert!(caps.thinking,"<think> in tokenizer_config must set thinking=true");
+        assert!(caps.chat, "Thinking model must still be a chat model");
+        assert!(
+            caps.thinking,
+            "<think> in tokenizer_config must set thinking=true"
+        );
         cleanup(&dir);
     }
 
@@ -657,15 +736,20 @@ mod tests {
     fn test_thinking_not_set_on_embedding_model() {
         // Qwen3-Embedding uses Qwen3's tokenizer (which has <think>) but is NOT a thinking model.
         let dir = make_model_dir("no_thinking_embed");
-        write_json(&dir, "config.json",
-            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"],"hidden_size":1024}"#);
-        write_json(&dir, "tokenizer_config.json",
-            r#"{"enable_thinking":true}"#); // Qwen3 tokenizer — no chat_template
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"],"hidden_size":1024}"#,
+        );
+        write_json(&dir, "tokenizer_config.json", r#"{"enable_thinking":true}"#); // Qwen3 tokenizer — no chat_template
 
         let caps = detect_capabilities(&dir, Some("qwen3-embed:0.6b:4bit"), None);
         assert!(caps.embeddings, "Must be embedding model");
-        assert!(!caps.chat,      "Must not be chat model");
-        assert!(!caps.thinking,  "Thinking must not be set on non-chat models");
+        assert!(!caps.chat, "Must not be chat model");
+        assert!(
+            !caps.thinking,
+            "Thinking must not be set on non-chat models"
+        );
         cleanup(&dir);
     }
 
@@ -674,28 +758,42 @@ mod tests {
     #[test]
     fn test_embedding_dims_populated_for_embed_model() {
         let dir = make_model_dir("embed_dims");
-        write_json(&dir, "config.json",
-            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"],"hidden_size":1024}"#);
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"],"hidden_size":1024}"#,
+        );
         write_json(&dir, "tokenizer_config.json", r#"{}"#);
 
         let caps = detect_capabilities(&dir, Some("qwen3-embed:0.6b:4bit"), None);
-        assert_eq!(caps.embedding_dims, Some(1024),
-            "Embedding dims must be populated from hidden_size for embed models");
+        assert_eq!(
+            caps.embedding_dims,
+            Some(1024),
+            "Embedding dims must be populated from hidden_size for embed models"
+        );
         cleanup(&dir);
     }
 
     #[test]
     fn test_embedding_dims_not_populated_for_chat_model() {
         let dir = make_model_dir("chat_no_dims");
-        write_json(&dir, "config.json",
-            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"],"hidden_size":4096}"#);
-        write_json(&dir, "tokenizer_config.json",
-            r#"{"chat_template":"{% for m in messages %}{{m}}{% endfor %}"}"#);
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"],"hidden_size":4096}"#,
+        );
+        write_json(
+            &dir,
+            "tokenizer_config.json",
+            r#"{"chat_template":"{% for m in messages %}{{m}}{% endfor %}"}"#,
+        );
 
         let caps = detect_capabilities(&dir, Some("qwen3.5:4b:4bit"), None);
         assert!(caps.chat, "Must be chat model");
-        assert_eq!(caps.embedding_dims, None,
-            "Embedding dims must not be set for chat models");
+        assert_eq!(
+            caps.embedding_dims, None,
+            "Embedding dims must not be set for chat models"
+        );
         cleanup(&dir);
     }
 }

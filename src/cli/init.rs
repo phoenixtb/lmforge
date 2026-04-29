@@ -41,8 +41,8 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     println!();
 
     // Save hardware profile for later use
-    let profile_json = serde_json::to_string_pretty(&profile)
-        .context("Failed to serialize hardware profile")?;
+    let profile_json =
+        serde_json::to_string_pretty(&profile).context("Failed to serialize hardware profile")?;
     let profile_path = data_dir.join("hardware.json");
     std::fs::write(&profile_path, &profile_json)
         .with_context(|| format!("Cannot write hardware.json to {}", profile_path.display()))?;
@@ -93,7 +93,9 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
         None
     })
     .context("Failed to load engine registry")?;
-    let selected = registry.select(&profile).context("No compatible engine found for this hardware")?;
+    let selected = registry
+        .select(&profile)
+        .context("No compatible engine found for this hardware")?;
     println!(
         "  Selected: {} v{} ({})",
         selected.name, selected.version, selected.id

@@ -93,12 +93,37 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     let index = load_index(&state.data_dir);
 
     // Engine-aware think translation:
-    // oMLX  → strip enable_thinking flag; inject <nothink> prefix for think:false on thinking models
-    // other → translate think → chat_template_kwargs.enable_thinking (Jinja-bounded, safe)
+    // oMLX  → strip enable_thinking flag; translate penalties; inject enable_thinking:false for think:false
+    // other → translate think → chat_template_kwargs.enable_thinking
     // Must capture has_think BEFORE apply_think_for_engine removes the field.
     let has_think = thinking::request_has_think(&body_value);
     let model_caps = index.get(&model_id).map(|e| &e.capabilities);
+
+    // Read original_max_tokens before apply_think_for_engine (which may modify body).
+    // Needed to calculate remaining tokens for call-2 in the budget path.
+    let original_max_tokens: u32 = body_value
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(2048)
+        .min(u32::MAX as u64) as u32;
+
+    // Extract thinking_budget BEFORE apply_think_for_engine (read-only call).
+    let thinking_budget = thinking::extract_thinking_budget(&body_value);
+
+    // Extract stream_reasoning_deltas BEFORE apply_think_for_engine.
+    let stream_reasoning_deltas = thinking::extract_stream_reasoning_deltas(&body_value);
+
+    // Apply engine-specific transformations (strips think, num_ctx, translates penalties).
     thinking::apply_think_for_engine(&mut body_value, &state.engine_config.id, model_caps);
+
+    // Strip thinking_budget and stream_reasoning_deltas — engine has no concept of them.
+    if let Some(obj) = body_value.as_object_mut() {
+        obj.remove("thinking_budget");
+        obj.remove("stream_reasoning_deltas");
+        if let Some(extra) = obj.get_mut("extra_body").and_then(|v| v.as_object_mut()) {
+            extra.remove("stream_reasoning_deltas");
+        }
+    }
 
     let is_stream = body_value
         .get("stream")
@@ -119,7 +144,23 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
         obj.remove("keep_alive");
     }
 
-    debug!(stream = is_stream, think = has_think, model = %model_id, "Chat completion request");
+    // Determine if the two-call budget path is applicable:
+    //   • engine must be oMLX (only engine with native thinking support we manage)
+    //   • model must have thinking capability in the index
+    //   • think must be requested (has_think=true)
+    //   • thinking_budget must be explicitly provided
+    let is_omlx = state.engine_config.id == "omlx";
+    let is_thinking_model = model_caps.map(|c| c.thinking).unwrap_or(false);
+    let can_use_budget = has_think && is_omlx && is_thinking_model;
+
+    debug!(
+        stream = is_stream,
+        think = has_think,
+        thinking_budget = ?thinking_budget,
+        stream_reasoning_deltas = stream_reasoning_deltas,
+        model = %model_id,
+        "Chat completion request"
+    );
 
     // Capability gate: reject embedding and re-ranking models sent to the chat endpoint.
     // (index already loaded above)
@@ -144,33 +185,62 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
         }
     }
 
-    // Re-serialize with translations applied
-    let forwarded_body = match serde_json::to_vec(&body_value) {
-        Ok(b) => Bytes::from(b),
-        Err(e) => {
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from(format!(r#"{{"error":{{"message":"{}","type":"server_error","param":null,"code":null}}}}"#, e)))
-                .unwrap();
-        }
-    };
-
     let client = proxy::build_proxy_client();
 
     if is_stream {
-        // Streaming: for oMLX+think, rewrite <think> tags in delta.content into
-        // delta.reasoning_content on the fly. For all other combinations, pass through.
-        let stream_result = if has_think && state.engine_config.id == "omlx" {
-            proxy::proxy_stream_rewriting_think_tags(
-                &client,
-                engine_port,
-                "/v1/chat/completions",
-                forwarded_body,
-            )
-            .await
-        } else {
-            proxy::proxy_stream(&client, engine_port, "/v1/chat/completions", forwarded_body)
+        // Streaming routing:
+        //   1. oMLX + think + budget → two-call stitching (thinking_budget enforcement)
+        //   2. oMLX + think, no budget → existing rewriter (tag splitting)
+        //   3. everything else → plain proxy_stream passthrough
+        let stream_result = match (can_use_budget, thinking_budget) {
+            (true, Some(budget)) => {
+                // Two-call streaming: budget enforcement path.
+                // body_value is passed as Value (not re-serialized Bytes) so call-2
+                // can clone and modify it without re-parsing.
+                proxy::proxy_stream_with_thinking_budget(
+                    &client,
+                    engine_port,
+                    "/v1/chat/completions",
+                    body_value,
+                    original_max_tokens,
+                    budget,
+                    stream_reasoning_deltas,
+                )
                 .await
+            }
+            (true, None) => {
+                // Existing think-tag rewriter (no budget cap)
+                let forwarded_body = match serde_json::to_vec(&body_value) {
+                    Ok(b) => Bytes::from(b),
+                    Err(e) => {
+                        return Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Body::from(format!(r#"{{"error":{{"message":"{}","type":"server_error","param":null,"code":null}}}}"#, e)))
+                            .unwrap();
+                    }
+                };
+                proxy::proxy_stream_rewriting_think_tags(
+                    &client,
+                    engine_port,
+                    "/v1/chat/completions",
+                    forwarded_body,
+                )
+                .await
+            }
+            _ => {
+                // Plain passthrough (non-think, or non-oMLX engine)
+                let forwarded_body = match serde_json::to_vec(&body_value) {
+                    Ok(b) => Bytes::from(b),
+                    Err(e) => {
+                        return Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Body::from(format!(r#"{{"error":{{"message":"{}","type":"server_error","param":null,"code":null}}}}"#, e)))
+                            .unwrap();
+                    }
+                };
+                proxy::proxy_stream(&client, engine_port, "/v1/chat/completions", forwarded_body)
+                    .await
+            }
         };
         match stream_result {
             Ok(stream_body) => Response::builder()
@@ -187,20 +257,49 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
                 .unwrap(),
         }
     } else if has_think {
-        // Non-streaming + thinking: force stream internally so we can accumulate
-        // reasoning_content and content chunks into separate fields.
-        // Hard 120-second timeout prevents infinite oMLX loops from blocking indefinitely.
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(120),
-            proxy::proxy_request_assembling_stream(
-                &client,
-                engine_port,
-                "/v1/chat/completions",
-                forwarded_body,
-            ),
-        )
-        .await
-        {
+        // Non-streaming + thinking routing:
+        //   1. oMLX + thinking model + budget → two-call non-streaming
+        //   2. oMLX + think, no budget → existing assembler
+        //   3. non-oMLX → existing assembler
+        // Hard 120-second timeout prevents infinite oMLX loops from blocking.
+        let result = match (can_use_budget, thinking_budget) {
+            (true, Some(budget)) => {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(120),
+                    proxy::proxy_nonstream_with_thinking_budget(
+                        &client,
+                        engine_port,
+                        "/v1/chat/completions",
+                        body_value,
+                        original_max_tokens,
+                        budget,
+                    ),
+                )
+                .await
+            }
+            _ => {
+                let forwarded_body = match serde_json::to_vec(&body_value) {
+                    Ok(b) => Bytes::from(b),
+                    Err(e) => {
+                        return Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Body::from(format!(r#"{{"error":{{"message":"{}","type":"server_error","param":null,"code":null}}}}"#, e)))
+                            .unwrap();
+                    }
+                };
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(120),
+                    proxy::proxy_request_assembling_stream(
+                        &client,
+                        engine_port,
+                        "/v1/chat/completions",
+                        forwarded_body,
+                    ),
+                )
+                .await
+            }
+        };
+        match result {
             Ok(Ok((status, text))) => Response::builder()
                 .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
                 .header(header::CONTENT_TYPE, "application/json")
@@ -221,6 +320,15 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
         }
     } else {
         // Standard non-streaming pass-through
+        let forwarded_body = match serde_json::to_vec(&body_value) {
+            Ok(b) => Bytes::from(b),
+            Err(e) => {
+                return Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::from(format!(r#"{{"error":{{"message":"{}","type":"server_error","param":null,"code":null}}}}"#, e)))
+                    .unwrap();
+            }
+        };
         match proxy::proxy_request(&client, engine_port, "/v1/chat/completions", forwarded_body)
             .await
         {

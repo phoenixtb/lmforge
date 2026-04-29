@@ -123,7 +123,10 @@ async fn install_via_brew(
         eprintln!();
         eprintln!("  ✗ {}", reason);
         eprintln!();
-        eprintln!("  ── How to install {} ─────────────────────────────", engine.name);
+        eprintln!(
+            "  ── How to install {} ─────────────────────────────",
+            engine.name
+        );
         eprintln!();
         eprintln!("  Recommended — Homebrew (https://brew.sh):");
         if !brew_tap.is_empty() {
@@ -142,7 +145,11 @@ async fn install_via_brew(
         eprintln!();
         eprintln!("  After installing, run:  lmforge start");
         eprintln!();
-        anyhow::anyhow!("{} — install {} manually using one of the options above.", reason, engine.name)
+        anyhow::anyhow!(
+            "{} — install {} manually using one of the options above.",
+            reason,
+            engine.name
+        )
     };
 
     // ── 1. Homebrew must be present ────────────────────────────────────────────
@@ -167,10 +174,7 @@ async fn install_via_brew(
         if !brew_tap_url.is_empty() {
             tap_cmd.arg(brew_tap_url);
         }
-        let tap_out = tap_cmd
-            .output()
-            .await
-            .context("Failed to run 'brew tap'")?;
+        let tap_out = tap_cmd.output().await.context("Failed to run 'brew tap'")?;
 
         let tap_stderr = String::from_utf8_lossy(&tap_out.stderr);
         let tap_stdout = String::from_utf8_lossy(&tap_out.stdout);
@@ -178,8 +182,7 @@ async fn install_via_brew(
         // "already tapped" (or updated as part of general auto-update) = success
         let already = tap_stderr.contains("already tapped")
             || tap_stdout.contains("already tapped")
-            || tap_stderr.contains(brew_tap)
-                && tap_stdout.contains("Updated");
+            || tap_stderr.contains(brew_tap) && tap_stdout.contains("Updated");
 
         if !tap_out.status.success() && !already {
             let detail = if tap_stderr.trim().is_empty() {
@@ -196,7 +199,6 @@ async fn install_via_brew(
             info!("Tap {} already added", brew_tap);
         }
     }
-
 
     // ── 3. Install the formula ────────────────────────────────────────────────
     println!("  ⚙ Installing {} via Homebrew...", brew_formula);
@@ -244,7 +246,6 @@ async fn install_via_brew(
         brew_formula, cmd
     )))
 }
-
 
 /// Install via pip in an isolated venv (fallback for oMLX, primary for SGLang)
 async fn install_via_pip(
@@ -338,7 +339,11 @@ async fn install_via_binary(
 
     // Resolve platform string and file extension
     let (platform, extension) = resolve_platform(profile)?;
-    let asset_name = format!("{}.{}", asset_pattern.replace("{platform}", &platform), extension);
+    let asset_name = format!(
+        "{}.{}",
+        asset_pattern.replace("{platform}", &platform),
+        extension
+    );
     let download_url = format!("{}/{}", release_url, asset_name);
 
     println!("  ⚙ Downloading {} from:", engine.name);
@@ -543,7 +548,10 @@ fn detect_windows_cuda_variant() -> String {
                         .parse()
                         .unwrap_or(12);
                     let variant = if major >= 13 { "13.1" } else { "12.4" };
-                    debug!(cuda_version = ver_str, variant, "Detected Windows CUDA variant");
+                    debug!(
+                        cuda_version = ver_str,
+                        variant, "Detected Windows CUDA variant"
+                    );
                     return variant.to_string();
                 }
             }
@@ -570,7 +578,10 @@ async fn extract_archive(
             .args([
                 "-NoProfile",
                 "-Command",
-                &format!("Expand-Archive -Force -Path '{}' -DestinationPath '{}'", archive_str, dest_str),
+                &format!(
+                    "Expand-Archive -Force -Path '{}' -DestinationPath '{}'",
+                    archive_str, dest_str
+                ),
             ])
             .status()
             .await
@@ -839,8 +850,16 @@ mod tests {
         };
         let (platform, ext) = resolve_platform(&profile).unwrap();
         // Platform starts with "win-cuda-" and ends with "-x64"
-        assert!(platform.starts_with("win-cuda-"), "Expected win-cuda-*, got {}", platform);
-        assert!(platform.ends_with("-x64"), "Expected *-x64, got {}", platform);
+        assert!(
+            platform.starts_with("win-cuda-"),
+            "Expected win-cuda-*, got {}",
+            platform
+        );
+        assert!(
+            platform.ends_with("-x64"),
+            "Expected *-x64, got {}",
+            platform
+        );
         // Windows CUDA builds are always .zip
         assert_eq!(ext, "zip");
     }

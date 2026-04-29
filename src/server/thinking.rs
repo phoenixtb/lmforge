@@ -1,4 +1,4 @@
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::model::index::ModelCapabilities;
 
@@ -181,6 +181,54 @@ pub fn apply_think_for_engine(
                 // is set at model-load time, not per-request. Forwarding it is a noop
                 // at best, and may interact with oMLX's generation budget at worst.
                 obj.remove("num_ctx");
+
+                // ── Penalty translation (oMLX only) ───────────────────────────────
+                // oMLX (mlx-lm) silently ignores the OpenAI `frequency_penalty` and
+                // `presence_penalty` fields — they are accepted without error but have
+                // no effect on generation. The engine-native equivalent is
+                // `repetition_penalty` (multiplicative: 1.0 = neutral, >1.0 = penalise).
+                //
+                // LMForge translates to honour the OpenAI contract for all clients.
+                // Formula (documented approximation — exact OpenAI math requires
+                // per-token state inside the inference loop):
+                //
+                //   repetition_penalty = clamp(1.0 + (freq + pres) × 0.33, 1.0, 1.3)
+                //
+                // Rules:
+                //   • Only derive if at least one penalty is non-zero.
+                //   • If the client already set `repetition_penalty` explicitly, that
+                //     value wins — no override.
+                //   • Both OpenAI params are removed after translation; leaving them
+                //     would mislead engine logs and future readers.
+                //   • llamacpp/SGLang support these natively — no translation there.
+                {
+                    let freq = obj
+                        .get("frequency_penalty")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
+                    let pres = obj
+                        .get("presence_penalty")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
+                    let client_rep = obj.contains_key("repetition_penalty");
+
+                    if (freq > 0.0 || pres > 0.0) && !client_rep {
+                        let derived = (1.0_f64 + (freq + pres) * 0.33).clamp(1.0, 1.3);
+                        debug!(
+                            frequency_penalty = freq,
+                            presence_penalty = pres,
+                            derived_repetition_penalty = derived,
+                            "Derived repetition_penalty from OpenAI penalty params for oMLX"
+                        );
+                        obj.insert(
+                            "repetition_penalty".to_string(),
+                            serde_json::Value::from(derived),
+                        );
+                    }
+                    // Always remove — oMLX ignores them, and leaving them pollutes the body.
+                    obj.remove("frequency_penalty");
+                    obj.remove("presence_penalty");
+                }
             }
 
             match effective_think {
@@ -203,8 +251,35 @@ pub fn apply_think_for_engine(
                     }
                 }
                 Some(true) | None => {
-                    // think:true or absent → omit flag; natural reasoning applies.
+                    // think:true or absent → omit enable_thinking flag; natural reasoning applies.
                     // enable_thinking:true is NEVER forwarded to oMLX.
+                    //
+                    // Advisory: Qwen3 models require temperature >= 0.6 in thinking mode.
+                    // Low temperature (< 0.6) causes deterministic repetition loops in reasoning.
+                    // LMForge does NOT override the client's temperature — it is the client's
+                    // responsibility to set the correct temperature for the model and mode.
+                    // DocIntel should use a separate `llm_thinking_temperature` setting (>= 0.6).
+                    //
+                    // We log a warning here so operators can diagnose repetition loops in logs.
+                    let is_thinking = model_caps.map(|c| c.thinking).unwrap_or(false);
+                    if is_thinking {
+                        if let Some(obj) = body.as_object_mut() {
+                            let current_temp = obj
+                                .get("temperature")
+                                .and_then(|v| v.as_f64())
+                                .unwrap_or(1.0);
+
+                            if current_temp < 0.6 {
+                                warn!(
+                                    current_temp,
+                                    recommended_minimum = 0.6,
+                                    "temperature below recommended minimum for Qwen3 thinking mode — \
+                                     repetition loops are likely. Set llm_thinking_temperature >= 0.6 \
+                                     in the calling client. LMForge will NOT override the client value."
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -218,16 +293,51 @@ pub fn apply_think_for_engine(
                         .entry("chat_template_kwargs")
                         .or_insert_with(|| serde_json::json!({}));
                     if let Some(map) = kwargs.as_object_mut() {
-                        map.insert("enable_thinking".to_string(), serde_json::Value::Bool(think));
+                        map.insert(
+                            "enable_thinking".to_string(),
+                            serde_json::Value::Bool(think),
+                        );
                     }
                 }
             }
         }
 
         _ => {
-            debug!(engine_id, "Unknown engine ID in apply_think_for_engine — stripping think field only");
+            debug!(
+                engine_id,
+                "Unknown engine ID in apply_think_for_engine — stripping think field only"
+            );
         }
     }
+}
+
+/// Extract and validate `thinking_budget` from the request body.
+///
+/// Returns `Some(n)` where `n > 0` if the field is present and positive.
+/// Returns `None` if absent, zero, or non-positive.
+///
+/// The field is NOT removed here — the caller (route handler) is responsible
+/// for stripping it from the body before forwarding to the engine, since the
+/// engine has no concept of `thinking_budget`.
+pub fn extract_thinking_budget(body: &serde_json::Value) -> Option<u32> {
+    body.get("thinking_budget")
+        .and_then(|v| v.as_u64())
+        .filter(|&n| n > 0)
+        .map(|n| n as u32)
+}
+
+/// Extracts `stream_reasoning_deltas` from the `extra_body` or root.
+/// Returns false if not present or not a boolean. This is a read-only
+/// operation; it does not remove the field from the request body.
+pub fn extract_stream_reasoning_deltas(body: &serde_json::Value) -> bool {
+    if let Some(extra) = body.get("extra_body") {
+        if let Some(v) = extra.get("stream_reasoning_deltas").and_then(|v| v.as_bool()) {
+            return v;
+        }
+    }
+    body.get("stream_reasoning_deltas")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -355,8 +465,10 @@ mod tests {
         });
         apply_think_for_engine(&mut body, "omlx", Some(&thinking_caps()));
         assert!(body.get("think").is_none());
-        assert!(body.get("chat_template_kwargs").is_none(),
-            "enable_thinking:true must NEVER reach oMLX");
+        assert!(
+            body.get("chat_template_kwargs").is_none(),
+            "enable_thinking:true must NEVER reach oMLX"
+        );
         assert_eq!(body["messages"].as_array().unwrap().len(), 1);
     }
 
@@ -384,8 +496,10 @@ mod tests {
         });
         apply_think_for_engine(&mut body, "omlx", Some(&thinking_caps()));
         assert!(body.get("think").is_none());
-        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false,
-            "enable_thinking:false must be forwarded — empirically confirmed to suppress reasoning");
+        assert_eq!(
+            body["chat_template_kwargs"]["enable_thinking"], false,
+            "enable_thinking:false must be forwarded — empirically confirmed to suppress reasoning"
+        );
         // No <nothink> prefix — tested empirically, does NOT suppress reasoning on oMLX
         assert_eq!(body["messages"].as_array().unwrap().len(), 1);
     }
@@ -399,8 +513,10 @@ mod tests {
         });
         apply_think_for_engine(&mut body, "omlx", Some(&non_thinking_caps()));
         assert!(body.get("think").is_none());
-        assert!(body.get("chat_template_kwargs").is_none(),
-            "non-thinking model: enable_thinking flag is irrelevant");
+        assert!(
+            body.get("chat_template_kwargs").is_none(),
+            "non-thinking model: enable_thinking flag is irrelevant"
+        );
     }
 
     // ── oMLX case 5: no think field → no flag ────────────────────────────────
@@ -424,8 +540,10 @@ mod tests {
             "chat_template_kwargs": {"enable_thinking": true}
         });
         apply_think_for_engine(&mut body, "omlx", Some(&thinking_caps()));
-        assert!(body.get("chat_template_kwargs").is_none(),
-            "enable_thinking:true sent directly must be stripped (infinite loop risk)");
+        assert!(
+            body.get("chat_template_kwargs").is_none(),
+            "enable_thinking:true sent directly must be stripped (infinite loop risk)"
+        );
     }
 
     // ── oMLX case 7: direct kwargs.enable_thinking:false → preserve ──────────
@@ -438,8 +556,10 @@ mod tests {
             "chat_template_kwargs": {"enable_thinking": false}
         });
         apply_think_for_engine(&mut body, "omlx", Some(&thinking_caps()));
-        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false,
-            "enable_thinking:false sent directly must be honoured");
+        assert_eq!(
+            body["chat_template_kwargs"]["enable_thinking"], false,
+            "enable_thinking:false sent directly must be honoured"
+        );
     }
 
     // ── oMLX: other kwargs preserved when enable_thinking is stripped ─────────
@@ -451,7 +571,11 @@ mod tests {
             "chat_template_kwargs": {"enable_thinking": true, "other_key": "value"}
         });
         apply_think_for_engine(&mut body, "omlx", None);
-        assert!(body["chat_template_kwargs"].get("enable_thinking").is_none());
+        assert!(
+            body["chat_template_kwargs"]
+                .get("enable_thinking")
+                .is_none()
+        );
         assert_eq!(body["chat_template_kwargs"]["other_key"], "value");
     }
 
@@ -496,8 +620,10 @@ mod tests {
         });
         apply_think_for_engine(&mut body, "llamacpp", None);
         assert!(body.get("think").is_none());
-        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false,
-            "explicit think field must override existing kwargs.enable_thinking");
+        assert_eq!(
+            body["chat_template_kwargs"]["enable_thinking"], false,
+            "explicit think field must override existing kwargs.enable_thinking"
+        );
     }
 
     // ── llamacpp / sglang case 11: no think field, kwargs present → pass through
@@ -510,8 +636,10 @@ mod tests {
         });
         apply_think_for_engine(&mut body, "llamacpp", None);
         assert!(body.get("think").is_none());
-        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false,
-            "no think field: existing kwargs pass through unchanged");
+        assert_eq!(
+            body["chat_template_kwargs"]["enable_thinking"], false,
+            "no think field: existing kwargs pass through unchanged"
+        );
     }
 
     #[test]
@@ -522,16 +650,249 @@ mod tests {
         assert_eq!(body["chat_template_kwargs"]["enable_thinking"], true);
     }
 
-    // ── All engines: absent think = noop ─────────────────────────────────────
+    // ── oMLX: temperature advisory (warn-only, no modification) ──────────────
 
     #[test]
-    fn test_no_think_key_is_noop_for_all_engines() {
-        for engine in ["omlx", "llamacpp", "sglang"] {
-            let mut body = serde_json::json!({"model": "test", "messages": []});
-            apply_think_for_engine(&mut body, engine, None);
-            assert!(body.get("think").is_none());
-            assert!(body.get("chat_template_kwargs").is_none(), "engine={engine}");
-            assert_eq!(body["messages"].as_array().unwrap().len(), 0, "engine={engine}");
-        }
+    fn test_omlx_think_true_does_not_modify_low_temperature() {
+        // LMForge must NOT clamp or override temperature — that belongs to the client.
+        // Qwen3's 0.6 minimum is model-specific; applying it universally would break
+        // other thinking models. We warn in logs but leave the value untouched.
+        let caps = crate::model::index::ModelCapabilities {
+            chat: true,
+            embeddings: false,
+            reranking: false,
+            thinking: true,
+            embedding_dims: None,
+            pooling: None,
+        };
+        let mut body = serde_json::json!({
+            "model": "qwen3.5:4b:4bit",
+            "messages": [],
+            "think": true,
+            "temperature": 0.1
+        });
+        apply_think_for_engine(&mut body, "omlx", Some(&caps));
+        // Temperature must be passed through exactly as sent by client
+        let t = body["temperature"].as_f64().unwrap();
+        assert!(
+            (t - 0.1).abs() < 1e-9,
+            "LMForge must not modify client temperature; expected 0.1, got {t}"
+        );
+        // presence_penalty must NOT be injected
+        assert!(
+            body.get("presence_penalty").is_none(),
+            "LMForge must not inject presence_penalty — client owns sampling params"
+        );
+    }
+
+    #[test]
+    fn test_omlx_think_true_high_temperature_unchanged() {
+        let caps = crate::model::index::ModelCapabilities {
+            chat: true,
+            embeddings: false,
+            reranking: false,
+            thinking: true,
+            embedding_dims: None,
+            pooling: None,
+        };
+        let mut body = serde_json::json!({
+            "model": "qwen3.5:4b:4bit",
+            "messages": [],
+            "think": true,
+            "temperature": 0.8
+        });
+        apply_think_for_engine(&mut body, "omlx", Some(&caps));
+        let t = body["temperature"].as_f64().unwrap();
+        assert!(
+            (t - 0.8).abs() < 1e-9,
+            "High temperature must be left untouched, got {t}"
+        );
+    }
+
+    // ── Part A: penalty translation (oMLX only) ───────────────────────────────
+
+    #[test]
+    fn test_omlx_derives_repetition_penalty_from_freq_penalty() {
+        // frequency_penalty:0.3 → repetition_penalty ≈ 1.099
+        let mut body = serde_json::json!({
+            "model": "qwen3.5:4b:4bit",
+            "messages": [],
+            "frequency_penalty": 0.3
+        });
+        apply_think_for_engine(&mut body, "omlx", None);
+        let rep = body["repetition_penalty"]
+            .as_f64()
+            .expect("repetition_penalty should be set");
+        assert!((rep - 1.099).abs() < 0.001, "Expected ~1.099, got {rep}");
+        // OpenAI params must be removed
+        assert!(
+            body.get("frequency_penalty").is_none(),
+            "frequency_penalty must be removed"
+        );
+        assert!(
+            body.get("presence_penalty").is_none(),
+            "presence_penalty must be removed"
+        );
+    }
+
+    #[test]
+    fn test_omlx_derives_repetition_penalty_from_both_penalties() {
+        // 0.3 + 0.3 = 0.6 × 0.33 = 0.198 → 1.198
+        let mut body = serde_json::json!({
+            "model": "qwen3.5:4b:4bit",
+            "messages": [],
+            "frequency_penalty": 0.3,
+            "presence_penalty": 0.3
+        });
+        apply_think_for_engine(&mut body, "omlx", None);
+        let rep = body["repetition_penalty"]
+            .as_f64()
+            .expect("repetition_penalty should be set");
+        assert!((rep - 1.198).abs() < 0.001, "Expected ~1.198, got {rep}");
+    }
+
+    #[test]
+    fn test_omlx_client_repetition_penalty_wins_over_derivation() {
+        // Client explicitly sets repetition_penalty → must not be overridden
+        let mut body = serde_json::json!({
+            "model": "qwen3.5:4b:4bit",
+            "messages": [],
+            "frequency_penalty": 0.3,
+            "repetition_penalty": 1.15
+        });
+        apply_think_for_engine(&mut body, "omlx", None);
+        let rep = body["repetition_penalty"]
+            .as_f64()
+            .expect("repetition_penalty should be set");
+        assert!(
+            (rep - 1.15).abs() < 1e-9,
+            "Client's explicit repetition_penalty must be preserved, got {rep}"
+        );
+    }
+
+    #[test]
+    fn test_omlx_zero_penalties_no_derivation() {
+        // freq=0 pres=0 → no repetition_penalty should be added
+        let mut body = serde_json::json!({
+            "model": "qwen3.5:4b:4bit",
+            "messages": [],
+            "frequency_penalty": 0.0,
+            "presence_penalty": 0.0
+        });
+        apply_think_for_engine(&mut body, "omlx", None);
+        assert!(
+            body.get("repetition_penalty").is_none(),
+            "No repetition_penalty should be derived when both penalties are zero"
+        );
+        // OpenAI params still removed (they're useless for oMLX)
+        assert!(body.get("frequency_penalty").is_none());
+        assert!(body.get("presence_penalty").is_none());
+    }
+
+    #[test]
+    fn test_omlx_clamped_at_1_3() {
+        // Large frequency_penalty → clamped at 1.3
+        let mut body = serde_json::json!({
+            "model": "qwen3.5:4b:4bit",
+            "messages": [],
+            "frequency_penalty": 2.0
+        });
+        apply_think_for_engine(&mut body, "omlx", None);
+        let rep = body["repetition_penalty"]
+            .as_f64()
+            .expect("repetition_penalty should be set");
+        assert!(
+            rep <= 1.3 + 1e-9,
+            "repetition_penalty must be clamped at 1.3, got {rep}"
+        );
+    }
+
+    #[test]
+    fn test_llamacpp_freq_penalty_passes_through_unchanged() {
+        // llamacpp supports frequency_penalty natively — no translation
+        let mut body = serde_json::json!({
+            "model": "llama3:8b",
+            "messages": [],
+            "frequency_penalty": 0.3,
+            "presence_penalty": 0.2
+        });
+        apply_think_for_engine(&mut body, "llamacpp", None);
+        assert_eq!(
+            body["frequency_penalty"].as_f64().unwrap(),
+            0.3,
+            "frequency_penalty must pass through unchanged for llamacpp"
+        );
+        assert_eq!(
+            body["presence_penalty"].as_f64().unwrap(),
+            0.2,
+            "presence_penalty must pass through unchanged for llamacpp"
+        );
+        assert!(
+            body.get("repetition_penalty").is_none(),
+            "No repetition_penalty should be derived for llamacpp"
+        );
+    }
+
+    // ── Part B: extract_thinking_budget ───────────────────────────────────────
+
+    #[test]
+    fn test_extract_thinking_budget_present() {
+        let body = serde_json::json!({"thinking_budget": 1024});
+        assert_eq!(extract_thinking_budget(&body), Some(1024u32));
+    }
+
+    #[test]
+    fn test_extract_thinking_budget_absent() {
+        let body = serde_json::json!({"model": "test"});
+        assert_eq!(extract_thinking_budget(&body), None);
+    }
+
+    #[test]
+    fn test_extract_thinking_budget_zero_returns_none() {
+        let body = serde_json::json!({"thinking_budget": 0});
+        assert_eq!(extract_thinking_budget(&body), None);
+    }
+
+    #[test]
+    fn test_extract_thinking_budget_does_not_remove_field() {
+        // extract_thinking_budget must be read-only; removal is the caller's job
+        let body = serde_json::json!({"thinking_budget": 512, "model": "test"});
+        let _ = extract_thinking_budget(&body);
+        assert!(
+            body.get("thinking_budget").is_some(),
+            "field must not be removed by extractor"
+        );
+    }
+
+    // ── Part C: extract_stream_reasoning_deltas ─────────────────────────────
+
+    #[test]
+    fn test_extract_stream_reasoning_deltas_in_extra_body() {
+        let body = serde_json::json!({
+            "extra_body": {
+                "stream_reasoning_deltas": true
+            }
+        });
+        assert_eq!(extract_stream_reasoning_deltas(&body), true);
+    }
+
+    #[test]
+    fn test_extract_stream_reasoning_deltas_in_root() {
+        let body = serde_json::json!({
+            "stream_reasoning_deltas": true
+        });
+        assert_eq!(extract_stream_reasoning_deltas(&body), true);
+    }
+
+    #[test]
+    fn test_extract_stream_reasoning_deltas_absent() {
+        let body = serde_json::json!({"model": "test"});
+        assert_eq!(extract_stream_reasoning_deltas(&body), false);
+    }
+
+    #[test]
+    fn test_extract_stream_reasoning_deltas_wrong_type() {
+        let body = serde_json::json!({"stream_reasoning_deltas": "true"});
+        assert_eq!(extract_stream_reasoning_deltas(&body), false);
     }
 }

@@ -1,0 +1,20 @@
+\n--- Testing Stream (Prefill length: 0) ---
+Results:
+- Time to First Token (TTFT): 1.987s
+- Total Chunks Received: 148
+- Total Characters: 765
+- Average Chars per Chunk: 5.2
+- Average Inter-Token Time: 25.6ms
+- Total Request Time: 5.746s
+\n✅ BEHAVIOR DETECTED: TRUE STREAMING ✅
+The engine correctly emitted tokens one-by-one.
+\n--- Testing Stream (Prefill length: 40021) ---
+Results:
+- Time to First Token (TTFT): 6.756s
+- Total Chunks Received: 148
+- Total Characters: 761
+- Average Chars per Chunk: 5.1
+- Average Inter-Token Time: 24.2ms
+- Total Request Time: 10.320s
+\n✅ BEHAVIOR DETECTED: TRUE STREAMING ✅
+The engine correctly emitted tokens one-by-one.

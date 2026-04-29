@@ -217,8 +217,6 @@ fn get_free_amd_vram() -> f32 {
     0.0
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -454,12 +454,15 @@ This is idempotent — safe to re-run after engine upgrades.
 # Runs in the foreground; Ctrl-C to stop
 # Logs go to stdout at whatever level is set in config
 ./target/debug/lmforge start
+cargo run -- start                          # equivalent shorthand
 
 # Override log level without editing config
 RUST_LOG=debug ./target/debug/lmforge start
+RUST_LOG=debug cargo run -- start           # equivalent shorthand
 
 # Use a different port (e.g. to avoid clashing with an installed daemon)
 ./target/debug/lmforge start --port 11431
+cargo run -- start --port 11431             # equivalent shorthand
 ```
 
 #### 4 — Quick smoke-tests while the daemon is running
@@ -468,6 +471,82 @@ RUST_LOG=debug ./target/debug/lmforge start
 curl http://127.0.0.1:11430/health
 curl http://127.0.0.1:11430/lf/status | jq .
 curl http://127.0.0.1:11430/lf/hardware | jq .
+```
+
+---
+
+#### 5 — Debug streaming instrumentation (thinking-budget proxy)
+
+The two-call thinking-budget proxy (`proxy_stream_with_thinking_budget`) emits a
+`tracing::info!` log line for **every single SSE event** it yields to the client
+during Call 2. This is the definitive tool for diagnosing whether bulk-dumping
+originates inside LMForge or upstream in the inference engine.
+
+**Important — PATH visibility for external tools (e.g. DocIntel)**
+
+`cargo run` builds and runs the binary at `target/debug/lmforge`, but it does **not**
+put it on your `PATH`. Tools like DocIntel check for the `lmforge` binary via `which lmforge`
+and will report "binary not found" if it can't find it there.
+
+**Option A — Install to PATH (recommended for integration testing):**
+
+```bash
+# Builds an optimised-enough debug binary and installs it to ~/.cargo/bin
+cargo install --path . --force
+
+# Run init (safe to re-run — idempotent; sets up config + engine)
+lmforge init
+
+# Start with instrumentation
+RUST_LOG=lmforge=info lmforge start
+```
+
+**Option B — Symlink for fast iteration (avoids reinstalling after every change):**
+
+```bash
+# One-time: symlink the debug binary into ~/.cargo/bin
+ln -sf $(pwd)/target/debug/lmforge ~/.cargo/bin/lmforge
+
+# After each code change: just rebuild (the symlink updates automatically)
+cargo build
+
+# Then start with instrumentation
+RUST_LOG=lmforge=info lmforge start
+```
+
+With the symlink in place, `cargo build` + `lmforge start` is all you need between iterations.
+
+**While the daemon is running, trigger a thinking-budget request** (e.g. from
+DocIntel or with curl). Then watch the logs for lines like:
+
+```
+INFO lmforge::server::proxy: call2 SSE event yielded call2_event_n=1 payload_bytes=42
+INFO lmforge::server::proxy: call2 SSE event yielded call2_event_n=2 payload_bytes=38
+...
+INFO lmforge::server::proxy: Call-2 stream complete (received [DONE]) call2_total_events=148
+```
+
+**Interpreting the output:**
+
+| Observation | Meaning |
+|---|---|
+| Many events (100+), small `payload_bytes` (< 100) | LMForge is streaming token-by-token — dump is upstream or downstream |
+| Single event with large `payload_bytes` (> 500) | Engine is batching; dump is inside `mlx_lm.server` |
+| No `call2 SSE event` lines appear | Budget not being exhausted; check `Call-1 accumulation complete` log for `finish_reason` |
+
+**Filter just the Call 2 diagnostics:**
+
+```bash
+RUST_LOG=lmforge=info ./target/debug/lmforge start 2>&1 | grep -E "call2|Call-1|Call-2"
+RUST_LOG=lmforge=info cargo run -- start 2>&1 | grep -E "call2|Call-1|Call-2"  # equivalent
+```
+
+**If you only want the per-event byte count summary:**
+
+```bash
+RUST_LOG=lmforge=info ./target/debug/lmforge start 2>&1 | \
+  grep "call2 SSE event yielded" | \
+  awk -F'payload_bytes=' '{print "Event " NR ": " $2 " bytes"}'
 ```
 
 ---
@@ -537,6 +616,9 @@ cargo test -- --nocapture
 # Watch mode (requires cargo-watch)
 cargo watch -x check
 cargo watch -x 'test --lib'
+
+# Install the current build globally (replaces any previous install)
+cargo install --path . --force
 
 # Verify every catalog entry is freely downloadable (hits HuggingFace live)
 cargo test -- --ignored --nocapture
@@ -734,11 +816,26 @@ cargo clean --workspace && rm -rf ui/node_modules ui/.svelte-kit ui/build
 Stop daemon → remove state files → rebuild → reinit:
 
 ```bash
-kill $(cat ~/.lmforge/lmforge.pid 2>/dev/null) 2>/dev/null || true
-rm -f ~/.lmforge/models.json ~/.lmforge/hardware.json ~/.lmforge/lmforge.pid
-cargo build
-./target/debug/lmforge init
+kill $(cat ~/.lmforge/lmforge.pid 2>/dev/null) 2>/dev/null || true && \
+rm -f ~/.lmforge/models.json ~/.lmforge/hardware.json ~/.lmforge/lmforge.pid && \
+cargo build && \
+./target/debug/lmforge init && \
 ./target/debug/lmforge start
+```
+
+Or, rebuild and install globally in one shot:
+
+```bash
+cargo install --path . --force && lmforge init && lmforge start
+```
+
+And, uninstall lmforge from previous local install and install again (not touching downloaded models):
+
+```bash
+cargo uninstall lmforge && \
+cargo install --path . --force && \
+lmforge init && \
+lmforge start
 ```
 
 ---

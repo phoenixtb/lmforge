@@ -4,7 +4,7 @@ use axum::body::Body;
 use bytes::Bytes;
 use futures::StreamExt;
 use reqwest::Client;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 /// Shared HTTP client for proxying to the engine backend
 pub fn build_proxy_client() -> Client {
@@ -477,8 +477,508 @@ pub async fn proxy_get(
 }
 
 // =============================================================================
+// Two-call thinking budget proxy — Call 1 accumulate + Call 2 stream
+// =============================================================================
+
+/// Build the body for Call 2 of the thinking-budget workflow.
+///
+/// Appends the accumulated reasoning as a closed `<think>…</think>` assistant
+/// message so the model sees its own reasoning as context for the answer phase.
+/// Also sets `enable_thinking:false` so the model doesn't re-enter think mode.
+fn build_call2_body(
+    original_body: &serde_json::Value,
+    reasoning_buf: &str,
+    remaining_max_tokens: u32,
+) -> serde_json::Value {
+    let mut body2 = original_body.clone();
+    let obj = body2.as_object_mut().expect("body must be an object");
+
+    // Append the reasoning as a closed assistant turn.
+    let prefill_content = format!("<think>{}</think>\n\n", reasoning_buf);
+    let prefill_msg = serde_json::json!({
+        "role": "assistant",
+        "content": prefill_content
+    });
+    if let Some(messages) = obj.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        messages.push(prefill_msg);
+    }
+
+    // Suppress further thinking — CRITICAL: without this the model re-enters <think>
+    let kwargs = obj
+        .entry("chat_template_kwargs")
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(map) = kwargs.as_object_mut() {
+        map.insert(
+            "enable_thinking".to_string(),
+            serde_json::Value::Bool(false),
+        );
+    }
+
+    // Remaining token budget for the answer
+    obj.insert(
+        "max_tokens".to_string(),
+        serde_json::Value::from(remaining_max_tokens),
+    );
+
+    // Always stream internally
+    obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+
+    // Remove thinking_budget so engine doesn't see it
+    obj.remove("thinking_budget");
+
+    body2
+}
+
+/// Consume Call 1's SSE stream:
+///   - Accumulates `delta.reasoning_content` into a `reasoning_buf` string.
+///   - If `stream_reasoning_deltas` is true AND a `tx` sender is provided,
+///     live-forwards each reasoning SSE event as raw Bytes through the channel.
+///   - Returns (reasoning_buf, content_buf, completion_id, model_name, finish_reason).
+///   - `finish_reason == "length"` means the thinking budget was exhausted → trigger Call 2.
+///   - Any other finish_reason (e.g. "stop") means the model finished naturally.
+async fn stream_call1_accumulate(
+    resp: reqwest::Response,
+    thinking_budget: u32,
+    tx: Option<tokio::sync::mpsc::Sender<Bytes>>,
+) -> Result<
+    (
+        String, // reasoning_buf
+        String, // content_buf (only populated on natural finish, no Call 2 needed)
+        String, // completion_id
+        String, // model_name
+        Option<String>, // finish_reason
+    ),
+    String,
+> {
+    let _ = thinking_budget; // used by caller to compute remaining tokens
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+    let mut reasoning_buf = String::new();
+    let mut content_buf = String::new();
+    let mut completion_id = String::new();
+    let mut model_name = String::new();
+    let mut finish_reason: Option<String> = None;
+
+    while let Some(chunk) = stream.next().await {
+        let bytes = match chunk {
+            Ok(b) => b,
+            Err(e) => {
+                warn!(error = %e, "Error reading call-1 stream");
+                break;
+            }
+        };
+        buf.push_str(&String::from_utf8_lossy(&bytes));
+
+        while let Some(nl) = buf.find('\n') {
+            let line = buf[..nl].trim_end_matches('\r').to_string();
+            buf.drain(..=nl);
+
+            let data = match line.strip_prefix("data: ") {
+                Some(d) => d.trim(),
+                None => continue,
+            };
+
+            if data == "[DONE]" {
+                break;
+            }
+
+            let Ok(val) = serde_json::from_str::<serde_json::Value>(data) else {
+                continue;
+            };
+
+            // Capture metadata
+            if completion_id.is_empty() {
+                if let Some(id) = val.get("id").and_then(|v| v.as_str()) {
+                    completion_id = id.to_string();
+                }
+            }
+            if model_name.is_empty() {
+                if let Some(m) = val.get("model").and_then(|v| v.as_str()) {
+                    model_name = m.to_string();
+                }
+            }
+
+            if let Some(choices) = val.get("choices").and_then(|c| c.as_array()) {
+                if let Some(choice) = choices.first() {
+                    // Capture finish_reason
+                    if let Some(fr) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+                        finish_reason = Some(fr.to_string());
+                    }
+
+                    if let Some(delta) = choice.get("delta") {
+                        // Accumulate reasoning
+                        if let Some(r) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
+                            if !r.is_empty() {
+                                reasoning_buf.push_str(r);
+                                // Live-stream reasoning to client if channel is open
+                                if let Some(ref tx) = tx {
+                                    let sse_bytes = Bytes::from(format!("data: {}\n\n", data));
+                                    if tx.send(sse_bytes).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        // Accumulate content (natural finish path)
+                        if let Some(c) = delta.get("content").and_then(|v| v.as_str()) {
+                            if !c.is_empty() {
+                                content_buf.push_str(c);
+                                // Also live-stream content if channel is open
+                                if let Some(ref tx) = tx {
+                                    let sse_bytes = Bytes::from(format!("data: {}\n\n", data));
+                                    if tx.send(sse_bytes).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok((reasoning_buf, content_buf, completion_id, model_name, finish_reason))
+}
+
+/// Streaming proxy for the two-call thinking-budget workflow.
+///
+/// # Flow
+/// 1. POST Call 1 with the original body (thinking enabled). The model streams
+///    reasoning tokens until the budget is exhausted (`finish_reason = "length"`)
+///    or the model finishes naturally (`finish_reason = "stop"`).
+/// 2. While Call 1 is running, live-forward reasoning/content SSE events to the
+///    client via an internal MPSC channel (if `stream_reasoning_deltas = true`).
+/// 3. If Call 1 finishes naturally (no budget exhaustion) → the call-1 content IS
+///    the final answer; forward it and close the stream.
+/// 4. If Call 1 exhausts the budget → accumulate the reasoning, POST Call 2 with
+///    the closed `<think>…</think>` prefill. Stream Call 2's SSE events directly
+///    to the client with per-event byte-count tracing for diagnostics.
+pub async fn proxy_stream_with_thinking_budget(
+    client: &Client,
+    engine_port: u16,
+    path: &str,
+    original_body: serde_json::Value,
+    original_max_tokens: u32,
+    thinking_budget: u32,
+    stream_reasoning_deltas: bool,
+) -> Result<Body, (u16, String)> {
+    let url = format!("http://127.0.0.1:{}{}", engine_port, path);
+    debug!(url = %url, thinking_budget, stream_reasoning_deltas, "Starting two-call thinking budget stream");
+
+    // Patch body for Call 1: cap max_tokens at the thinking budget
+    let mut body1 = original_body.clone();
+    if let Some(obj) = body1.as_object_mut() {
+        obj.insert("max_tokens".to_string(), serde_json::Value::from(thinking_budget));
+        obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+        obj.remove("thinking_budget");
+    }
+
+    let resp1 = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_vec(&body1).unwrap_or_default())
+        .send()
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Call-1 engine request failed");
+            (502u16, format!("{{\"error\":\"Engine unavailable: {}\"}}", e))
+        })?;
+
+    if !resp1.status().is_success() {
+        let status = resp1.status().as_u16();
+        let text = resp1.text().await.unwrap_or_default();
+        return Err((status, text));
+    }
+
+    // Channel: Call 1 accumulator task sends live SSE Bytes to the output stream
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Bytes>(256);
+    let tx_opt = if stream_reasoning_deltas { Some(tx) } else { None };
+
+    // Spawn Call 1 accumulator in background
+    let call1_task = tokio::spawn(stream_call1_accumulate(
+        resp1,
+        thinking_budget,
+        tx_opt,
+    ));
+
+    let original_body_c = original_body.clone();
+    let client = client.clone();
+    let engine_port_owned = engine_port;
+    let path_owned = path.to_string();
+
+    let body_stream = stream! {
+        // 1. Yield live reasoning/content chunks from Call 1 (if stream_reasoning_deltas=true)
+        while let Some(chunk) = rx.recv().await {
+            yield Ok::<Bytes, std::io::Error>(chunk);
+        }
+
+        // 2. Await Call 1 completion
+        let call1_res = match call1_task.await {
+            Ok(Ok(res)) => res,
+            Ok(Err(e)) => {
+                warn!(error = %e, "Call-1 accumulator returned error");
+                yield Ok(Bytes::from("data: [DONE]\n\n"));
+                return;
+            }
+            Err(e) => {
+                warn!(error = %e, "Call-1 task panicked");
+                yield Ok(Bytes::from("data: [DONE]\n\n"));
+                return;
+            }
+        };
+
+        let (reasoning_buf, content_buf_call1, completion_id, model_name, finish_reason) = call1_res;
+
+        debug!(
+            reasoning_len = reasoning_buf.len(),
+            content_len = content_buf_call1.len(),
+            finish_reason = ?finish_reason,
+            "Call-1 accumulation complete"
+        );
+
+        // 3. Natural finish — model stopped before exhausting the budget
+        if finish_reason.as_deref() != Some("length") {
+            // Content was already streamed live if stream_reasoning_deltas=true.
+            // If not, emit the buffered content now.
+            if !stream_reasoning_deltas && !content_buf_call1.is_empty() {
+                let chunk = serde_json::json!({
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "model": model_name,
+                    "choices": [{
+                        "index": 0,
+                        "delta": { "content": content_buf_call1 },
+                        "finish_reason": null
+                    }]
+                });
+                yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default())));
+            }
+            let final_chunk = serde_json::json!({
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "model": model_name,
+                "choices": [{ "index": 0, "delta": {}, "finish_reason": finish_reason }]
+            });
+            yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&final_chunk).unwrap_or_default())));
+            yield Ok(Bytes::from("data: [DONE]\n\n"));
+            return;
+        }
+
+        // 4. Budget exhausted — execute Call 2
+        let remaining = original_max_tokens.saturating_sub(thinking_budget).max(64);
+        info!(
+            thinking_budget,
+            reasoning_len = reasoning_buf.len(),
+            remaining_tokens = remaining,
+            "Call-1 budget exhausted; executing Call-2"
+        );
+
+        let body2 = build_call2_body(&original_body_c, &reasoning_buf, remaining);
+
+        let resp2 = match client
+            .post(&format!("http://127.0.0.1:{}{}", engine_port_owned, path_owned))
+            .header("Content-Type", "application/json")
+            .body(serde_json::to_vec(&body2).unwrap_or_default())
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "Call-2 engine request failed");
+                let err = serde_json::json!({"error": {"message": format!("Call-2 failed: {}", e), "type": "server_error"}});
+                yield Ok(Bytes::from(format!("data: {}\n\ndata: [DONE]\n\n",
+                    serde_json::to_string(&err).unwrap_or_default())));
+                return;
+            }
+        };
+
+        if !resp2.status().is_success() {
+            let status = resp2.status().as_u16();
+            let err_text = resp2.text().await.unwrap_or_default();
+            warn!(status, error = %err_text, "Call-2 returned error status");
+            yield Ok(Bytes::from(format!("data: {}\n\ndata: [DONE]\n\n", err_text)));
+            return;
+        }
+
+        // Stream Call 2 directly — DIAGNOSTIC: log exact byte count for every SSE event
+        let mut call2_stream = resp2.bytes_stream();
+        let completion_id_inner = completion_id.clone();
+        let model_name_inner = model_name.clone();
+        let mut inner_buf = String::new();
+        let mut call2_event_count: usize = 0;
+
+        while let Some(chunk) = call2_stream.next().await {
+            let bytes = match chunk {
+                Ok(b) => b,
+                Err(e) => {
+                    warn!(error = %e, "Error reading call-2 stream");
+                    break;
+                }
+            };
+            inner_buf.push_str(&String::from_utf8_lossy(&bytes));
+
+            while let Some(nl) = inner_buf.find('\n') {
+                let line = inner_buf[..nl].trim_end_matches('\r').to_string();
+                inner_buf.drain(..=nl);
+
+                let data = match line.strip_prefix("data: ") {
+                    Some(d) => d.trim(),
+                    None => continue,
+                };
+
+                if data == "[DONE]" {
+                    info!(call2_total_events = call2_event_count, "Call-2 stream complete (received [DONE])");
+                    yield Ok::<Bytes, std::io::Error>(Bytes::from("data: [DONE]\n\n"));
+                    return;
+                }
+
+                // Rewrite completion_id/model to match call-1
+                let sse_payload = if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(data) {
+                    if let Some(obj) = val.as_object_mut() {
+                        obj.insert("id".to_string(), serde_json::Value::String(completion_id_inner.clone()));
+                        obj.insert("model".to_string(), serde_json::Value::String(model_name_inner.clone()));
+                    }
+                    format!("data: {}\n\n", serde_json::to_string(&val).unwrap_or_default())
+                } else {
+                    format!("data: {}\n\n", data)
+                };
+
+                call2_event_count += 1;
+                // DIAGNOSTIC: every single SSE event from Call 2 is logged with its exact size.
+                // If we see call2_event_count=1 with a large payload in the logs, the dump is
+                // happening inside mlx_lm itself. If we see many events here but the client still
+                // receives a single chunk, the dump is happening downstream (HTTP layer, axum, etc).
+                info!(
+                    call2_event_n = call2_event_count,
+                    payload_bytes = sse_payload.len(),
+                    "call2 SSE event yielded"
+                );
+
+                yield Ok::<Bytes, std::io::Error>(Bytes::from(sse_payload));
+            }
+        }
+
+        info!(call2_total_events = call2_event_count, "Call-2 stream ended (no [DONE] received)");
+        yield Ok::<Bytes, std::io::Error>(Bytes::from("data: [DONE]\n\n"));
+    };
+
+    Ok(Body::from_stream(body_stream))
+}
+
+/// Non-streaming equivalent of `proxy_stream_with_thinking_budget`.
+///
+/// Runs both calls internally with `stream:true` and assembles a single
+/// OpenAI-compatible non-streaming response with separate `reasoning_content`
+/// and `content` fields.
+pub async fn proxy_nonstream_with_thinking_budget(
+    client: &Client,
+    engine_port: u16,
+    path: &str,
+    original_body: serde_json::Value,
+    original_max_tokens: u32,
+    thinking_budget: u32,
+) -> Result<(u16, String), (u16, String)> {
+    let url = format!("http://127.0.0.1:{}{}", engine_port, path);
+    debug!(url = %url, thinking_budget, "Starting two-call thinking budget (non-stream)");
+
+    // Call 1: thinking phase
+    let mut body1 = original_body.clone();
+    if let Some(obj) = body1.as_object_mut() {
+        obj.insert("max_tokens".to_string(), serde_json::Value::from(thinking_budget));
+        obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+        obj.remove("thinking_budget");
+    }
+
+    let resp1 = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_vec(&body1).unwrap_or_default())
+        .send()
+        .await
+        .map_err(|e| (502u16, format!("{{\"error\":\"Engine unavailable: {}\"}}", e)))?;
+
+    if !resp1.status().is_success() {
+        let status = resp1.status().as_u16();
+        return Err((status, resp1.text().await.unwrap_or_default()));
+    }
+
+    let (reasoning_buf, content_buf_call1, completion_id, model_name, finish_reason) =
+        stream_call1_accumulate(resp1, thinking_budget, None)
+            .await
+            .map_err(|e| (500u16, e))?;
+
+    // Natural finish — assemble from call-1 only
+    if finish_reason.as_deref() != Some("length") {
+        let assembled = serde_json::json!({
+            "id": completion_id,
+            "object": "chat.completion",
+            "model": model_name,
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "reasoning_content": if reasoning_buf.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(reasoning_buf) },
+                    "content": content_buf_call1,
+                    "refusal": serde_json::Value::Null
+                },
+                "logprobs": serde_json::Value::Null,
+                "finish_reason": finish_reason.unwrap_or_else(|| "stop".to_string())
+            }]
+        });
+        return Ok((200, serde_json::to_string(&assembled).unwrap_or_default()));
+    }
+
+    // Budget exhausted — Call 2
+    let remaining = original_max_tokens.saturating_sub(thinking_budget).max(64);
+    let body2 = build_call2_body(&original_body, &reasoning_buf, remaining);
+
+    let resp2 = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_vec(&body2).unwrap_or_default())
+        .send()
+        .await
+        .map_err(|e| (502u16, format!("{{\"error\":\"Call-2 engine unavailable: {}\"}}", e)))?;
+
+    if !resp2.status().is_success() {
+        let status = resp2.status().as_u16();
+        return Err((status, resp2.text().await.unwrap_or_default()));
+    }
+
+    // Accumulate Call 2 content
+    let (_, content_buf_call2, comp_id2, model2, finish2) =
+        stream_call1_accumulate(resp2, u32::MAX, None)
+            .await
+            .map_err(|e| (500u16, e))?;
+
+    let final_id = if completion_id.is_empty() { comp_id2 } else { completion_id };
+    let final_model = if model_name.is_empty() { model2 } else { model_name };
+
+    let assembled = serde_json::json!({
+        "id": final_id,
+        "object": "chat.completion",
+        "model": final_model,
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "reasoning_content": if reasoning_buf.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(reasoning_buf) },
+                "content": content_buf_call2,
+                "refusal": serde_json::Value::Null
+            },
+            "logprobs": serde_json::Value::Null,
+            "finish_reason": finish2.unwrap_or_else(|| "stop".to_string())
+        }]
+    });
+
+    Ok((200, serde_json::to_string(&assembled).unwrap_or_default()))
+}
+
+// =============================================================================
 // Stateful SSE rewriter — Phase 2 think-tag streaming support
 // =============================================================================
+
 
 /// Whether the rewriter is currently inside a `<think>` block or emitting answer tokens.
 #[derive(Debug, Clone, PartialEq)]

@@ -1,4 +1,8 @@
-use axum::{extract::{Query, State}, response::IntoResponse, body::Body};
+use axum::{
+    body::Body,
+    extract::{Query, State},
+    response::IntoResponse,
+};
 use serde::Deserialize;
 
 use super::AppState;
@@ -23,6 +27,5 @@ pub async fn catalog_list(
     let entries = list_for_ui(format);
     let body = serde_json::json!({ "entries": entries });
 
-    Body::from(serde_json::to_vec(&body).unwrap_or_default())
-        .into_response()
+    Body::from(serde_json::to_vec(&body).unwrap_or_default()).into_response()
 }
