@@ -79,6 +79,8 @@ fn fake_engine_config() -> EngineConfig {
         health_endpoint: "/health".to_string(),
         supports_embeddings: true,
         supports_reranking: false,
+        brew_tap_url: None,
+        cudart_pattern: None,
         priority: 0,
     }
 }

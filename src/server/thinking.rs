@@ -871,7 +871,7 @@ mod tests {
                 "stream_reasoning_deltas": true
             }
         });
-        assert_eq!(extract_stream_reasoning_deltas(&body), true);
+        assert!(extract_stream_reasoning_deltas(&body));
     }
 
     #[test]
@@ -879,18 +879,18 @@ mod tests {
         let body = serde_json::json!({
             "stream_reasoning_deltas": true
         });
-        assert_eq!(extract_stream_reasoning_deltas(&body), true);
+        assert!(extract_stream_reasoning_deltas(&body));
     }
 
     #[test]
     fn test_extract_stream_reasoning_deltas_absent() {
         let body = serde_json::json!({"model": "test"});
-        assert_eq!(extract_stream_reasoning_deltas(&body), false);
+        assert!(!extract_stream_reasoning_deltas(&body));
     }
 
     #[test]
     fn test_extract_stream_reasoning_deltas_wrong_type() {
         let body = serde_json::json!({"stream_reasoning_deltas": "true"});
-        assert_eq!(extract_stream_reasoning_deltas(&body), false);
+        assert!(!extract_stream_reasoning_deltas(&body));
     }
 }

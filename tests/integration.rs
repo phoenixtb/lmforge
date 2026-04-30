@@ -624,6 +624,7 @@ fn print_stats(label: &str, s: &LatencyStats) {
 // ─── Test entry point ────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "requires a live lmforge daemon and downloaded models — run locally with: cargo test -- --ignored"]
 fn integration_multi_model() {
     let inputs = load_inputs();
     let host = host();
@@ -685,15 +686,16 @@ fn integration_multi_model() {
             .unwrap_or_default();
 
         let mut warnings = Vec::<String>::new();
-        if let Some(exp) = case.expect_dims {
-            if dims > 0 && dims != exp {
-                warnings.push(format!("expected dims={exp}, got {dims}"));
-            }
+        if let Some(exp) = case.expect_dims
+            && dims > 0
+            && dims != exp
+        {
+            warnings.push(format!("expected dims={exp}, got {dims}"));
         }
-        if let Some(max) = case.expect_max_latency_ms {
-            if latency_ms > max {
-                warnings.push(format!("latency {latency_ms}ms > threshold {max}ms"));
-            }
+        if let Some(max) = case.expect_max_latency_ms
+            && latency_ms > max
+        {
+            warnings.push(format!("latency {latency_ms}ms > threshold {max}ms"));
         }
 
         let passed = error.is_none() && dims > 0;
@@ -763,10 +765,10 @@ fn integration_multi_model() {
         if !keyword_miss.is_empty() {
             warnings.push(format!("missing keywords: {}", keyword_miss.join(", ")));
         }
-        if let Some(max) = case.expect_max_latency_ms {
-            if latency_ms > max {
-                warnings.push(format!("latency {latency_ms}ms > threshold {max}ms"));
-            }
+        if let Some(max) = case.expect_max_latency_ms
+            && latency_ms > max
+        {
+            warnings.push(format!("latency {latency_ms}ms > threshold {max}ms"));
         }
 
         let passed = error.is_none() && !content.is_empty();
@@ -858,7 +860,7 @@ fn integration_multi_model() {
     let burst_wall_ms = burst_t0.elapsed().as_millis() as u64;
     let burst_latencies: Vec<u64> = burst_results.iter().map(|r| r.latency_ms).collect();
     let burst_stats = LatencyStats::compute(burst_latencies);
-    let all_ok = burst_results.iter().all(|r| r.passed);
+    let _all_ok = burst_results.iter().all(|r| r.passed);
     let all_correct_dims = burst_results.iter().all(|r| r.dims == 1024 || r.dims > 0);
 
     for r in &burst_results {
@@ -894,6 +896,7 @@ fn integration_multi_model() {
         .min(inputs.embed_suite.len())
         .min(inputs.chat_suite.len());
 
+    #[allow(clippy::type_complexity)]
     let mut il_handles: Vec<
         std::thread::JoinHandle<Result<(bool, BurstItem), (bool, InterleavedChatItem)>>,
     > = Vec::new();

@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn test_sigmoid_large_logit_doesnt_panic() {
-        assert!(sigmoid(f64::MAX).is_finite() || sigmoid(f64::MAX).is_nan() == false);
+        assert!(sigmoid(f64::MAX).is_finite() || !sigmoid(f64::MAX).is_nan());
         assert!(sigmoid(f64::MIN).is_finite());
     }
 
@@ -373,7 +373,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         for r in parsed["results"].as_array().unwrap() {
             let score = r["relevance_score"].as_f64().unwrap();
-            assert!(score >= 0.0 && score <= 1.0, "score {score} outside [0,1]");
+            assert!((0.0..=1.0).contains(&score), "score {score} outside [0,1]");
         }
     }
 }

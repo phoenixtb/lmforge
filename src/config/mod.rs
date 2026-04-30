@@ -233,9 +233,11 @@ mod tests {
     #[test]
     fn test_merge_config_overlay_wins() {
         let base = LmForgeConfig::default();
-        let mut overlay = LmForgeConfig::default();
-        overlay.port = 9999;
-        overlay.log_level = "debug".to_string();
+        let overlay = LmForgeConfig {
+            port: 9999,
+            log_level: "debug".to_string(),
+            ..Default::default()
+        };
 
         let merged = merge_config(base, overlay);
         assert_eq!(merged.port, 9999);
@@ -244,8 +246,10 @@ mod tests {
 
     #[test]
     fn test_merge_config_base_kept_when_overlay_empty() {
-        let mut base = LmForgeConfig::default();
-        base.default_chat_model = "qwen3-8b".to_string();
+        let base = LmForgeConfig {
+            default_chat_model: "qwen3-8b".to_string(),
+            ..Default::default()
+        };
 
         let overlay = LmForgeConfig::default(); // default_chat_model is empty
         let merged = merge_config(base, overlay);
