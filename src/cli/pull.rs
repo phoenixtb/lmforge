@@ -150,12 +150,11 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
 /// Detect engine format from hardware profile
 fn detect_engine_format(data_dir: &std::path::Path) -> String {
     let hw_path = data_dir.join("hardware.json");
-    if let Ok(content) = std::fs::read_to_string(&hw_path) {
-        if let Ok(profile) = serde_json::from_str::<serde_json::Value>(&content) {
-            if profile["gpu_vendor"].as_str() == Some("apple") {
-                return "mlx".to_string();
-            }
-        }
+    if let Ok(content) = std::fs::read_to_string(&hw_path)
+        && let Ok(profile) = serde_json::from_str::<serde_json::Value>(&content)
+        && profile["gpu_vendor"].as_str() == Some("apple")
+    {
+        return "mlx".to_string();
     }
     "gguf".to_string() // fallback
 }

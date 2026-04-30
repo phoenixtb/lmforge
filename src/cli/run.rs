@@ -133,51 +133,45 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
                         let msg = String::from_utf8_lossy(&line_bytes).to_string();
                         let msg = msg.trim();
 
-                        if msg.starts_with("data: ") {
-                            let data = &msg[6..]; // skip "data: "
+                        if let Some(data) = msg.strip_prefix("data: ") {
+                            // skip "data: "
                             if data == "[DONE]" {
                                 break;
                             }
 
-                            if let Ok(chunk) = serde_json::from_str::<serde_json::Value>(data) {
-                                if let Some(choices) =
+                            if let Ok(chunk) = serde_json::from_str::<serde_json::Value>(data)
+                                && let Some(choices) =
                                     chunk.get("choices").and_then(|c| c.as_array())
+                                && let Some(delta) = choices
+                                    .first()
+                                    .and_then(|c| c.get("delta"))
+                                    .and_then(|d| d.as_object())
+                            {
+                                // Handle reasoning content (thinking)
+                                if let Some(reasoning) =
+                                    delta.get("reasoning_content").and_then(|v| v.as_str())
+                                    && !reasoning.is_empty()
                                 {
-                                    if let Some(delta) = choices
-                                        .get(0)
-                                        .and_then(|c| c.get("delta"))
-                                        .and_then(|d| d.as_object())
-                                    {
-                                        // Handle reasoning content (thinking)
-                                        if let Some(reasoning) =
-                                            delta.get("reasoning_content").and_then(|v| v.as_str())
-                                        {
-                                            if !reasoning.is_empty() {
-                                                if !in_thinking {
-                                                    print!("\x1b[2;3m<think>\n"); // Dim & Italic
-                                                    in_thinking = true;
-                                                }
-                                                print!("{}", reasoning);
-                                                std::io::stdout().flush().unwrap();
-                                                reasoning_content.push_str(reasoning);
-                                            }
-                                        }
-
-                                        // Handle normal content
-                                        if let Some(content) =
-                                            delta.get("content").and_then(|v| v.as_str())
-                                        {
-                                            if !content.is_empty() {
-                                                if in_thinking {
-                                                    print!("\n</think>\x1b[0m\n\n"); // End gray coloring
-                                                    in_thinking = false;
-                                                }
-                                                print!("{}", content);
-                                                std::io::stdout().flush().unwrap();
-                                                assistant_content.push_str(content);
-                                            }
-                                        }
+                                    if !in_thinking {
+                                        println!("\x1b[2;3m<think>"); // Dim & Italic
+                                        in_thinking = true;
                                     }
+                                    print!("{}", reasoning);
+                                    std::io::stdout().flush().unwrap();
+                                    reasoning_content.push_str(reasoning);
+                                }
+
+                                // Handle normal content
+                                if let Some(content) = delta.get("content").and_then(|v| v.as_str())
+                                    && !content.is_empty()
+                                {
+                                    if in_thinking {
+                                        print!("\n</think>\x1b[0m\n\n"); // End gray coloring
+                                        in_thinking = false;
+                                    }
+                                    print!("{}", content);
+                                    std::io::stdout().flush().unwrap();
+                                    assistant_content.push_str(content);
                                 }
                             }
                         }
@@ -217,12 +211,11 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
 
 fn detect_engine_format(data_dir: &std::path::Path) -> String {
     let hw_path = data_dir.join("hardware.json");
-    if let Ok(content) = std::fs::read_to_string(&hw_path) {
-        if let Ok(profile) = serde_json::from_str::<serde_json::Value>(&content) {
-            if profile["gpu_vendor"].as_str() == Some("apple") {
-                return "mlx".to_string();
-            }
-        }
+    if let Ok(content) = std::fs::read_to_string(&hw_path)
+        && let Ok(profile) = serde_json::from_str::<serde_json::Value>(&content)
+        && profile["gpu_vendor"].as_str() == Some("apple")
+    {
+        return "mlx".to_string();
     }
     "gguf".to_string()
 }

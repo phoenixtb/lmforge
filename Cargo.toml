@@ -1,6 +1,6 @@
 [package]
 name = "lmforge"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Hardware-aware LLM inference orchestrator — from edge to server"
 license = "MIT"

@@ -47,13 +47,13 @@ pub async fn install(
 fn find_existing_install(engine: &EngineConfig, data_dir: &std::path::Path) -> Option<String> {
     // Check if the start command is in PATH
     let cmd = &engine.start_cmd;
-    if let Ok(output) = std::process::Command::new("which").arg(cmd).output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            // Verify version if possible
-            if verify_engine_version(engine, &path) {
-                return Some(path);
-            }
+    if let Ok(output) = std::process::Command::new("which").arg(cmd).output()
+        && output.status.success()
+    {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        // Verify version if possible
+        if verify_engine_version(engine, &path) {
+            return Some(path);
         }
     }
 
@@ -82,20 +82,17 @@ fn find_existing_install(engine: &EngineConfig, data_dir: &std::path::Path) -> O
 /// Verify the installed engine version matches what we expect
 fn verify_engine_version(engine: &EngineConfig, _path: &str) -> bool {
     // For brew-installed engines, check brew info
-    if engine.install_method == "brew" {
-        if let Some(ref formula) = engine.brew_formula {
-            if let Ok(output) = std::process::Command::new("brew")
-                .args(["list", "--versions", formula])
-                .output()
-            {
-                if output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    debug!(formula, output = %stdout.trim(), "Brew version check");
-                    // Accept any version — the user may have a different version installed
-                    return true;
-                }
-            }
-        }
+    if engine.install_method == "brew"
+        && let Some(ref formula) = engine.brew_formula
+        && let Ok(output) = std::process::Command::new("brew")
+            .args(["list", "--versions", formula])
+            .output()
+        && output.status.success()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        debug!(formula, output = %stdout.trim(), "Brew version check");
+        // Accept any version — the user may have a different version installed
+        return true;
     }
 
     // For binary engines, just check existence
@@ -225,19 +222,19 @@ async fn install_via_brew(
 
     // ── 4. Verify the binary is on PATH ───────────────────────────────────────
     let cmd = &engine.start_cmd;
-    if let Ok(which_out) = std::process::Command::new("which").arg(cmd).output() {
-        if which_out.status.success() {
-            let path = String::from_utf8_lossy(&which_out.stdout)
-                .trim()
-                .to_string();
-            println!("  ✓ {} installed at {}", engine.name, path);
-            return Ok(InstallResult {
-                engine_id: engine.id.clone(),
-                version: engine.version.clone(),
-                install_path: path,
-                method_used: "brew".to_string(),
-            });
-        }
+    if let Ok(which_out) = std::process::Command::new("which").arg(cmd).output()
+        && which_out.status.success()
+    {
+        let path = String::from_utf8_lossy(&which_out.stdout)
+            .trim()
+            .to_string();
+        println!("  ✓ {} installed at {}", engine.name, path);
+        return Ok(InstallResult {
+            engine_id: engine.id.clone(),
+            version: engine.version.clone(),
+            install_path: path,
+            method_used: "brew".to_string(),
+        });
     }
 
     Err(guidance(&format!(
@@ -535,25 +532,25 @@ fn resolve_platform(profile: &HardwareProfile) -> Result<(String, &'static str)>
 /// Returns "13.1" for CUDA 13.x, "12.4" as the default for CUDA 12.x or unknown.
 /// These correspond to the two CUDA variants shipped in llama.cpp Windows releases.
 fn detect_windows_cuda_variant() -> String {
-    if let Ok(output) = std::process::Command::new("nvidia-smi").output() {
-        if let Ok(stdout) = String::from_utf8(output.stdout) {
-            for line in stdout.lines() {
-                // nvidia-smi header contains "CUDA Version: X.Y"
-                if let Some(idx) = line.find("CUDA Version:") {
-                    let ver_str = line[idx + 13..].trim();
-                    let major: u32 = ver_str
-                        .split('.')
-                        .next()
-                        .unwrap_or("12")
-                        .parse()
-                        .unwrap_or(12);
-                    let variant = if major >= 13 { "13.1" } else { "12.4" };
-                    debug!(
-                        cuda_version = ver_str,
-                        variant, "Detected Windows CUDA variant"
-                    );
-                    return variant.to_string();
-                }
+    if let Ok(output) = std::process::Command::new("nvidia-smi").output()
+        && let Ok(stdout) = String::from_utf8(output.stdout)
+    {
+        for line in stdout.lines() {
+            // nvidia-smi header contains "CUDA Version: X.Y"
+            if let Some(idx) = line.find("CUDA Version:") {
+                let ver_str = line[idx + 13..].trim();
+                let major: u32 = ver_str
+                    .split('.')
+                    .next()
+                    .unwrap_or("12")
+                    .parse()
+                    .unwrap_or(12);
+                let variant = if major >= 13 { "13.1" } else { "12.4" };
+                debug!(
+                    cuda_version = ver_str,
+                    variant, "Detected Windows CUDA variant"
+                );
+                return variant.to_string();
             }
         }
     }
@@ -612,14 +609,13 @@ fn copy_dlls_to_dir(src_dir: &std::path::Path, dest_dir: &std::path::Path) -> Re
             .and_then(|e| e.to_str())
             .map(|e| e.eq_ignore_ascii_case("dll"))
             .unwrap_or(false)
+            && let Some(fname) = entry.file_name()
         {
-            if let Some(fname) = entry.file_name() {
-                let dest = dest_dir.join(fname);
-                std::fs::copy(&entry, &dest).with_context(|| {
-                    format!("Failed to copy DLL {} to engines dir", entry.display())
-                })?;
-                debug!(dll = ?fname, "Copied CUDA runtime DLL");
-            }
+            let dest = dest_dir.join(fname);
+            std::fs::copy(&entry, &dest).with_context(|| {
+                format!("Failed to copy DLL {} to engines dir", entry.display())
+            })?;
+            debug!(dll = ?fname, "Copied CUDA runtime DLL");
         }
     }
     Ok(())
@@ -628,10 +624,10 @@ fn copy_dlls_to_dir(src_dir: &std::path::Path, dest_dir: &std::path::Path) -> Re
 /// Find a binary by name within a directory (recursive)
 fn find_binary_in_dir(dir: &std::path::Path, name: &str) -> Result<std::path::PathBuf> {
     for entry in walkdir(dir)? {
-        if let Some(fname) = entry.file_name().and_then(|n| n.to_str()) {
-            if fname == name {
-                return Ok(entry);
-            }
+        if let Some(fname) = entry.file_name().and_then(|n| n.to_str())
+            && fname == name
+        {
+            return Ok(entry);
         }
     }
     bail!(
@@ -673,22 +669,20 @@ fn find_python() -> Result<String> {
         if let Ok(output) = std::process::Command::new(candidate)
             .args(["--version"])
             .output()
+            && output.status.success()
         {
-            if output.status.success() {
-                let version = String::from_utf8_lossy(&output.stdout);
-                debug!(python = candidate, version = %version.trim(), "Found Python");
-                // Check version >= 3.10
-                if let Some(ver_str) = version.split_whitespace().nth(1) {
-                    let parts: Vec<&str> = ver_str.split('.').collect();
-                    if parts.len() >= 2 {
-                        if let (Ok(major), Ok(minor)) =
-                            (parts[0].parse::<u32>(), parts[1].parse::<u32>())
-                        {
-                            if major >= 3 && minor >= 10 {
-                                return Ok(candidate.to_string());
-                            }
-                        }
-                    }
+            let version = String::from_utf8_lossy(&output.stdout);
+            debug!(python = candidate, version = %version.trim(), "Found Python");
+            // Check version >= 3.10
+            if let Some(ver_str) = version.split_whitespace().nth(1) {
+                let parts: Vec<&str> = ver_str.split('.').collect();
+                if parts.len() >= 2
+                    && let (Ok(major), Ok(minor)) =
+                        (parts[0].parse::<u32>(), parts[1].parse::<u32>())
+                    && major >= 3
+                    && minor >= 10
+                {
+                    return Ok(candidate.to_string());
                 }
             }
         }
@@ -717,24 +711,22 @@ fn run_preflight_checks(engine: &EngineConfig) -> Result<()> {
     // Check disk space if required
     if let Some(min_gb) = engine.min_disk_gb {
         // Simple check via `df`
-        if let Ok(output) = std::process::Command::new("df").args(["-g", "."]).output() {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                // Parse the available space from df output (4th column, 2nd line)
-                if let Some(line) = stdout.lines().nth(1) {
-                    if let Some(avail) = line.split_whitespace().nth(3) {
-                        if let Ok(free_gb) = avail.parse::<u32>() {
-                            if free_gb < min_gb {
-                                bail!(
-                                    "{} requires ≥{} GB free disk space. Available: {} GB",
-                                    engine.name,
-                                    min_gb,
-                                    free_gb
-                                );
-                            }
-                        }
-                    }
-                }
+        if let Ok(output) = std::process::Command::new("df").args(["-g", "."]).output()
+            && output.status.success()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // Parse the available space from df output (4th column, 2nd line)
+            if let Some(line) = stdout.lines().nth(1)
+                && let Some(avail) = line.split_whitespace().nth(3)
+                && let Ok(free_gb) = avail.parse::<u32>()
+                && free_gb < min_gb
+            {
+                bail!(
+                    "{} requires ≥{} GB free disk space. Available: {} GB",
+                    engine.name,
+                    min_gb,
+                    free_gb
+                );
             }
         }
     }

@@ -44,6 +44,7 @@ pub async fn run(
     let search_lower = search.as_deref().map(str::to_lowercase);
 
     // Sort entries, separate _comment_ keys (section headers) from real shortcuts
+    #[allow(clippy::type_complexity)] // local-only; a type alias here would be more confusing
     let mut sections: Vec<(Option<String>, Vec<(String, String)>)> = Vec::new();
     let mut current_section: Option<String> = None;
     let mut current_items: Vec<(String, String)> = Vec::new();
@@ -63,10 +64,11 @@ pub async fn run(
             current_section = Some(label);
         } else {
             // Apply search filter
-            if let Some(ref filter) = search_lower {
-                if !key.to_lowercase().contains(filter) && !value.to_lowercase().contains(filter) {
-                    continue;
-                }
+            if let Some(ref filter) = search_lower
+                && !key.to_lowercase().contains(filter)
+                && !value.to_lowercase().contains(filter)
+            {
+                continue;
             }
             current_items.push((key, value));
         }
@@ -106,7 +108,7 @@ pub async fn run(
     println!();
 
     let col_w = 40usize;
-    println!("  {:<col_w$}  {}", "SHORTCUT", "REPO");
+    println!("  {:<col_w$}  REPO", "SHORTCUT");
     println!("  {}", "─".repeat(90));
 
     for (section_label, items) in &sections {

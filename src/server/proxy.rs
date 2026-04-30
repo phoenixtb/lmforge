@@ -92,7 +92,11 @@ pub fn normalise_chat_response(text: String) -> String {
                 // C1, C2: strip null fields from message
                 if let Some(msg) = obj.get_mut("message").and_then(|m| m.as_object_mut()) {
                     // C1: remove reasoning_content if null
-                    if msg.get("reasoning_content").map(|v| v.is_null()).unwrap_or(false) {
+                    if msg
+                        .get("reasoning_content")
+                        .map(|v| v.is_null())
+                        .unwrap_or(false)
+                    {
                         msg.remove("reasoning_content");
                     }
                     // C2: remove tool_calls if null
@@ -139,9 +143,9 @@ pub async fn proxy_stream(
 
     // Stream the response body through
     let stream = resp.bytes_stream().map(|chunk| {
-        chunk.map(|bytes| bytes).map_err(|e| {
+        chunk.map_err(|e| {
             error!(error = %e, "Error reading stream from engine");
-            std::io::Error::new(std::io::ErrorKind::Other, e)
+            std::io::Error::other(e)
         })
     });
 
@@ -293,65 +297,52 @@ pub async fn proxy_request_assembling_stream(
                 }
             }
 
-            if let Some(choices) = chunk_val.get("choices").and_then(|c| c.as_array()) {
-                if let Some(choice) = choices.first() {
-                    if let Some(delta) = choice.get("delta") {
-                        // Accumulate reasoning and content
-                        if let Some(r) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
-                            reasoning_buf.push_str(r);
-                        }
-                        if let Some(c) = delta.get("content").and_then(|v| v.as_str()) {
-                            content_buf.push_str(c);
-                        }
+            if let Some(choices) = chunk_val.get("choices").and_then(|c| c.as_array())
+                && let Some(choice) = choices.first()
+            {
+                if let Some(delta) = choice.get("delta") {
+                    // Accumulate reasoning and content
+                    if let Some(r) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
+                        reasoning_buf.push_str(r);
+                    }
+                    if let Some(c) = delta.get("content").and_then(|v| v.as_str()) {
+                        content_buf.push_str(c);
+                    }
 
-                        // Accumulate tool_calls deltas (C2)
-                        // Each delta.tool_calls entry has: index, id (first chunk only),
-                        // type (first chunk only), function.name (first chunk only),
-                        // function.arguments (incremental).
-                        if let Some(tc_arr) =
-                            delta.get("tool_calls").and_then(|v| v.as_array())
-                        {
-                            for tc_delta in tc_arr {
-                                let idx = tc_delta
-                                    .get("index")
-                                    .and_then(|v| v.as_u64())
-                                    .unwrap_or(0);
-                                let entry = tool_call_map.entry(idx).or_insert_with(|| {
-                                    (
-                                        String::new(), // id
-                                        String::new(), // type
-                                        String::new(), // function.name
-                                        String::new(), // function.arguments
-                                    )
-                                });
-                                if let Some(id) =
-                                    tc_delta.get("id").and_then(|v| v.as_str())
-                                {
-                                    entry.0 = id.to_string();
+                    // Accumulate tool_calls deltas (C2)
+                    // Each delta.tool_calls entry has: index, id (first chunk only),
+                    // type (first chunk only), function.name (first chunk only),
+                    // function.arguments (incremental).
+                    if let Some(tc_arr) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+                        for tc_delta in tc_arr {
+                            let idx = tc_delta.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let entry = tool_call_map.entry(idx).or_insert_with(|| {
+                                (
+                                    String::new(), // id
+                                    String::new(), // type
+                                    String::new(), // function.name
+                                    String::new(), // function.arguments
+                                )
+                            });
+                            if let Some(id) = tc_delta.get("id").and_then(|v| v.as_str()) {
+                                entry.0 = id.to_string();
+                            }
+                            if let Some(t) = tc_delta.get("type").and_then(|v| v.as_str()) {
+                                entry.1 = t.to_string();
+                            }
+                            if let Some(func) = tc_delta.get("function") {
+                                if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
+                                    entry.2 = name.to_string();
                                 }
-                                if let Some(t) =
-                                    tc_delta.get("type").and_then(|v| v.as_str())
-                                {
-                                    entry.1 = t.to_string();
-                                }
-                                if let Some(func) = tc_delta.get("function") {
-                                    if let Some(name) =
-                                        func.get("name").and_then(|v| v.as_str())
-                                    {
-                                        entry.2 = name.to_string();
-                                    }
-                                    if let Some(args) =
-                                        func.get("arguments").and_then(|v| v.as_str())
-                                    {
-                                        entry.3.push_str(args);
-                                    }
+                                if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
+                                    entry.3.push_str(args);
                                 }
                             }
                         }
                     }
-                    if let Some(fr) = choice.get("finish_reason").and_then(|v| v.as_str()) {
-                        finish_reason = Some(fr.to_string());
-                    }
+                }
+                if let Some(fr) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+                    finish_reason = Some(fr.to_string());
                 }
             }
 
@@ -372,12 +363,13 @@ pub async fn proxy_request_assembling_stream(
     // If the engine emitted <think>...</think> tags inside delta.content rather than
     // using a separate delta.reasoning_content field (natural Qwen3/oMLX mode after
     // flag suppression), extract them now to correctly separate reasoning from answer.
-    let (final_reasoning, final_content) = if reasoning_buf.is_empty() && content_buf.contains("<think>") {
-        let (r, c) = crate::server::thinking::extract_think_tags(&content_buf);
-        (r.unwrap_or_default(), c)
-    } else {
-        (reasoning_buf, content_buf)
-    };
+    let (final_reasoning, final_content) =
+        if reasoning_buf.is_empty() && content_buf.contains("<think>") {
+            let (r, c) = crate::server::thinking::extract_think_tags(&content_buf);
+            (r.unwrap_or_default(), c)
+        } else {
+            (reasoning_buf, content_buf)
+        };
 
     // Build validated tool_calls array (C2).
     // Safeguard: only include entries that have all required fields (id, type="function",
@@ -542,10 +534,10 @@ async fn stream_call1_accumulate(
     tx: Option<tokio::sync::mpsc::Sender<Bytes>>,
 ) -> Result<
     (
-        String, // reasoning_buf
-        String, // content_buf (only populated on natural finish, no Call 2 needed)
-        String, // completion_id
-        String, // model_name
+        String,         // reasoning_buf
+        String,         // content_buf (only populated on natural finish, no Call 2 needed)
+        String,         // completion_id
+        String,         // model_name
         Option<String>, // finish_reason
     ),
     String,
@@ -587,49 +579,49 @@ async fn stream_call1_accumulate(
             };
 
             // Capture metadata
-            if completion_id.is_empty() {
-                if let Some(id) = val.get("id").and_then(|v| v.as_str()) {
-                    completion_id = id.to_string();
-                }
+            if completion_id.is_empty()
+                && let Some(id) = val.get("id").and_then(|v| v.as_str())
+            {
+                completion_id = id.to_string();
             }
-            if model_name.is_empty() {
-                if let Some(m) = val.get("model").and_then(|v| v.as_str()) {
-                    model_name = m.to_string();
-                }
+            if model_name.is_empty()
+                && let Some(m) = val.get("model").and_then(|v| v.as_str())
+            {
+                model_name = m.to_string();
             }
 
-            if let Some(choices) = val.get("choices").and_then(|c| c.as_array()) {
-                if let Some(choice) = choices.first() {
-                    // Capture finish_reason
-                    if let Some(fr) = choice.get("finish_reason").and_then(|v| v.as_str()) {
-                        finish_reason = Some(fr.to_string());
-                    }
+            if let Some(choices) = val.get("choices").and_then(|c| c.as_array())
+                && let Some(choice) = choices.first()
+            {
+                // Capture finish_reason
+                if let Some(fr) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+                    finish_reason = Some(fr.to_string());
+                }
 
-                    if let Some(delta) = choice.get("delta") {
-                        // Accumulate reasoning
-                        if let Some(r) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
-                            if !r.is_empty() {
-                                reasoning_buf.push_str(r);
-                                // Live-stream reasoning to client if channel is open
-                                if let Some(ref tx) = tx {
-                                    let sse_bytes = Bytes::from(format!("data: {}\n\n", data));
-                                    if tx.send(sse_bytes).await.is_err() {
-                                        break;
-                                    }
-                                }
+                if let Some(delta) = choice.get("delta") {
+                    // Accumulate reasoning
+                    if let Some(r) = delta.get("reasoning_content").and_then(|v| v.as_str())
+                        && !r.is_empty()
+                    {
+                        reasoning_buf.push_str(r);
+                        // Live-stream reasoning to client if channel is open
+                        if let Some(ref tx) = tx {
+                            let sse_bytes = Bytes::from(format!("data: {}\n\n", data));
+                            if tx.send(sse_bytes).await.is_err() {
+                                break;
                             }
                         }
-                        // Accumulate content (natural finish path)
-                        if let Some(c) = delta.get("content").and_then(|v| v.as_str()) {
-                            if !c.is_empty() {
-                                content_buf.push_str(c);
-                                // Also live-stream content if channel is open
-                                if let Some(ref tx) = tx {
-                                    let sse_bytes = Bytes::from(format!("data: {}\n\n", data));
-                                    if tx.send(sse_bytes).await.is_err() {
-                                        break;
-                                    }
-                                }
+                    }
+                    // Accumulate content (natural finish path)
+                    if let Some(c) = delta.get("content").and_then(|v| v.as_str())
+                        && !c.is_empty()
+                    {
+                        content_buf.push_str(c);
+                        // Also live-stream content if channel is open
+                        if let Some(ref tx) = tx {
+                            let sse_bytes = Bytes::from(format!("data: {}\n\n", data));
+                            if tx.send(sse_bytes).await.is_err() {
+                                break;
                             }
                         }
                     }
@@ -638,7 +630,13 @@ async fn stream_call1_accumulate(
         }
     }
 
-    Ok((reasoning_buf, content_buf, completion_id, model_name, finish_reason))
+    Ok((
+        reasoning_buf,
+        content_buf,
+        completion_id,
+        model_name,
+        finish_reason,
+    ))
 }
 
 /// Streaming proxy for the two-call thinking-budget workflow.
@@ -669,7 +667,10 @@ pub async fn proxy_stream_with_thinking_budget(
     // Patch body for Call 1: cap max_tokens at the thinking budget
     let mut body1 = original_body.clone();
     if let Some(obj) = body1.as_object_mut() {
-        obj.insert("max_tokens".to_string(), serde_json::Value::from(thinking_budget));
+        obj.insert(
+            "max_tokens".to_string(),
+            serde_json::Value::from(thinking_budget),
+        );
         obj.insert("stream".to_string(), serde_json::Value::Bool(true));
         obj.remove("thinking_budget");
     }
@@ -682,7 +683,10 @@ pub async fn proxy_stream_with_thinking_budget(
         .await
         .map_err(|e| {
             error!(error = %e, "Call-1 engine request failed");
-            (502u16, format!("{{\"error\":\"Engine unavailable: {}\"}}", e))
+            (
+                502u16,
+                format!("{{\"error\":\"Engine unavailable: {}\"}}", e),
+            )
         })?;
 
     if !resp1.status().is_success() {
@@ -693,14 +697,14 @@ pub async fn proxy_stream_with_thinking_budget(
 
     // Channel: Call 1 accumulator task sends live SSE Bytes to the output stream
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Bytes>(256);
-    let tx_opt = if stream_reasoning_deltas { Some(tx) } else { None };
+    let tx_opt = if stream_reasoning_deltas {
+        Some(tx)
+    } else {
+        None
+    };
 
     // Spawn Call 1 accumulator in background
-    let call1_task = tokio::spawn(stream_call1_accumulate(
-        resp1,
-        thinking_budget,
-        tx_opt,
-    ));
+    let call1_task = tokio::spawn(stream_call1_accumulate(resp1, thinking_budget, tx_opt));
 
     let original_body_c = original_body.clone();
     let client = client.clone();
@@ -776,8 +780,27 @@ pub async fn proxy_stream_with_thinking_budget(
 
         let body2 = build_call2_body(&original_body_c, &reasoning_buf, remaining);
 
+        // Emit a status event so clients can show a "Generating answer…" indicator
+        // during the Call 2 KV-cache prefill gap. Standard OpenAI clients ignore
+        // the `lmforge` extension field — this is fully backward-compatible.
+        let prefill_status = serde_json::json!({
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "model": model_name,
+            "choices": [{ "index": 0, "delta": {}, "finish_reason": null }],
+            "lmforge": {
+                "status": "call2_prefill",
+                "reasoning_len": reasoning_buf.len(),
+                "remaining_tokens": remaining
+            }
+        });
+        yield Ok::<Bytes, std::io::Error>(Bytes::from(format!(
+            "data: {}\n\n",
+            serde_json::to_string(&prefill_status).unwrap_or_default()
+        )));
+
         let resp2 = match client
-            .post(&format!("http://127.0.0.1:{}{}", engine_port_owned, path_owned))
+            .post(format!("http://127.0.0.1:{}{}", engine_port_owned, path_owned))
             .header("Content-Type", "application/json")
             .body(serde_json::to_vec(&body2).unwrap_or_default())
             .send()
@@ -885,7 +908,10 @@ pub async fn proxy_nonstream_with_thinking_budget(
     // Call 1: thinking phase
     let mut body1 = original_body.clone();
     if let Some(obj) = body1.as_object_mut() {
-        obj.insert("max_tokens".to_string(), serde_json::Value::from(thinking_budget));
+        obj.insert(
+            "max_tokens".to_string(),
+            serde_json::Value::from(thinking_budget),
+        );
         obj.insert("stream".to_string(), serde_json::Value::Bool(true));
         obj.remove("thinking_budget");
     }
@@ -896,7 +922,12 @@ pub async fn proxy_nonstream_with_thinking_budget(
         .body(serde_json::to_vec(&body1).unwrap_or_default())
         .send()
         .await
-        .map_err(|e| (502u16, format!("{{\"error\":\"Engine unavailable: {}\"}}", e)))?;
+        .map_err(|e| {
+            (
+                502u16,
+                format!("{{\"error\":\"Engine unavailable: {}\"}}", e),
+            )
+        })?;
 
     if !resp1.status().is_success() {
         let status = resp1.status().as_u16();
@@ -939,7 +970,12 @@ pub async fn proxy_nonstream_with_thinking_budget(
         .body(serde_json::to_vec(&body2).unwrap_or_default())
         .send()
         .await
-        .map_err(|e| (502u16, format!("{{\"error\":\"Call-2 engine unavailable: {}\"}}", e)))?;
+        .map_err(|e| {
+            (
+                502u16,
+                format!("{{\"error\":\"Call-2 engine unavailable: {}\"}}", e),
+            )
+        })?;
 
     if !resp2.status().is_success() {
         let status = resp2.status().as_u16();
@@ -952,8 +988,16 @@ pub async fn proxy_nonstream_with_thinking_budget(
             .await
             .map_err(|e| (500u16, e))?;
 
-    let final_id = if completion_id.is_empty() { comp_id2 } else { completion_id };
-    let final_model = if model_name.is_empty() { model2 } else { model_name };
+    let final_id = if completion_id.is_empty() {
+        comp_id2
+    } else {
+        completion_id
+    };
+    let final_model = if model_name.is_empty() {
+        model2
+    } else {
+        model_name
+    };
 
     let assembled = serde_json::json!({
         "id": final_id,
@@ -978,7 +1022,6 @@ pub async fn proxy_nonstream_with_thinking_budget(
 // =============================================================================
 // Stateful SSE rewriter — Phase 2 think-tag streaming support
 // =============================================================================
-
 
 /// Whether the rewriter is currently inside a `<think>` block or emitting answer tokens.
 #[derive(Debug, Clone, PartialEq)]
@@ -1097,32 +1140,31 @@ fn longest_tag_prefix(text: &str, tag: &str) -> usize {
 /// - `delta.reasoning_content` = reasoning text (or `null` if empty)
 /// - `delta.content`           = answer text (or `null` if empty)
 fn rewrite_sse_chunk(chunk: &mut serde_json::Value, rewriter: &mut ThinkTagRewriter) {
-    if let Some(choices) = chunk.get_mut("choices").and_then(|c| c.as_array_mut()) {
-        if let Some(choice) = choices.first_mut() {
-            if let Some(delta) = choice.get_mut("delta").and_then(|d| d.as_object_mut()) {
-                // Only rewrite if there's a content field (skip role-only deltas)
-                if let Some(content_val) = delta.remove("content") {
-                    let content_str = content_val.as_str().unwrap_or("");
-                    let (reasoning, content) = rewriter.process(content_str);
+    if let Some(choices) = chunk.get_mut("choices").and_then(|c| c.as_array_mut())
+        && let Some(choice) = choices.first_mut()
+        && let Some(delta) = choice.get_mut("delta").and_then(|d| d.as_object_mut())
+    {
+        // Only rewrite if there's a content field (skip role-only deltas)
+        if let Some(content_val) = delta.remove("content") {
+            let content_str = content_val.as_str().unwrap_or("");
+            let (reasoning, content) = rewriter.process(content_str);
 
-                    delta.insert(
-                        "reasoning_content".to_string(),
-                        if reasoning.is_empty() {
-                            serde_json::Value::Null
-                        } else {
-                            serde_json::Value::String(reasoning)
-                        },
-                    );
-                    delta.insert(
-                        "content".to_string(),
-                        if content.is_empty() {
-                            serde_json::Value::Null
-                        } else {
-                            serde_json::Value::String(content)
-                        },
-                    );
-                }
-            }
+            delta.insert(
+                "reasoning_content".to_string(),
+                if reasoning.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::Value::String(reasoning)
+                },
+            );
+            delta.insert(
+                "content".to_string(),
+                if content.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::Value::String(content)
+                },
+            );
         }
     }
 }
@@ -1155,7 +1197,10 @@ pub async fn proxy_stream_rewriting_think_tags(
         .await
         .map_err(|e| {
             error!(error = %e, "Failed to proxy think-rewrite stream to engine");
-            (502u16, format!("{{\"error\":\"Engine unavailable: {}\"}}", e))
+            (
+                502u16,
+                format!("{{\"error\":\"Engine unavailable: {}\"}}", e),
+            )
         })?;
 
     if !resp.status().is_success() {
@@ -1278,7 +1323,10 @@ fn rewrite_sse_line(line: &str, rewriter: &mut ThinkTagRewriter) -> String {
 
     rewrite_sse_chunk(&mut chunk_val, rewriter);
 
-    format!("data: {}", serde_json::to_string(&chunk_val).unwrap_or_else(|_| data.to_string()))
+    format!(
+        "data: {}",
+        serde_json::to_string(&chunk_val).unwrap_or_else(|_| data.to_string())
+    )
 }
 
 #[cfg(test)]
@@ -1347,8 +1395,10 @@ mod tests {
         // Non-thinking model: all goes to content
         let (r1, c1) = r.process("Chunk one ");
         let (r2, c2) = r.process("chunk two");
-        assert_eq!(r1, ""); assert_eq!(c1, "Chunk one ");
-        assert_eq!(r2, ""); assert_eq!(c2, "chunk two");
+        assert_eq!(r1, "");
+        assert_eq!(c1, "Chunk one ");
+        assert_eq!(r2, "");
+        assert_eq!(c2, "chunk two");
     }
 
     #[test]
@@ -1391,9 +1441,13 @@ mod tests {
         let line = r#"data: {"choices":[{"delta":{"content":"I think therefore"}}]}"#;
         let result = rewrite_sse_line(line, &mut r);
 
-        let parsed: serde_json::Value = serde_json::from_str(result.strip_prefix("data: ").unwrap()).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(result.strip_prefix("data: ").unwrap()).unwrap();
         assert!(parsed["choices"][0]["delta"]["content"].is_null());
-        assert_eq!(parsed["choices"][0]["delta"]["reasoning_content"], "I think therefore");
+        assert_eq!(
+            parsed["choices"][0]["delta"]["reasoning_content"],
+            "I think therefore"
+        );
     }
 
     #[test]
@@ -1403,8 +1457,91 @@ mod tests {
         let line = r#"data: {"choices":[{"delta":{"content":"The answer is 4"}}]}"#;
         let result = rewrite_sse_line(line, &mut r);
 
-        let parsed: serde_json::Value = serde_json::from_str(result.strip_prefix("data: ").unwrap()).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(result.strip_prefix("data: ").unwrap()).unwrap();
         assert_eq!(parsed["choices"][0]["delta"]["content"], "The answer is 4");
         assert!(parsed["choices"][0]["delta"]["reasoning_content"].is_null());
+    }
+
+    // ── build_call2_body unit tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_build_call2_body_appends_closed_think_block() {
+        let body = serde_json::json!({
+            "model": "qwen3.5-4b-4bit",
+            "messages": [{"role": "user", "content": "What is 2+2?"}],
+            "max_tokens": 2048,
+            "stream": true
+        });
+        let result = build_call2_body(&body, "I reasoned hard", 512);
+
+        let messages = result["messages"].as_array().unwrap();
+        // Original message + appended assistant turn
+        assert_eq!(messages.len(), 2);
+        let assistant = &messages[1];
+        assert_eq!(assistant["role"], "assistant");
+        let content = assistant["content"].as_str().unwrap();
+        assert!(
+            content.contains("<think>I reasoned hard</think>"),
+            "must wrap reasoning in closed think tags"
+        );
+    }
+
+    #[test]
+    fn test_build_call2_body_sets_enable_thinking_false() {
+        let body = serde_json::json!({
+            "model": "qwen3.5-4b-4bit",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 2048
+        });
+        let result = build_call2_body(&body, "some reasoning", 512);
+        assert_eq!(
+            result["chat_template_kwargs"]["enable_thinking"], false,
+            "Call 2 must suppress thinking mode"
+        );
+    }
+
+    #[test]
+    fn test_build_call2_body_sets_remaining_max_tokens() {
+        let body = serde_json::json!({
+            "model": "qwen3.5-4b-4bit",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 4096
+        });
+        let result = build_call2_body(&body, "reasoning", 768);
+        assert_eq!(
+            result["max_tokens"], 768,
+            "max_tokens must be overridden to remaining budget"
+        );
+    }
+
+    #[test]
+    fn test_build_call2_body_strips_thinking_budget() {
+        let body = serde_json::json!({
+            "model": "qwen3.5-4b-4bit",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 2048,
+            "thinking_budget": 4096
+        });
+        let result = build_call2_body(&body, "reasoning", 512);
+        assert!(
+            result.get("thinking_budget").is_none(),
+            "thinking_budget must be stripped from Call 2 body"
+        );
+    }
+
+    #[test]
+    fn test_build_call2_body_always_streams() {
+        let body = serde_json::json!({
+            "model": "qwen3.5-4b-4bit",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 2048,
+            "stream": false   // original was non-streaming
+        });
+        let result = build_call2_body(&body, "reasoning", 512);
+        assert_eq!(
+            result["stream"], true,
+            "Call 2 must always be stream:true internally"
+        );
     }
 }

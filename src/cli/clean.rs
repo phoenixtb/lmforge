@@ -223,14 +223,13 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
         && (do_all
             || opts.hf_cache
             || confirm("Remove HuggingFace cache entries that are already in ~/.lmforge/models/?")?)
+        && let Some(ref hf_dir) = hf_cache_dir
     {
-        if let Some(ref hf_dir) = hf_cache_dir {
-            for (repo, size) in &hf_duplicates {
-                let cache_name = format!("models--{}", repo.replace('/', "--"));
-                let cache_path = hf_dir.join(&cache_name);
-                std::fs::remove_dir_all(&cache_path)?;
-                println!("  ✓ Removed HF cache entry {} ({})", repo, fmt_size(*size));
-            }
+        for (repo, size) in &hf_duplicates {
+            let cache_name = format!("models--{}", repo.replace('/', "--"));
+            let cache_path = hf_dir.join(&cache_name);
+            std::fs::remove_dir_all(&cache_path)?;
+            println!("  ✓ Removed HF cache entry {} ({})", repo, fmt_size(*size));
         }
     }
 

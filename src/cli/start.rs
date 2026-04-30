@@ -280,24 +280,24 @@ fn kill_engine_pid_files(data_dir: &std::path::Path) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().map_or(false, |e| e == "pid") {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(pid) = content.trim().parse::<u32>() {
-                    #[cfg(unix)]
-                    {
-                        use nix::sys::signal::{Signal, kill};
-                        use nix::unistd::Pid;
-                        let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
-                        warn!(pid, path = %path.display(), "Sent SIGKILL to stale engine process");
-                    }
+        if path.extension().is_some_and(|e| e == "pid") {
+            if let Ok(content) = std::fs::read_to_string(&path)
+                && let Ok(pid) = content.trim().parse::<u32>()
+            {
+                #[cfg(unix)]
+                {
+                    use nix::sys::signal::{Signal, kill};
+                    use nix::unistd::Pid;
+                    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
+                    warn!(pid, path = %path.display(), "Sent SIGKILL to stale engine process");
+                }
 
-                    #[cfg(windows)]
-                    {
-                        let _ = std::process::Command::new("taskkill")
-                            .args(["/F", "/PID", &pid.to_string()])
-                            .output();
-                        warn!(pid, path = %path.display(), "Sent taskkill /F to stale engine process");
-                    }
+                #[cfg(windows)]
+                {
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/F", "/PID", &pid.to_string()])
+                        .output();
+                    warn!(pid, path = %path.display(), "Sent taskkill /F to stale engine process");
                 }
             }
             let _ = std::fs::remove_file(&path);

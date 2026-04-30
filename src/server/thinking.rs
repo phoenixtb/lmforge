@@ -8,33 +8,33 @@ use crate::model::index::ModelCapabilities;
 /// Used when engines (llama.cpp, SGLang) embed thinking inside the
 /// content field rather than using a dedicated `reasoning_content` field.
 pub fn extract_think_tags(content: &str) -> (Option<String>, String) {
-    if let Some(start) = content.find("<think>") {
-        if let Some(end) = content.find("</think>") {
-            let think_start = start + "<think>".len();
-            let reasoning = content[think_start..end].trim().to_string();
-            let clean = format!(
-                "{}{}",
-                &content[..start],
-                &content[end + "</think>".len()..]
-            )
-            .trim()
-            .to_string();
+    if let Some(start) = content.find("<think>")
+        && let Some(end) = content.find("</think>")
+    {
+        let think_start = start + "<think>".len();
+        let reasoning = content[think_start..end].trim().to_string();
+        let clean = format!(
+            "{}{}",
+            &content[..start],
+            &content[end + "</think>".len()..]
+        )
+        .trim()
+        .to_string();
 
-            debug!(
-                reasoning_len = reasoning.len(),
-                content_len = clean.len(),
-                "Extracted think tags"
-            );
+        debug!(
+            reasoning_len = reasoning.len(),
+            content_len = clean.len(),
+            "Extracted think tags"
+        );
 
-            return (
-                if reasoning.is_empty() {
-                    None
-                } else {
-                    Some(reasoning)
-                },
-                clean,
-            );
-        }
+        return (
+            if reasoning.is_empty() {
+                None
+            } else {
+                Some(reasoning)
+            },
+            clean,
+        );
     }
     (None, content.to_string())
 }
@@ -48,16 +48,16 @@ pub fn inject_reasoning_content(response_json: &str) -> String {
 
     if let Some(choices) = value.get_mut("choices").and_then(|c| c.as_array_mut()) {
         for choice in choices.iter_mut() {
-            if let Some(message) = choice.get_mut("message") {
-                if let Some(content) = message.get("content").and_then(|c| c.as_str()) {
-                    let (reasoning, clean) = extract_think_tags(content);
-                    if let Some(reasoning) = reasoning {
-                        message["content"] = serde_json::Value::String(clean);
-                        message["reasoning_content"] = serde_json::Value::String(reasoning);
-                    }
+            if let Some(message) = choice.get_mut("message")
+                && let Some(content) = message.get("content").and_then(|c| c.as_str())
+            {
+                let (reasoning, clean) = extract_think_tags(content);
+                if let Some(reasoning) = reasoning {
+                    message["content"] = serde_json::Value::String(clean);
+                    message["reasoning_content"] = serde_json::Value::String(reasoning);
                 }
-                // If engine already provides reasoning_content, pass it through
             }
+            // If engine already provides reasoning_content, pass it through
         }
     }
 
@@ -84,16 +84,16 @@ pub fn inject_reasoning_content_delta(sse_line: &str) -> String {
 
     if let Some(choices) = value.get_mut("choices").and_then(|c| c.as_array_mut()) {
         for choice in choices.iter_mut() {
-            if let Some(delta) = choice.get_mut("delta") {
-                if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
-                    let (reasoning, clean) = extract_think_tags(content);
-                    if let Some(reasoning) = reasoning {
-                        delta["content"] = serde_json::Value::String(clean);
-                        delta["reasoning_content"] = serde_json::Value::String(reasoning);
-                    }
+            if let Some(delta) = choice.get_mut("delta")
+                && let Some(content) = delta.get("content").and_then(|c| c.as_str())
+            {
+                let (reasoning, clean) = extract_think_tags(content);
+                if let Some(reasoning) = reasoning {
+                    delta["content"] = serde_json::Value::String(clean);
+                    delta["reasoning_content"] = serde_json::Value::String(reasoning);
                 }
-                // Pass through native reasoning_content from the engine
             }
+            // Pass through native reasoning_content from the engine
         }
     }
 
@@ -236,17 +236,15 @@ pub fn apply_think_for_engine(
                     // Suppress reasoning — only needed for thinking-capable models.
                     // Non-thinking models (Gemma, Llama, Phi) never generate <think> tokens.
                     let is_thinking = model_caps.map(|c| c.thinking).unwrap_or(false);
-                    if is_thinking {
-                        if let Some(obj) = body.as_object_mut() {
-                            let kwargs = obj
-                                .entry("chat_template_kwargs")
-                                .or_insert_with(|| serde_json::json!({}));
-                            if let Some(map) = kwargs.as_object_mut() {
-                                map.insert(
-                                    "enable_thinking".to_string(),
-                                    serde_json::Value::Bool(false),
-                                );
-                            }
+                    if is_thinking && let Some(obj) = body.as_object_mut() {
+                        let kwargs = obj
+                            .entry("chat_template_kwargs")
+                            .or_insert_with(|| serde_json::json!({}));
+                        if let Some(map) = kwargs.as_object_mut() {
+                            map.insert(
+                                "enable_thinking".to_string(),
+                                serde_json::Value::Bool(false),
+                            );
                         }
                     }
                 }
@@ -262,22 +260,20 @@ pub fn apply_think_for_engine(
                     //
                     // We log a warning here so operators can diagnose repetition loops in logs.
                     let is_thinking = model_caps.map(|c| c.thinking).unwrap_or(false);
-                    if is_thinking {
-                        if let Some(obj) = body.as_object_mut() {
-                            let current_temp = obj
-                                .get("temperature")
-                                .and_then(|v| v.as_f64())
-                                .unwrap_or(1.0);
+                    if is_thinking && let Some(obj) = body.as_object_mut() {
+                        let current_temp = obj
+                            .get("temperature")
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(1.0);
 
-                            if current_temp < 0.6 {
-                                warn!(
-                                    current_temp,
-                                    recommended_minimum = 0.6,
-                                    "temperature below recommended minimum for Qwen3 thinking mode — \
+                        if current_temp < 0.6 {
+                            warn!(
+                                current_temp,
+                                recommended_minimum = 0.6,
+                                "temperature below recommended minimum for Qwen3 thinking mode — \
                                      repetition loops are likely. Set llm_thinking_temperature >= 0.6 \
                                      in the calling client. LMForge will NOT override the client value."
-                                );
-                            }
+                            );
                         }
                     }
                 }
@@ -287,17 +283,17 @@ pub fn apply_think_for_engine(
         "llamacpp" | "sglang" => {
             // If explicit `think` field given, set/override enable_thinking (field always wins).
             // If only kwargs form was sent directly, leave it as-is (already correct form).
-            if let Some(think) = think_bool_from_field {
-                if let Some(obj) = body.as_object_mut() {
-                    let kwargs = obj
-                        .entry("chat_template_kwargs")
-                        .or_insert_with(|| serde_json::json!({}));
-                    if let Some(map) = kwargs.as_object_mut() {
-                        map.insert(
-                            "enable_thinking".to_string(),
-                            serde_json::Value::Bool(think),
-                        );
-                    }
+            if let Some(think) = think_bool_from_field
+                && let Some(obj) = body.as_object_mut()
+            {
+                let kwargs = obj
+                    .entry("chat_template_kwargs")
+                    .or_insert_with(|| serde_json::json!({}));
+                if let Some(map) = kwargs.as_object_mut() {
+                    map.insert(
+                        "enable_thinking".to_string(),
+                        serde_json::Value::Bool(think),
+                    );
                 }
             }
         }
@@ -330,10 +326,12 @@ pub fn extract_thinking_budget(body: &serde_json::Value) -> Option<u32> {
 /// Returns false if not present or not a boolean. This is a read-only
 /// operation; it does not remove the field from the request body.
 pub fn extract_stream_reasoning_deltas(body: &serde_json::Value) -> bool {
-    if let Some(extra) = body.get("extra_body") {
-        if let Some(v) = extra.get("stream_reasoning_deltas").and_then(|v| v.as_bool()) {
-            return v;
-        }
+    if let Some(extra) = body.get("extra_body")
+        && let Some(v) = extra
+            .get("stream_reasoning_deltas")
+            .and_then(|v| v.as_bool())
+    {
+        return v;
     }
     body.get("stream_reasoning_deltas")
         .and_then(|v| v.as_bool())

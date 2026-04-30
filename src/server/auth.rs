@@ -13,12 +13,11 @@ pub fn check_auth(bind_address: &str, api_key: &Option<String>, auth_header: Opt
 
     // Non-loopback with API key configured: require matching Bearer token
     if let Some(expected_key) = api_key {
-        if let Some(header) = auth_header {
-            if let Some(token) = header.strip_prefix("Bearer ") {
-                if token == expected_key {
-                    return true;
-                }
-            }
+        if let Some(header) = auth_header
+            && let Some(token) = header.strip_prefix("Bearer ")
+            && token == expected_key
+        {
+            return true;
         }
         debug!("Auth rejected: invalid or missing API key");
         return false;

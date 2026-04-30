@@ -52,16 +52,16 @@ pub async fn run(
     );
 
     // Read last N lines
-    let content = std::fs::read_to_string(&log_file)?;
+    let content = std::fs::read_to_string(log_file)?;
     let lines: Vec<&str> = content.lines().collect();
     let start = lines.len().saturating_sub(tail);
 
     for line in &lines[start..] {
         // Apply component filter if set
-        if let Some(ref comp) = component {
-            if !line.contains(comp) {
-                continue;
-            }
+        if let Some(ref comp) = component
+            && !line.contains(comp)
+        {
+            continue;
         }
 
         if json {

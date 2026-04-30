@@ -142,9 +142,10 @@ pub async fn rerank(State(state): State<AppState>, body: Bytes) -> impl IntoResp
         }
     });
 
-    if let Some(entry) = index.get(&model_id) {
-        if !entry.capabilities.reranking {
-            return Response::builder()
+    if let Some(entry) = index.get(&model_id)
+        && !entry.capabilities.reranking
+    {
+        return Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(format!(
@@ -153,7 +154,6 @@ pub async fn rerank(State(state): State<AppState>, body: Bytes) -> impl IntoResp
                 )))
                 .unwrap()
                 .into_response();
-        }
     }
 
     // --- Ensure model is loaded ---
@@ -278,10 +278,8 @@ fn normalize_rerank_response(
                 "index": idx,
                 "relevance_score": score,
             });
-            if return_documents {
-                if let Some(text) = documents.get(*idx) {
-                    item["document"] = serde_json::json!({ "text": text });
-                }
+            if return_documents && let Some(text) = documents.get(*idx) {
+                item["document"] = serde_json::json!({ "text": text });
             }
             item
         })

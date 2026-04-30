@@ -60,7 +60,7 @@ pub async fn download_model(
 
     // If it's a URL (not an HF repo), download directly
     if hf_repo.contains("://") {
-        let filename = hf_repo.split('/').last().unwrap_or("model");
+        let filename = hf_repo.split('/').next_back().unwrap_or("model");
         let dest = dest_dir.join(filename);
         total_bytes += download_file(
             &client,

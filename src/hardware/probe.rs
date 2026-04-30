@@ -135,10 +135,9 @@ fn check_nvidia_present() -> bool {
         .arg("--query-gpu=name")
         .arg("--format=csv,noheader")
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            return true;
-        }
+        return true;
     }
 
     // Check for /dev/nvidia0
@@ -147,10 +146,10 @@ fn check_nvidia_present() -> bool {
 
 fn check_amd_present() -> bool {
     // Check for ROCm SMI
-    if let Ok(output) = std::process::Command::new("rocm-smi").output() {
-        if output.status.success() {
-            return true;
-        }
+    if let Ok(output) = std::process::Command::new("rocm-smi").output()
+        && output.status.success()
+    {
+        return true;
     }
 
     // Check for DRI render device (common on AMD Linux)

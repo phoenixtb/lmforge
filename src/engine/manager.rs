@@ -290,10 +290,10 @@ impl EngineManager {
             if start.elapsed() > std::time::Duration::from_secs(120) {
                 bail!("Engine Adapter failed health verify on port {}", port);
             }
-            if let Ok(resp) = client.get(&health_url).send().await {
-                if resp.status().is_success() {
-                    return Ok(());
-                }
+            if let Ok(resp) = client.get(&health_url).send().await
+                && resp.status().is_success()
+            {
+                return Ok(());
             }
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
@@ -413,19 +413,17 @@ impl EngineManager {
 
         self.evict_for_vram(needed_vram_gb).await?;
 
-        if self.max_loaded_models > 0 && self.active_slots.len() >= self.max_loaded_models as usize
-        {
-            if let Some((oldest_id, _)) = self
+        if self.max_loaded_models > 0
+            && self.active_slots.len() >= self.max_loaded_models as usize
+            && let Some((oldest_id, _)) = self
                 .active_slots
                 .iter()
                 .min_by_key(|(_, slot)| slot.last_accessed)
                 .map(|(k, v)| (k.clone(), v.last_accessed))
-            {
-                if let Some(mut slot) = self.active_slots.remove(&oldest_id) {
-                    let _ = self.stop_slot(&mut slot).await;
-                    self.state.write().await.running_models.remove(&oldest_id);
-                }
-            }
+            && let Some(mut slot) = self.active_slots.remove(&oldest_id)
+        {
+            let _ = self.stop_slot(&mut slot).await;
+            self.state.write().await.running_models.remove(&oldest_id);
         }
 
         let port = self.allocate_port();
@@ -526,11 +524,10 @@ impl EngineManager {
                     let now = keepalive::now_secs();
                     let mut to_evict = Vec::new();
                     for (id, slot) in self.active_slots.iter() {
-                        if slot.keep_alive_secs > 0 && (now.saturating_sub(slot.last_accessed) > slot.keep_alive_secs) {
-                            if self.config.id != "omlx" {
+                        if slot.keep_alive_secs > 0 && (now.saturating_sub(slot.last_accessed) > slot.keep_alive_secs)
+                            && self.config.id != "omlx" {
                                 to_evict.push(id.clone());
                             }
-                        }
                     }
 
                     for id in to_evict {
@@ -559,23 +556,23 @@ impl EngineManager {
 }
 
 fn kill_orphan_engine(pid_file: &std::path::Path) {
-    if let Ok(content) = std::fs::read_to_string(pid_file) {
-        if let Ok(pid) = content.trim().parse::<u32>() {
-            #[cfg(unix)]
-            {
-                use nix::sys::signal::{Signal, kill};
-                use nix::unistd::Pid;
-                let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
-            }
-            #[cfg(windows)]
-            {
-                // taskkill /F (force) /PID <pid> — equivalent of SIGKILL on Windows
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/F", "/PID", &pid.to_string()])
-                    .output();
-            }
-            let _ = std::fs::remove_file(pid_file);
+    if let Ok(content) = std::fs::read_to_string(pid_file)
+        && let Ok(pid) = content.trim().parse::<u32>()
+    {
+        #[cfg(unix)]
+        {
+            use nix::sys::signal::{Signal, kill};
+            use nix::unistd::Pid;
+            let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
         }
+        #[cfg(windows)]
+        {
+            // taskkill /F (force) /PID <pid> — equivalent of SIGKILL on Windows
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/PID", &pid.to_string()])
+                .output();
+        }
+        let _ = std::fs::remove_file(pid_file);
     }
 }
 

@@ -133,14 +133,14 @@ pub async fn ensure_daemon_running(
     for i in 0..max_attempts {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-        if let Ok(resp) = client.get(&url).send().await {
-            if resp.status().is_success() {
-                // Clear the progress line
-                print!("\r\x1b[2K");
-                std::io::Write::flush(&mut std::io::stdout()).ok();
-                info!(elapsed_secs = i / 2, "Daemon is healthy after auto-start");
-                return Ok(true);
-            }
+        if let Ok(resp) = client.get(&url).send().await
+            && resp.status().is_success()
+        {
+            // Clear the progress line
+            print!("\r\x1b[2K");
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+            info!(elapsed_secs = i / 2, "Daemon is healthy after auto-start");
+            return Ok(true);
         }
 
         // Overwrite the same line with elapsed seconds

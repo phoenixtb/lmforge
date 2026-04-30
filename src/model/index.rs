@@ -94,10 +94,10 @@ impl ModelIndex {
             if m.id == id {
                 return true;
             }
-            if let Some(repo) = &m.hf_repo {
-                if repo == id {
-                    return true;
-                }
+            if let Some(repo) = &m.hf_repo
+                && repo == id
+            {
+                return true;
             }
             if m.path.ends_with(&format!("/{}", id)) {
                 return true;
@@ -120,15 +120,15 @@ impl ModelIndex {
 /// Calculate directory size recursively
 pub fn dir_size(path: &std::path::Path) -> u64 {
     let mut total = 0u64;
-    if path.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(path) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                if p.is_dir() {
-                    total += dir_size(&p);
-                } else if let Ok(meta) = p.metadata() {
-                    total += meta.len();
-                }
+    if path.is_dir()
+        && let Ok(entries) = std::fs::read_dir(path)
+    {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                total += dir_size(&p);
+            } else if let Ok(meta) = p.metadata() {
+                total += meta.len();
             }
         }
     }
@@ -180,101 +180,99 @@ pub fn detect_capabilities(
     // flag early and later signals will only reinforce it.
     // =========================================================================
     let gen_config_path = model_dir.join("generation_config.json");
-    if let Ok(content) = std::fs::read_to_string(&gen_config_path) {
-        if let Ok(gc) = serde_json::from_str::<serde_json::Value>(&content) {
-            if gc["is_embedding"].as_bool() == Some(true) {
-                caps.embeddings = true;
-                caps.chat = false;
-                debug!("Signal D: is_embedding=true in generation_config.json");
-            }
-        }
+    if let Ok(content) = std::fs::read_to_string(&gen_config_path)
+        && let Ok(gc) = serde_json::from_str::<serde_json::Value>(&content)
+        && gc["is_embedding"].as_bool() == Some(true)
+    {
+        caps.embeddings = true;
+        caps.chat = false;
+        debug!("Signal D: is_embedding=true in generation_config.json");
     }
 
     // =========================================================================
     // config.json — architecture + model_type analysis
     // =========================================================================
     let config_path = model_dir.join("config.json");
-    if let Ok(content) = std::fs::read_to_string(&config_path) {
-        if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
-            let model_type = config["model_type"].as_str().unwrap_or("").to_lowercase();
-            let num_labels = config["num_labels"].as_u64().unwrap_or(0);
+    if let Ok(content) = std::fs::read_to_string(&config_path)
+        && let Ok(config) = serde_json::from_str::<serde_json::Value>(&content)
+    {
+        let model_type = config["model_type"].as_str().unwrap_or("").to_lowercase();
+        let num_labels = config["num_labels"].as_u64().unwrap_or(0);
 
-            // --- Re-ranker detection (highest priority — must precede embed check) ---
-            // Signal 1: architectures array contains a sequence-classification head
-            let is_seq_classifier = config["architectures"]
-                .as_array()
-                .map(|archs| {
-                    archs.iter().any(|a| {
-                        a.as_str()
-                            .unwrap_or("")
-                            .contains("ForSequenceClassification")
-                    })
+        // --- Re-ranker detection (highest priority — must precede embed check) ---
+        // Signal 1: architectures array contains a sequence-classification head
+        let is_seq_classifier = config["architectures"]
+            .as_array()
+            .map(|archs| {
+                archs.iter().any(|a| {
+                    a.as_str()
+                        .unwrap_or("")
+                        .contains("ForSequenceClassification")
                 })
-                .unwrap_or(false);
+            })
+            .unwrap_or(false);
 
-            // num_labels == 1 → binary relevance score (cross-encoder re-ranker)
-            if is_seq_classifier && num_labels == 1 {
-                caps.reranking = true;
-            }
+        // num_labels == 1 → binary relevance score (cross-encoder re-ranker)
+        if is_seq_classifier && num_labels == 1 {
+            caps.reranking = true;
+        }
 
-            // --- Chat model detection ---
-            // Generative re-rankers (Qwen3-Reranker etc.) intentionally set both flags so
-            // llama.cpp can load them with --reranking while still being a decoder model.
-            // Guard: do not set chat=true if embeddings was already forced by a high-priority
-            // signal (Signal D: is_embedding=true in generation_config.json). That signal is
-            // explicitly trusted and must not be overridden by architecture detection.
-            if !caps.embeddings
-                && [
-                    "qwen3",
-                    "qwen2",
-                    "llama",
-                    "mistral",
-                    "deepseek",
-                    "phi",
-                    "gemma",
-                    "granite",
-                    "starcoder",
-                    "falcon",
-                ]
+        // --- Chat model detection ---
+        // Generative re-rankers (Qwen3-Reranker etc.) intentionally set both flags so
+        // llama.cpp can load them with --reranking while still being a decoder model.
+        // Guard: do not set chat=true if embeddings was already forced by a high-priority
+        // signal (Signal D: is_embedding=true in generation_config.json). That signal is
+        // explicitly trusted and must not be overridden by architecture detection.
+        if !caps.embeddings
+            && [
+                "qwen3",
+                "qwen2",
+                "llama",
+                "mistral",
+                "deepseek",
+                "phi",
+                "gemma",
+                "granite",
+                "starcoder",
+                "falcon",
+            ]
+            .iter()
+            .any(|t| model_type.contains(t))
+        {
+            caps.chat = true;
+        }
+
+        // --- Encoder-only embedding model detection (only when not a cross-encoder re-ranker) ---
+        // These model types are unambiguously embedding-only (BERT / RoBERTa families).
+        if !caps.reranking
+            && ["nomic", "bert", "xlm-roberta", "roberta", "distilbert"]
                 .iter()
                 .any(|t| model_type.contains(t))
+        {
+            caps.embeddings = true;
+            caps.chat = false; // pure embedding models do not support chat
+        }
+
+        // --- Embedding dimensions ---
+        if caps.embeddings {
+            if let Some(hidden_size) = config["hidden_size"].as_u64() {
+                caps.embedding_dims = Some(hidden_size as u32);
+            }
+            if caps.embedding_dims.is_none()
+                && let Some(d_model) = config["d_model"].as_u64()
             {
-                caps.chat = true;
+                caps.embedding_dims = Some(d_model as u32);
             }
+        }
 
-            // --- Encoder-only embedding model detection (only when not a cross-encoder re-ranker) ---
-            // These model types are unambiguously embedding-only (BERT / RoBERTa families).
-            if !caps.reranking {
-                if ["nomic", "bert", "xlm-roberta", "roberta", "distilbert"]
-                    .iter()
-                    .any(|t| model_type.contains(t))
-                {
-                    caps.embeddings = true;
-                    caps.chat = false; // pure embedding models do not support chat
-                }
-            }
-
-            // --- Embedding dimensions ---
-            if caps.embeddings {
-                if let Some(hidden_size) = config["hidden_size"].as_u64() {
-                    caps.embedding_dims = Some(hidden_size as u32);
-                }
-                if caps.embedding_dims.is_none() {
-                    if let Some(d_model) = config["d_model"].as_u64() {
-                        caps.embedding_dims = Some(d_model as u32);
-                    }
-                }
-            }
-
-            // --- Pooling strategy ---
-            if let Some(pt) = config["pooling_config"]["pooling_type"].as_str() {
-                caps.pooling = Some(pt.to_lowercase());
-            }
-            if caps.pooling.is_none() {
-                if let Some(np) = config["nomic_embed_config"]["pooling"].as_str() {
-                    caps.pooling = Some(np.to_lowercase());
-                }
-            }
+        // --- Pooling strategy ---
+        if let Some(pt) = config["pooling_config"]["pooling_type"].as_str() {
+            caps.pooling = Some(pt.to_lowercase());
+        }
+        if caps.pooling.is_none()
+            && let Some(np) = config["nomic_embed_config"]["pooling"].as_str()
+        {
+            caps.pooling = Some(np.to_lowercase());
         }
     }
 
@@ -350,15 +348,15 @@ pub fn detect_capabilities(
     if caps.chat && caps.embeddings {
         // Contradictory state: architecture says chat, name says embed.
         // Use tokenizer_config as tiebreaker.
-        if let Ok(content) = std::fs::read_to_string(&tokenizer_config_path) {
-            if let Ok(tc) = serde_json::from_str::<serde_json::Value>(&content) {
-                let has_chat_template = tc.get("chat_template").is_some();
-                if !has_chat_template {
-                    caps.chat = false;
-                    debug!(
-                        "Signal C: no chat_template in tokenizer_config.json — clearing chat=true for embedding model"
-                    );
-                }
+        if let Ok(content) = std::fs::read_to_string(&tokenizer_config_path)
+            && let Ok(tc) = serde_json::from_str::<serde_json::Value>(&content)
+        {
+            let has_chat_template = tc.get("chat_template").is_some();
+            if !has_chat_template {
+                caps.chat = false;
+                debug!(
+                    "Signal C: no chat_template in tokenizer_config.json — clearing chat=true for embedding model"
+                );
             }
         }
     }
@@ -368,44 +366,42 @@ pub fn detect_capabilities(
     // models (which set embedding_dims=None during config.json parsing because
     // caps.embeddings was false at that point) get their dims populated.
     // =========================================================================
-    if caps.embeddings && caps.embedding_dims.is_none() {
-        if let Ok(content) = std::fs::read_to_string(&config_path) {
-            if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(hidden_size) = config["hidden_size"].as_u64() {
-                    caps.embedding_dims = Some(hidden_size as u32);
-                }
-                if caps.embedding_dims.is_none() {
-                    if let Some(d_model) = config["d_model"].as_u64() {
-                        caps.embedding_dims = Some(d_model as u32);
-                    }
-                }
-            }
+    if caps.embeddings
+        && caps.embedding_dims.is_none()
+        && let Ok(content) = std::fs::read_to_string(&config_path)
+        && let Ok(config) = serde_json::from_str::<serde_json::Value>(&content)
+    {
+        if let Some(hidden_size) = config["hidden_size"].as_u64() {
+            caps.embedding_dims = Some(hidden_size as u32);
+        }
+        if caps.embedding_dims.is_none()
+            && let Some(d_model) = config["d_model"].as_u64()
+        {
+            caps.embedding_dims = Some(d_model as u32);
         }
     }
 
     // =========================================================================
     // Thinking / reasoning detection (unchanged)
     // =========================================================================
-    if let Ok(content) = std::fs::read_to_string(&tokenizer_config_path) {
-        if content.contains("<think>")
+    if let Ok(content) = std::fs::read_to_string(&tokenizer_config_path)
+        && (content.contains("<think>")
             || content.contains("enable_thinking")
-            || content.contains("reasoning_content")
-        {
-            // Only set thinking on chat models — embedding models also ship with
-            // Qwen3's thinking-capable tokenizer but cannot generate thought tokens.
-            if caps.chat {
-                caps.thinking = true;
-            }
+            || content.contains("reasoning_content"))
+    {
+        // Only set thinking on chat models — embedding models also ship with
+        // Qwen3's thinking-capable tokenizer but cannot generate thought tokens.
+        if caps.chat {
+            caps.thinking = true;
         }
     }
 
     let jinja_path = model_dir.join("chat_template.jinja");
-    if caps.chat {
-        if let Ok(content) = std::fs::read_to_string(&jinja_path) {
-            if content.contains("<think>") || content.contains("enable_thinking") {
-                caps.thinking = true;
-            }
-        }
+    if caps.chat
+        && let Ok(content) = std::fs::read_to_string(&jinja_path)
+        && (content.contains("<think>") || content.contains("enable_thinking"))
+    {
+        caps.thinking = true;
     }
 
     caps

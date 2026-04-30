@@ -24,6 +24,7 @@ fn load_index(data_dir: &std::path::Path) -> crate::model::index::ModelIndex {
 /// Returns `Ok(())` if the model is suitable, or an `Err(Response)` with a 400 body
 /// describing why the model cannot be used for this purpose.
 /// Models not found in the index are allowed through — the engine will handle the error.
+#[allow(clippy::result_large_err)] // Response<Body> is inherently large; boxing at all call sites is more disruptive
 fn check_model_role(
     index: &crate::model::index::ModelIndex,
     model_id: &str,
@@ -174,15 +175,14 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     };
 
     // Rewrite model_id to the exact filesystem directory name so engines don't panic
-    if let Some(entry) = index.get(&model_id) {
-        if let Some(dir_name) = std::path::Path::new(&entry.path).file_name() {
-            if let Some(obj) = body_value.as_object_mut() {
-                obj.insert(
-                    "model".to_string(),
-                    serde_json::Value::String(dir_name.to_string_lossy().to_string()),
-                );
-            }
-        }
+    if let Some(entry) = index.get(&model_id)
+        && let Some(dir_name) = std::path::Path::new(&entry.path).file_name()
+        && let Some(obj) = body_value.as_object_mut()
+    {
+        obj.insert(
+            "model".to_string(),
+            serde_json::Value::String(dir_name.to_string_lossy().to_string()),
+        );
     }
 
     let client = proxy::build_proxy_client();
@@ -375,15 +375,14 @@ pub async fn completions(State(state): State<AppState>, body: Bytes) -> impl Int
             models: vec![],
         }
     });
-    if let Some(entry) = index.get(&model_id) {
-        if let Some(dir_name) = std::path::Path::new(&entry.path).file_name() {
-            if let Some(obj) = body_value.as_object_mut() {
-                obj.insert(
-                    "model".to_string(),
-                    serde_json::Value::String(dir_name.to_string_lossy().to_string()),
-                );
-            }
-        }
+    if let Some(entry) = index.get(&model_id)
+        && let Some(dir_name) = std::path::Path::new(&entry.path).file_name()
+        && let Some(obj) = body_value.as_object_mut()
+    {
+        obj.insert(
+            "model".to_string(),
+            serde_json::Value::String(dir_name.to_string_lossy().to_string()),
+        );
     }
 
     let forwarded_body = Bytes::from(serde_json::to_vec(&body_value).unwrap_or_default());
@@ -460,10 +459,7 @@ pub async fn embeddings(State(state): State<AppState>, body: Bytes) -> impl Into
     // If `input` is an array with more than `batch_size` items, split into sub-batches,
     // call the engine for each, merge `data[]` arrays and sum usage tokens.
     let result: Result<(u16, String), (u16, String)> = {
-        let inputs_opt = body_value
-            .get("input")
-            .and_then(|v| v.as_array())
-            .map(|a| a.clone());
+        let inputs_opt = body_value.get("input").and_then(|v| v.as_array()).cloned();
 
         if let Some(inputs) = inputs_opt.filter(|a| a.len() > batch_size) {
             proxy_embeddings_batched(
@@ -477,10 +473,10 @@ pub async fn embeddings(State(state): State<AppState>, body: Bytes) -> impl Into
             .await
         } else {
             // Single string or small array -- pass through unchanged
-            if let Some(ref name) = dir_name {
-                if let Some(obj) = body_value.as_object_mut() {
-                    obj.insert("model".to_string(), serde_json::Value::String(name.clone()));
-                }
+            if let Some(ref name) = dir_name
+                && let Some(obj) = body_value.as_object_mut()
+            {
+                obj.insert("model".to_string(), serde_json::Value::String(name.clone()));
             }
             let forwarded = Bytes::from(serde_json::to_vec(&body_value).unwrap_or_default());
             proxy::proxy_request(&client, engine_port, "/v1/embeddings", forwarded).await

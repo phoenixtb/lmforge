@@ -93,24 +93,23 @@ impl EngineRegistry {
         debug!("Loaded {} default engines", registry.engine.len());
 
         // Merge user overrides if present
-        if let Some(path) = user_override_path {
-            if path.exists() {
-                let user_content =
-                    std::fs::read_to_string(path).context("Failed to read user engines.toml")?;
-                let user_registry: EngineRegistryFile =
-                    toml::from_str(&user_content).context("Failed to parse user engines.toml")?;
+        if let Some(path) = user_override_path
+            && path.exists()
+        {
+            let user_content =
+                std::fs::read_to_string(path).context("Failed to read user engines.toml")?;
+            let user_registry: EngineRegistryFile =
+                toml::from_str(&user_content).context("Failed to parse user engines.toml")?;
 
-                for user_engine in user_registry.engine {
-                    // Override existing or add new
-                    if let Some(existing) =
-                        registry.engine.iter_mut().find(|e| e.id == user_engine.id)
-                    {
-                        info!(engine = %user_engine.id, "User override for engine");
-                        *existing = user_engine;
-                    } else {
-                        info!(engine = %user_engine.id, "User added custom engine");
-                        registry.engine.push(user_engine);
-                    }
+            for user_engine in user_registry.engine {
+                // Override existing or add new
+                if let Some(existing) = registry.engine.iter_mut().find(|e| e.id == user_engine.id)
+                {
+                    info!(engine = %user_engine.id, "User override for engine");
+                    *existing = user_engine;
+                } else {
+                    info!(engine = %user_engine.id, "User added custom engine");
+                    registry.engine.push(user_engine);
                 }
             }
         }
@@ -228,10 +227,10 @@ fn engine_matches(engine: &EngineConfig, profile: &HardwareProfile) -> bool {
     }
 
     // Check minimum VRAM
-    if let Some(min_vram) = engine.min_vram_gb {
-        if profile.vram_gb < min_vram {
-            return false;
-        }
+    if let Some(min_vram) = engine.min_vram_gb
+        && profile.vram_gb < min_vram
+    {
+        return false;
     }
 
     true

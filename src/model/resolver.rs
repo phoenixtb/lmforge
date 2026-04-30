@@ -52,7 +52,7 @@ pub async fn resolve(
     if input.contains("://") {
         return Ok(ResolvedModel {
             id: input.to_string(),
-            dir_name: input.split('/').last().unwrap_or("model").to_string(),
+            dir_name: input.split('/').next_back().unwrap_or("model").to_string(),
             hf_repo: input.to_string(),
             format: detect_format_from_engine(engine_format),
             files: vec![input.to_string()],
@@ -160,7 +160,7 @@ async fn resolve_hf_repo(
     };
 
     // Derive a friendly dir name
-    let dir_name = repo.split('/').last().unwrap_or(repo).to_lowercase();
+    let dir_name = repo.split('/').next_back().unwrap_or(repo).to_lowercase();
 
     debug!(repo, ?format, file_count = files.len(), "Resolved HF repo");
 

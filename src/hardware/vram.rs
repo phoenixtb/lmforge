@@ -86,9 +86,9 @@ fn get_free_apple_vram() -> f32 {
     use sysinfo::System;
     let mut sys = System::new_all();
     sys.refresh_memory();
-    let free_ram_gb = sys.available_memory() as f32 / (1024.0 * 1024.0 * 1024.0);
+
     // On Mac, we just report fully available memory since unified handles it.
-    free_ram_gb
+    sys.available_memory() as f32 / (1024.0 * 1024.0 * 1024.0)
 }
 
 /// NVIDIA: parse nvidia-smi for total GPU memory.
@@ -98,19 +98,17 @@ fn estimate_nvidia_vram() -> f32 {
     if let Ok(output) = std::process::Command::new("nvidia-smi")
         .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
         .output()
+        && output.status.success()
+        && let Ok(stdout) = String::from_utf8(output.stdout)
     {
-        if output.status.success() {
-            if let Ok(stdout) = String::from_utf8(output.stdout) {
-                // nvidia-smi reports in MiB, may have multiple GPUs (one per line)
-                // Take the first GPU's value
-                if let Some(first_line) = stdout.lines().next() {
-                    if let Ok(total_mib) = first_line.trim().parse::<f32>() {
-                        let total_gb = total_mib / 1024.0;
-                        let usable = (total_gb - 0.5).max(0.0); // subtract 512 MB overhead
-                        return usable;
-                    }
-                }
-            }
+        // nvidia-smi reports in MiB, may have multiple GPUs (one per line)
+        // Take the first GPU's value
+        if let Some(first_line) = stdout.lines().next()
+            && let Ok(total_mib) = first_line.trim().parse::<f32>()
+        {
+            let total_gb = total_mib / 1024.0;
+            let usable = (total_gb - 0.5).max(0.0); // subtract 512 MB overhead
+            return usable;
         }
     }
 
@@ -141,17 +139,13 @@ fn get_free_nvidia_vram() -> f32 {
     if let Ok(output) = std::process::Command::new("nvidia-smi")
         .args(["--query-gpu=memory.free", "--format=csv,noheader,nounits"])
         .output()
+        && output.status.success()
+        && let Ok(stdout) = String::from_utf8(output.stdout)
+        && let Some(first_line) = stdout.lines().next()
+        && let Ok(free_mib) = first_line.trim().parse::<f32>()
     {
-        if output.status.success() {
-            if let Ok(stdout) = String::from_utf8(output.stdout) {
-                if let Some(first_line) = stdout.lines().next() {
-                    if let Ok(free_mib) = first_line.trim().parse::<f32>() {
-                        let free_gb = free_mib / 1024.0;
-                        return (free_gb - 0.5).max(0.0); // 512MB safety pad
-                    }
-                }
-            }
-        }
+        let free_gb = free_mib / 1024.0;
+        return (free_gb - 0.5).max(0.0); // 512MB safety pad
     }
     0.0
 }
@@ -162,19 +156,16 @@ fn estimate_amd_vram() -> f32 {
     if let Ok(output) = std::process::Command::new("rocm-smi")
         .args(["--showmeminfo", "vram"])
         .output()
+        && output.status.success()
+        && let Ok(stdout) = String::from_utf8(output.stdout)
     {
-        if output.status.success() {
-            if let Ok(stdout) = String::from_utf8(output.stdout) {
-                // Parse "Total Memory (B): <bytes>" line
-                for line in stdout.lines() {
-                    if line.contains("Total Memory") {
-                        if let Some(bytes_str) = line.split(':').nth(1) {
-                            if let Ok(bytes) = bytes_str.trim().parse::<f64>() {
-                                return (bytes / (1024.0 * 1024.0 * 1024.0)) as f32;
-                            }
-                        }
-                    }
-                }
+        // Parse "Total Memory (B): <bytes>" line
+        for line in stdout.lines() {
+            if line.contains("Total Memory")
+                && let Some(bytes_str) = line.split(':').nth(1)
+                && let Ok(bytes) = bytes_str.trim().parse::<f64>()
+            {
+                return (bytes / (1024.0 * 1024.0 * 1024.0)) as f32;
             }
         }
     }
@@ -188,30 +179,27 @@ fn get_free_amd_vram() -> f32 {
     if let Ok(output) = std::process::Command::new("rocm-smi")
         .args(["--showmeminfo", "vram"])
         .output()
+        && output.status.success()
+        && let Ok(stdout) = String::from_utf8(output.stdout)
     {
-        if output.status.success() {
-            if let Ok(stdout) = String::from_utf8(output.stdout) {
-                let mut total = 0.0;
-                let mut used = 0.0;
-                for line in stdout.lines() {
-                    if line.contains("Total Memory") {
-                        if let Some(bytes_str) = line.split(':').nth(1) {
-                            if let Ok(bytes) = bytes_str.trim().parse::<f64>() {
-                                total = bytes / (1024.0 * 1024.0 * 1024.0);
-                            }
-                        }
-                    } else if line.contains("Total Used Memory") {
-                        if let Some(bytes_str) = line.split(':').nth(1) {
-                            if let Ok(bytes) = bytes_str.trim().parse::<f64>() {
-                                used = bytes / (1024.0 * 1024.0 * 1024.0);
-                            }
-                        }
-                    }
+        let mut total = 0.0;
+        let mut used = 0.0;
+        for line in stdout.lines() {
+            if line.contains("Total Memory") {
+                if let Some(bytes_str) = line.split(':').nth(1)
+                    && let Ok(bytes) = bytes_str.trim().parse::<f64>()
+                {
+                    total = bytes / (1024.0 * 1024.0 * 1024.0);
                 }
-                if total > 0.0 {
-                    return (total - used - 0.5).max(0.0) as f32; // 512MB safety pad
-                }
+            } else if line.contains("Total Used Memory")
+                && let Some(bytes_str) = line.split(':').nth(1)
+                && let Ok(bytes) = bytes_str.trim().parse::<f64>()
+            {
+                used = bytes / (1024.0 * 1024.0 * 1024.0);
             }
+        }
+        if total > 0.0 {
+            return (total - used - 0.5).max(0.0) as f32; // 512MB safety pad
         }
     }
     0.0

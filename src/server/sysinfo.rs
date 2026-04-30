@@ -156,9 +156,7 @@ fn probe_bytes() -> Option<&'static [u8]> {
     // LMFORGE_GPU_PROBE_PATH is emitted by build.rs via `cargo:rustc-env=…`
     // only when `swiftc` succeeds. When absent, `option_env!` returns None and
     // the `include_bytes!` arm is never compiled (dead code elimination).
-    if option_env!("LMFORGE_GPU_PROBE_PATH").is_none() {
-        return None;
-    }
+    option_env!("LMFORGE_GPU_PROBE_PATH")?;
     // Safety: the `is_none()` guard above ensures the env var is present, so
     // `env!` cannot panic here.
     Some(include_bytes!(env!("LMFORGE_GPU_PROBE_PATH")))

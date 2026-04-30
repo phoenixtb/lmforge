@@ -226,7 +226,7 @@ pub async fn model_pull(
     let (tx, rx) = tokio::sync::mpsc::channel(100);
 
     let resolved_id = resolved.id.clone();
-    let format = resolved.format.clone();
+    let format = resolved.format;
     let engine_id = state.engine_config.id.clone();
     let adapter = state.adapter.clone();
 
@@ -315,13 +315,12 @@ pub async fn model_unload(
     let mut unload_all = true;
     let mut target_model = String::new();
 
-    if !body.is_empty() {
-        if let Ok(req) = serde_json::from_slice::<serde_json::Value>(&body) {
-            if let Some(m) = req.get("model").and_then(|v| v.as_str()) {
-                unload_all = false;
-                target_model = m.to_string();
-            }
-        }
+    if !body.is_empty()
+        && let Ok(req) = serde_json::from_slice::<serde_json::Value>(&body)
+        && let Some(m) = req.get("model").and_then(|v| v.as_str())
+    {
+        unload_all = false;
+        target_model = m.to_string();
     }
 
     let cmd = if unload_all {
@@ -392,19 +391,19 @@ pub async fn model_delete(
 
     // Remove from disk
     let model_path = std::path::Path::new(&entry.path);
-    if model_path.exists() {
-        if let Err(e) = std::fs::remove_dir_all(model_path) {
-            warn!(error = %e, path = %entry.path, "Failed to delete model files from disk");
-            // Index is already updated — return partial success
-            return Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(format!(
-                    r#"{{"status":"removed_from_index","warning":"Could not delete files: {}"}}"#,
-                    e
-                )))
-                .unwrap();
-        }
+    if model_path.exists()
+        && let Err(e) = std::fs::remove_dir_all(model_path)
+    {
+        warn!(error = %e, path = %entry.path, "Failed to delete model files from disk");
+        // Index is already updated — return partial success
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(format!(
+                r#"{{"status":"removed_from_index","warning":"Could not delete files: {}"}}"#,
+                e
+            )))
+            .unwrap();
     }
 
     info!(model = %name, "Model deleted from index and disk");

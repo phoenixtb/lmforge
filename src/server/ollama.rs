@@ -63,15 +63,14 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
     let model_caps = index.get(&model_id).map(|e| &e.capabilities);
     thinking::apply_think_for_engine(&mut openai_req, &state.engine_config.id, model_caps);
 
-    if let Some(entry) = index.get(&model_id) {
-        if let Some(dir_name) = std::path::Path::new(&entry.path).file_name() {
-            if let Some(obj) = openai_req.as_object_mut() {
-                obj.insert(
-                    "model".to_string(),
-                    serde_json::Value::String(dir_name.to_string_lossy().to_string()),
-                );
-            }
-        }
+    if let Some(entry) = index.get(&model_id)
+        && let Some(dir_name) = std::path::Path::new(&entry.path).file_name()
+        && let Some(obj) = openai_req.as_object_mut()
+    {
+        obj.insert(
+            "model".to_string(),
+            serde_json::Value::String(dir_name.to_string_lossy().to_string()),
+        );
     }
 
     let openai_body = serde_json::to_vec(&openai_req).unwrap_or_default();
@@ -207,15 +206,14 @@ pub async fn generate(State(state): State<AppState>, body: Bytes) -> impl IntoRe
             models: vec![],
         }
     });
-    if let Some(entry) = index.get(&model_id) {
-        if let Some(dir_name) = std::path::Path::new(&entry.path).file_name() {
-            if let Some(obj) = body_value.as_object_mut() {
-                obj.insert(
-                    "model".to_string(),
-                    serde_json::Value::String(dir_name.to_string_lossy().to_string()),
-                );
-            }
-        }
+    if let Some(entry) = index.get(&model_id)
+        && let Some(dir_name) = std::path::Path::new(&entry.path).file_name()
+        && let Some(obj) = body_value.as_object_mut()
+    {
+        obj.insert(
+            "model".to_string(),
+            serde_json::Value::String(dir_name.to_string_lossy().to_string()),
+        );
     }
 
     let forwarded_body = Bytes::from(serde_json::to_vec(&body_value).unwrap_or_default());
