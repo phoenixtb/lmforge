@@ -63,6 +63,7 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 - **VRAM-aware LRU eviction** — loads models up to detected VRAM budget; evicts least-recently-used when full
 - **OpenAI-compatible API** — `/v1/chat/completions`, `/v1/embeddings`, `/v1/models`, `/v1/rerank`
 - **Ollama-compatible API** — `/api/chat`, `/api/generate`, `/api/tags` for tools that expect Ollama
+- **Thinking model support** — native two-call reasoning workflow for Qwen3/DeepSeek-R1 style models with `thinking_budget` token cap, live reasoning delta streaming, and a `call2_prefill` status event for UI feedback during the answer-generation phase
 - **Model catalog** — curated shortcut names (`family:size:quant`) resolving to the right HuggingFace repo and format for your hardware automatically
 - **System service on all platforms** — launchd (macOS), systemd user unit (Linux), Windows Scheduled Task — all via `lmforge service install`, no admin required
 - **Real-time telemetry** — live GPU/CPU/memory metrics, per-model RSS, request latency, request counts
@@ -110,7 +111,7 @@ What the install script does on macOS/Linux:
 
 To pin a specific version:
 ```bash
-LMFORGE_VERSION=v0.1.0 curl -fsSL https://github.com/phoenixtb/lmforge/releases/latest/download/install-core.sh | bash
+LMFORGE_VERSION=v0.1.1 curl -fsSL https://github.com/phoenixtb/lmforge/releases/latest/download/install-core.sh | bash
 ```
 
 ### Desktop UI (optional)
@@ -170,7 +171,19 @@ curl http://127.0.0.1:11430/v1/chat/completions \
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 
-# 5. Embeddings
+# 5. Thinking model with budget cap (Qwen3 / DeepSeek-R1 style)
+curl http://127.0.0.1:11430/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3.5:4b:4bit",
+    "messages": [{"role": "user", "content": "Prove the Pythagorean theorem."}],
+    "think": true,
+    "thinking_budget": 4096,
+    "stream_reasoning_deltas": true,
+    "stream": true
+  }'
+
+# 6. Embeddings
 curl http://127.0.0.1:11430/v1/embeddings \
   -H "Content-Type: application/json" \
   -d '{"model": "nomic-embed-text:v1.5", "input": "Hello world"}'
@@ -266,6 +279,70 @@ For tools that target Ollama (Open WebUI, Continue, etc.):
 | `/lf/model/delete/{name}` | DELETE | Remove a model from disk |
 | `/lf/config` | GET | Current runtime configuration |
 | `/lf/shutdown` | POST | Graceful daemon shutdown |
+
+---
+
+### Thinking Models (oMLX / Apple Silicon)
+
+For models with native reasoning capability (Qwen3, DeepSeek-R1 distillations), LMForge
+implements a **two-call thinking-budget workflow** that gives you control over how long
+the model reasons before it answers.
+
+#### How it works
+
+1. **Call 1 — Thinking phase:** The model generates reasoning tokens (`<think>…</think>`)
+   up to `thinking_budget` tokens. Reasoning deltas stream live to the client if
+   `stream_reasoning_deltas: true`.
+2. **Call 2 — Answer phase:** Once the budget is exhausted, LMForge appends the
+   accumulated reasoning as a closed `<think>…</think>` assistant turn and sends a second
+   request with `enable_thinking: false`. The answer streams directly to the client
+   token-by-token.
+
+#### Request parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `think` | bool | Enable thinking mode. Required for the budget path. |
+| `thinking_budget` | int | Max reasoning tokens (Call 1 cap). Triggers the two-call path when set. |
+| `stream_reasoning_deltas` | bool | Forward live reasoning tokens to the client during Call 1. |
+| `stream` | bool | Must be `true` for the two-call path. |
+
+#### Example
+
+```bash
+curl http://127.0.0.1:11430/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3.5:4b:4bit",
+    "messages": [{"role": "user", "content": "Explain quantum entanglement."}],
+    "think": true,
+    "thinking_budget": 4096,
+    "stream_reasoning_deltas": true,
+    "stream": true
+  }'
+```
+
+The response stream contains three phases:
+
+```
+# Phase 1 — live reasoning tokens (delta.reasoning_content)
+data: {"choices":[{"delta":{"reasoning_content":"Let me think..."}}]}
+
+# Between phases — call2_prefill status event (ignored by standard clients)
+data: {"choices":[{"delta":{}}],"lmforge":{"status":"call2_prefill","reasoning_len":12453}}
+
+# Phase 2 — answer tokens (delta.content)
+data: {"choices":[{"delta":{"content":"Quantum entanglement is..."}}]}
+```
+
+The `lmforge.status = "call2_prefill"` event marks the start of the KV-cache prefill
+gap (typically 5–15 seconds for 4B models with a 4096-token budget). Clients can use
+this to show a "Generating answer…" indicator. Standard OpenAI clients ignore the
+`lmforge` extension field — it is fully backward-compatible.
+
+> **Note:** The two-call path requires `engine = omlx` (Apple Silicon). On llama.cpp
+> and SGLang, `think: true` translates to `enable_thinking: true` in the chat template
+> and the model generates reasoning natively in a single call.
 
 ---
 
