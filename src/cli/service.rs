@@ -46,8 +46,10 @@ fn home_dir() -> Result<PathBuf> {
 
 // --- macOS Launchd ---
 
+#[cfg(target_os = "macos")]
 static LAUNCHD_LABEL: &str = "com.lmforge.daemon";
 
+#[cfg(target_os = "macos")]
 fn launchd_plist_path() -> Result<PathBuf> {
     Ok(home_dir()?
         .join("Library")
@@ -55,6 +57,7 @@ fn launchd_plist_path() -> Result<PathBuf> {
         .join(format!("{}.plist", LAUNCHD_LABEL)))
 }
 
+#[cfg(target_os = "macos")]
 fn install_launchd(exe_path: &str) -> Result<()> {
     let plist_path = launchd_plist_path()?;
 
@@ -122,6 +125,7 @@ fn install_launchd(exe_path: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn uninstall_launchd() -> Result<()> {
     let plist_path = launchd_plist_path()?;
     if plist_path.exists() {

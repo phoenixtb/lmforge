@@ -45,6 +45,7 @@ pub struct GpuStats {
 
 // ── Raw shape parsed from the Swift probe's JSON ──────────────────────────────
 
+#[cfg(target_os = "macos")]
 #[derive(serde::Deserialize, Default)]
 struct ProbeOutput {
     gpu_util_pct: Option<f64>,
@@ -143,6 +144,7 @@ fn sample_model_procs(slot_info: &[(String, u16)]) -> Vec<ModelProcMem> {
 
 // ── GPU probe (macOS) ─────────────────────────────────────────────────────────
 
+#[cfg(target_os = "macos")]
 const PROBE_BIN_NAME: &str = "lmforge-gpu-probe-aarch64-apple-darwin";
 
 /// Returns the embedded Swift GPU probe bytes, or `None` if the probe was not
@@ -313,15 +315,15 @@ fn run_rocm_smi() -> Option<GpuStats> {
     }
     for line in String::from_utf8_lossy(&out.stdout).lines().skip(1) {
         let cols: Vec<&str> = line.split(',').collect();
-        if cols.len() >= 2 {
-            if let Ok(pct) = cols[1].trim().trim_end_matches('%').parse::<f32>() {
-                return Some(GpuStats {
-                    util_pct: Some(pct),
-                    source: "rocm-smi".into(),
-                    note: "via ROCm".into(),
-                    ..Default::default()
-                });
-            }
+        if cols.len() >= 2
+            && let Ok(pct) = cols[1].trim().trim_end_matches('%').parse::<f32>()
+        {
+            return Some(GpuStats {
+                util_pct: Some(pct),
+                source: "rocm-smi".into(),
+                note: "via ROCm".into(),
+                ..Default::default()
+            });
         }
     }
     None

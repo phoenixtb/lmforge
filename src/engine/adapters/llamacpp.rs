@@ -162,7 +162,7 @@ fn find_gguf_file(model_dir: &Path) -> Option<std::path::PathBuf> {
         .collect();
 
     // Largest file first — single-file models win over small split shards
-    gguf_files.sort_by(|a, b| b.0.cmp(&a.0));
+    gguf_files.sort_by_key(|b| std::cmp::Reverse(b.0));
     gguf_files.into_iter().next().map(|(_, path)| path)
 }
 
