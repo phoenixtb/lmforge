@@ -111,7 +111,7 @@ What the install script does on macOS/Linux:
 
 To pin a specific version:
 ```bash
-LMFORGE_VERSION=v0.1.1 curl -fsSL https://github.com/phoenixtb/lmforge/releases/latest/download/install-core.sh | bash
+LMFORGE_VERSION=v0.1.2 curl -fsSL https://github.com/phoenixtb/lmforge/releases/latest/download/install-core.sh | bash
 ```
 
 ### Desktop UI (optional)
