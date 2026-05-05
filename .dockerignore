@@ -1,0 +1,11 @@
+target/
+ui/node_modules/
+ui/build/
+ui/.svelte-kit/
+ui/src-tauri/target/
+.git/
+.github/
+*.log
+.lmforge/
+docs/
+tests/integration/reports/

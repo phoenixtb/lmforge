@@ -385,6 +385,7 @@ impl EngineManager {
         }
 
         info!(model_id, "Cold load request for model");
+        let load_started = std::time::Instant::now();
 
         let size_bytes = index.get(model_id).map(|m| m.size_bytes).unwrap_or(0);
         let needed_vram_gb = crate::hardware::vram::estimate_model_vram(size_bytes);
@@ -451,6 +452,11 @@ impl EngineManager {
             Ok(e) => e,
             Err(e) => {
                 self.state.write().await.running_models.remove(model_id);
+                crate::server::metrics::observe_model_load(
+                    model_id,
+                    false,
+                    load_started.elapsed().as_secs_f64(),
+                );
                 return Err(e);
             }
         };
@@ -461,6 +467,11 @@ impl EngineManager {
             let mut orphan = engine;
             let _ = self.adapter.stop(&mut orphan).await;
             self.state.write().await.running_models.remove(model_id);
+            crate::server::metrics::observe_model_load(
+                model_id,
+                false,
+                load_started.elapsed().as_secs_f64(),
+            );
             return Err(e);
         }
 
@@ -486,6 +497,12 @@ impl EngineManager {
 
         // Notify all status subscribers that a new model is ready.
         self.notify().await;
+        crate::server::metrics::observe_model_load(
+            model_id,
+            true,
+            load_started.elapsed().as_secs_f64(),
+        );
+        crate::server::metrics::set_active_models(self.active_slots.len() as u64);
 
         Ok(port)
     }
@@ -503,6 +520,7 @@ impl EngineManager {
                             if let Some(mut slot) = self.active_slots.remove(&model_id) {
                                 let _ = self.stop_slot(&mut slot).await;
                                 self.state.write().await.running_models.remove(&model_id);
+                                crate::server::metrics::set_active_models(self.active_slots.len() as u64);
                                 self.notify().await;
                             }
                         }
@@ -514,6 +532,7 @@ impl EngineManager {
                                 let _ = self.stop_slot(&mut slot).await;
                             }
                             self.state.write().await.running_models.clear();
+                            crate::server::metrics::set_active_models(0);
                             self.notify().await;
                         }
                         None => break,
@@ -537,6 +556,7 @@ impl EngineManager {
                             self.state.write().await.running_models.remove(&id);
                         }
                     }
+                    crate::server::metrics::set_active_models(self.active_slots.len() as u64);
 
                     // Sync State Update
                     let mut state = self.state.write().await;

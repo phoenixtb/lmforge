@@ -122,9 +122,12 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
     // Detect capabilities
     let caps = index::detect_capabilities(&model_dir, Some(&resolved.id), Some(&resolved.hf_repo));
     println!(
-        "  Capabilities: chat={} embeddings={} reranking={} thinking={} dims={:?}",
-        caps.chat, caps.embeddings, caps.reranking, caps.thinking, caps.embedding_dims
+        "  Capabilities: chat={} embeddings={} reranking={} thinking={} vision={} dims={:?}",
+        caps.chat, caps.embeddings, caps.reranking, caps.thinking, caps.vision, caps.embedding_dims
     );
+    if let Some(mmproj) = caps.mmproj_path.as_deref() {
+        println!("  mmproj:       {}", mmproj);
+    }
 
     // Add to index
     let entry = index::ModelEntry {
@@ -147,14 +150,37 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
     Ok(())
 }
 
-/// Detect engine format from hardware profile
+/// Detect engine format by selecting the active engine from the registry against
+/// the cached hardware profile. Falls back to legacy GPU-vendor heuristic on
+/// error, and finally to "gguf" so behaviour stays predictable on fresh installs.
 fn detect_engine_format(data_dir: &std::path::Path) -> String {
     let hw_path = data_dir.join("hardware.json");
-    if let Ok(content) = std::fs::read_to_string(&hw_path)
-        && let Ok(profile) = serde_json::from_str::<serde_json::Value>(&content)
-        && profile["gpu_vendor"].as_str() == Some("apple")
+    let profile_json = match std::fs::read_to_string(&hw_path) {
+        Ok(c) => c,
+        Err(_) => return "gguf".to_string(),
+    };
+
+    if let Ok(profile) =
+        serde_json::from_str::<crate::hardware::probe::HardwareProfile>(&profile_json)
+    {
+        let user_override = data_dir.join("engines.toml");
+        let override_path = if user_override.exists() {
+            Some(user_override.as_path())
+        } else {
+            None
+        };
+        if let Ok(registry) = crate::engine::registry::EngineRegistry::load(override_path)
+            && let Ok(selected) = registry.select(&profile)
+        {
+            return selected.model_format.clone();
+        }
+    }
+
+    // Legacy fallback: trust gpu_vendor=apple → mlx; otherwise gguf
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&profile_json)
+        && v["gpu_vendor"].as_str() == Some("apple")
     {
         return "mlx".to_string();
     }
-    "gguf".to_string() // fallback
+    "gguf".to_string()
 }

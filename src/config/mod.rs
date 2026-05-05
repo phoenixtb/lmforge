@@ -22,6 +22,20 @@ pub struct LmForgeConfig {
     pub api_key: Option<String>,
     pub catalogs_dir: Option<String>,
 
+    /// CIDR ranges that bypass `api_key` enforcement entirely.
+    /// Defaults cover loopback + RFC1918 private LAN + IPv6 ULA, so a fresh
+    /// install binding `0.0.0.0` works on any home/office network without a
+    /// token while still rejecting requests from the public internet.
+    /// Set to `[]` to require a token from every source.
+    #[serde(default = "default_trusted_networks")]
+    pub trusted_networks: Vec<String>,
+
+    /// Escape hatch: when true, all requests are allowed without authentication
+    /// regardless of `api_key` / `trusted_networks`. A loud warning is logged at
+    /// startup. Intended for local development only.
+    #[serde(default)]
+    pub unsafe_disable_auth: bool,
+
     #[serde(default)]
     pub resources: ResourceConfig,
 
@@ -42,6 +56,18 @@ pub struct ResourceConfig {
     pub max_model_storage_gb: Option<u32>,
     pub max_concurrent_requests: u32,
     pub request_queue_size: u32,
+    /// Maximum HTTP request body size accepted by the API, in MB.
+    /// Sized for VLM workloads: a 32 MB cap fits ~8 inline base64 images at
+    /// typical sizes or a single 300-DPI A4 PDF page render. Raise via
+    /// config or `LMFORGE_MAX_BODY_MB` env when serving documents heavy on
+    /// dense text/figures; lower it on hostile networks to shrink DoS
+    /// surface. Effective cap = `max(this, LMFORGE_MAX_BODY_MB)`.
+    #[serde(default = "default_max_request_body_mb")]
+    pub max_request_body_mb: usize,
+}
+
+pub fn default_max_request_body_mb() -> usize {
+    32
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,10 +78,31 @@ pub struct OrchestratorConfig {
     /// Larger batches may OOM or timeout on oMLX/SGLang. Default: 32.
     #[serde(default = "default_embed_batch_size")]
     pub embed_batch_size: usize,
+    /// Models to cold-load at daemon startup (serial, with logged progress).
+    /// Loading order matters when VRAM is tight — load larger models first so
+    /// LRU eviction doesn't churn them. Empty by default (lazy load on first use).
+    /// Example: `["qwen3:4b:4bit", "qwen2.5-vl:7b:4bit", "qwen3-embed:0.6b:8bit"]`
+    #[serde(default)]
+    pub auto_load: Vec<String>,
 }
 
 fn default_embed_batch_size() -> usize {
     32
+}
+
+/// Default trusted CIDRs for the `trusted_networks` auth allowlist.
+/// These ranges are reserved for private use by IANA / RFC1918 / RFC4193 and
+/// are unreachable from the public internet without explicit NAT/port-forward.
+pub fn default_trusted_networks() -> Vec<String> {
+    vec![
+        "127.0.0.0/8".to_string(),    // IPv4 loopback
+        "::1/128".to_string(),        // IPv6 loopback
+        "10.0.0.0/8".to_string(),     // RFC1918 private
+        "172.16.0.0/12".to_string(),  // RFC1918 private
+        "192.168.0.0/16".to_string(), // RFC1918 private
+        "fc00::/7".to_string(),       // RFC4193 IPv6 ULA
+        "fe80::/10".to_string(),      // IPv6 link-local
+    ]
 }
 
 impl Default for OrchestratorConfig {
@@ -64,6 +111,7 @@ impl Default for OrchestratorConfig {
             keep_alive: "5m".to_string(),
             max_loaded_models: 0,
             embed_batch_size: default_embed_batch_size(),
+            auto_load: Vec::new(),
         }
     }
 }
@@ -78,6 +126,7 @@ impl Default for ResourceConfig {
             max_model_storage_gb: None,
             max_concurrent_requests: 4,
             request_queue_size: 32,
+            max_request_body_mb: default_max_request_body_mb(),
         }
     }
 }
@@ -93,6 +142,8 @@ impl Default for LmForgeConfig {
             default_embed_model: String::new(),
             api_key: None,
             catalogs_dir: None,
+            trusted_networks: default_trusted_networks(),
+            unsafe_disable_auth: false,
             resources: ResourceConfig::default(),
             orchestrator: OrchestratorConfig::default(),
             data_dir_path: None,
@@ -191,7 +242,23 @@ fn merge_config(base: LmForgeConfig, overlay: LmForgeConfig) -> LmForgeConfig {
         },
         api_key: overlay.api_key.or(base.api_key),
         catalogs_dir: overlay.catalogs_dir.or(base.catalogs_dir),
-        resources: overlay.resources,
+        trusted_networks: if overlay.trusted_networks == default_trusted_networks() {
+            // Overlay didn't set it explicitly (still defaults) — keep base.
+            base.trusted_networks
+        } else {
+            overlay.trusted_networks
+        },
+        unsafe_disable_auth: overlay.unsafe_disable_auth || base.unsafe_disable_auth,
+        resources: ResourceConfig {
+            max_request_body_mb: if overlay.resources.max_request_body_mb
+                == default_max_request_body_mb()
+            {
+                base.resources.max_request_body_mb
+            } else {
+                overlay.resources.max_request_body_mb
+            },
+            ..overlay.resources
+        },
         orchestrator: OrchestratorConfig {
             keep_alive: if overlay.orchestrator.keep_alive.is_empty() {
                 base.orchestrator.keep_alive
@@ -209,6 +276,11 @@ fn merge_config(base: LmForgeConfig, overlay: LmForgeConfig) -> LmForgeConfig {
                 base.orchestrator.embed_batch_size
             } else {
                 overlay.orchestrator.embed_batch_size
+            },
+            auto_load: if overlay.orchestrator.auto_load.is_empty() {
+                base.orchestrator.auto_load
+            } else {
+                overlay.orchestrator.auto_load
             },
         },
         data_dir_path: overlay.data_dir_path.or(base.data_dir_path),

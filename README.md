@@ -282,6 +282,156 @@ For tools that target Ollama (Open WebUI, Continue, etc.):
 
 ---
 
+## Integrating LMForge (client-side reference)
+
+Quick reference for downstream services (DocIntel and similar) that consume
+LMForge over HTTP. Everything below works against an unmodified daemon
+running at `http://127.0.0.1:11430`.
+
+### Auth model in two sentences
+
+The daemon binds loopback by default and ships with `trusted_networks`
+covering loopback + RFC1918 (`10/8`, `172.16/12`, `192.168/16`) — any client
+on those networks reaches the API without a token. Set `api_key` in
+`~/.lmforge/config.toml` to require `Authorization: Bearer <key>` for any
+source outside `trusted_networks`; `/health` and `/metrics` are always
+auth-bypassed for liveness probes and Prometheus.
+
+### Capability discovery
+
+Before sending a request, ask which models can do what:
+
+```bash
+curl -s http://127.0.0.1:11430/v1/models | jq '.data[] | {id, capabilities}'
+# → {"id":"qwen3:8b:4bit","capabilities":{"chat":true,"vision":false,...}}
+# → {"id":"qwen2.5-vl:7b:4bit","capabilities":{"chat":true,"vision":true,...}}
+
+curl -s http://127.0.0.1:11430/v1/models/qwen2.5-vl:7b:4bit | jq
+# Single-model lookup with full metadata (size_bytes, format, mmproj_path, ...)
+```
+
+Capability bits: `chat`, `embeddings`, `reranking`, `thinking`, `vision`,
+`embedding_dims` (auto-detected on first /v1/embeddings call), `mmproj_path`
+(GGUF VLMs only).
+
+### Vision (multimodal) requests
+
+Use OpenAI's content-block format on `/v1/chat/completions`:
+
+```json
+{
+  "model": "qwen2.5-vl:7b:4bit",
+  "messages": [{
+    "role": "user",
+    "content": [
+      {"type": "text", "text": "Describe this page."},
+      {"type": "image_url", "image_url": {"url": "https://example.com/page.jpg"}}
+    ]
+  }]
+}
+```
+
+Behaviour to integrate against:
+
+- **Remote `http(s)://` URLs** are fetched server-side with a real
+  `User-Agent`, capped at 20 MB (override `LMFORGE_IMAGE_MAX_BYTES`), and
+  rewritten as inline `data:` URLs before reaching the engine. Hosts that
+  block empty UAs (Wikimedia, several CDNs) no longer cause silent
+  hallucinations — fetch failures return **400 `image_fetch_failed`**;
+  oversized payloads return **413 `image_too_large`**.
+- **`data:image/...;base64,...` URLs** pass through untouched.
+- **Anthropic `{"type":"image","source":{...}}`** and OpenAI Responses
+  **`{"type":"input_image","image_url":"..."}`** aliases are recognised by
+  the capability gate.
+- Sending an image to a non-vision model returns **400
+  `vision_not_supported`** before the engine spins up.
+- Ollama clients (`/api/chat`) can keep using the legacy
+  `images: ["<base64>"]` field per message — LMForge translates them.
+
+### Embeddings
+
+```bash
+curl -sS http://127.0.0.1:11430/v1/embeddings \
+  -H 'content-type: application/json' \
+  -d '{"model":"qwen3-embed:0.6b:8bit","input":["doc one","doc two"]}'
+```
+
+- Inputs over `embed_batch_size` (default 32) are auto-chunked across
+  multiple engine calls; `usage.prompt_tokens` and `data[].index` are
+  re-merged transparently.
+- `capabilities.embedding_dims` is `null` until the first successful call
+  observes it, then it's persisted to `models.json`.
+- Sending a non-embedding model returns **400** with a clear suggestion.
+
+### Reranking — Linux + NVIDIA caveat
+
+`/v1/rerank` works fine on macOS (oMLX) and on llama.cpp builds. **On Linux
++ NVIDIA + SGLang it returns 501** because SGLang v0.5.10's cross-encoder
+support is experimental and disabled in `engines.toml`. Workarounds: (a)
+pull a GGUF reranker and run a second LMForge instance on a different port
+pinned to llama.cpp via `engines.toml`, or (b) use an LLM-as-reranker via
+`/v1/chat/completions`. Multi-engine routing is on the roadmap.
+
+### Concurrency, queueing, retries
+
+- `[resources] max_concurrent_requests` caps inflight requests (default 4).
+  Excess waits up to `request_queue_size × 100 ms` for a permit, then
+  returns **503 `concurrency_limit`** with `Retry-After: 1`. Clients should
+  honour `Retry-After`.
+- `keep_alive` (default `5m`) determines TTL after which idle models unload
+  from VRAM. Pass `"keep_alive": "0"` in a request to evict immediately, or
+  `"keep_alive": "1h"` to override per call.
+
+### Cold-load latency
+
+First call to an unloaded model pays the load cost (≈3–60 s depending on
+model + engine). To avoid it on hot paths, configure
+`[orchestrator] auto_load = ["qwen3:4b:4bit", "qwen3-embed:0.6b:8bit", ...]`
+— models cold-load serially at startup with progress logged. Status visible
+on `/lf/status` and the `/lf/status/stream` SSE.
+
+### Errors clients should handle
+
+| Status | `code` | Meaning |
+|---|---|---|
+| 400 | `vision_not_supported` | Image sent to a non-vision model. Pick a `vision:true` model. |
+| 400 | `image_fetch_failed` | Remote image URL returned non-2xx or DNS/timeout. Use a direct asset URL or inline as `data:`. |
+| 401 | `missing_or_invalid_api_key` | Outside `trusted_networks` and no/wrong `Authorization: Bearer`. |
+| 413 | `image_too_large` | Image > `LMFORGE_IMAGE_MAX_BYTES`. Resize or raise the cap. |
+| 503 | `concurrency_limit` | At capacity — back off (`Retry-After: 1`) and retry. |
+| 503 | (no code) | Engine starting / model loading. /health distinguishes the two. |
+| 504 | (server) | Inference exceeded the 120 s wall-clock guard (thinking-mode runaway). |
+
+### Observability for client-side dashboards
+
+Scrape `GET /metrics` (Prometheus text format). Useful series:
+
+- `lmforge_requests_total{endpoint,status}` — request rate and error rate per route.
+- `lmforge_request_duration_seconds_bucket{endpoint}` — latency histogram.
+- `lmforge_model_loads_total{model,result}` + `lmforge_model_load_duration_seconds` — cold-load behaviour.
+- `lmforge_active_models` — gauge of models currently in VRAM.
+- `lmforge_image_inputs_total{result=accepted|rejected|data_url}` — VLM traffic mix.
+- `lmforge_auth_rejections_total` — credential failures.
+
+### What changed in v0.2.x (vs v0.1.x)
+
+DocIntel-relevant changes since the previous release:
+
+| Area | Change |
+|---|---|
+| VLM | `qwen2.5-vl:3b:4bit` and `qwen2.5-vl:7b:4bit` shortcuts (MLX + GGUF + safetensors). `image_url`, `input_image`, and Anthropic `image` content blocks. Capability gate: 400 on image-to-non-vision-model. |
+| Image preflight | Remote URLs fetched server-side with proper UA, rewritten as `data:` URLs, 4xx on failure (no more silent hallucinations on Wikimedia/CDN 403s). |
+| Auth | `Authorization: Bearer` + `trusted_networks` CIDR allowlist (RFC1918 by default). `unsafe_disable_auth` for dev. `LMFORGE_REFUSE_UNSAFE_BIND=1` refuses startup on misconfig. |
+| Concurrency | `max_concurrent_requests` enforced via tower semaphore → 503 with `Retry-After: 1` on overflow. |
+| Observability | `GET /metrics` (Prometheus); `GET /v1/models/{id}`. |
+| Logging | Per-model engine logs `engine-<sanitized_id>.{stdout,stderr}.log` with size-based rotation (env-tunable). `lmforge clean --logs --max-mb N`. |
+| Auto-load | `[orchestrator] auto_load = [...]` warm-loads at startup (serial, logged). |
+| Ollama | `/api/chat` streaming now emits proper NDJSON with `done`/`done_reason`/`total_duration`/`thinking` fields (was leaking raw OpenAI SSE before). |
+| Downloads | sha256 verification against HuggingFace `X-Linked-Etag` for LFS files; corrupt downloads auto-deleted. |
+| Container | CPU/llama.cpp `Dockerfile` ships from this repo. |
+
+---
+
 ### Thinking Models (oMLX / Apple Silicon)
 
 For models with native reasoning capability (Qwen3, DeepSeek-R1 distillations), LMForge
@@ -394,6 +544,17 @@ lmforge catalog --search qwen      # search by name/family
 | `qwen3-embed:4b:4bit` | `mlx-community/Qwen3-Embedding-4B-4bit-DWQ` | `Qwen/Qwen3-Embedding-4B-GGUF` |
 | `bge-m3:f16` | — | `gpustack/bge-m3-GGUF` |
 
+### Vision-Language Models (VLMs)
+
+| Shortcut | macOS (MLX) | Linux (GGUF + mmproj) | Linux (safetensors / SGLang) |
+|---|---|---|---|
+| `qwen2.5-vl:3b:4bit` | `mlx-community/Qwen2.5-VL-3B-Instruct-4bit` | `bartowski/Qwen2.5-VL-3B-Instruct-GGUF` | — |
+| `qwen2.5-vl:7b:4bit` | `mlx-community/Qwen2.5-VL-7B-Instruct-4bit` | `bartowski/Qwen2.5-VL-7B-Instruct-GGUF` | — |
+| `qwen2.5-vl:7b`      | — | — | `Qwen/Qwen2.5-VL-7B-Instruct` |
+
+GGUF VLM entries automatically pull the multimodal projector (`mmproj-*.gguf`)
+alongside the main weights.
+
 ### Re-ranking Models (llama.cpp only)
 
 | Shortcut | GGUF Repo |
@@ -404,7 +565,7 @@ lmforge catalog --search qwen      # search by name/family
 | `qwen3-reranker:0.6b:q4` | `Qwen/Qwen3-Reranker-0.6B-GGUF` |
 | `qwen3-reranker:4b:q4` | `Qwen/Qwen3-Reranker-4B-GGUF` |
 
-> **Re-ranking** requires llama.cpp with `--reranking`. The `/v1/rerank` endpoint returns 501 on oMLX and SGLang.
+> **Re-ranking** requires llama.cpp with `--reranking`. The `/v1/rerank` endpoint returns 501 on oMLX and SGLang. See "Re-ranking on Linux + NVIDIA" under [Configuration](#configuration) for workarounds.
 
 You can also pull any HuggingFace repo directly by its full path:
 
@@ -426,17 +587,118 @@ port          = 11430
 bind_address  = "127.0.0.1"
 log_level     = "info"
 
+# Auth: requests from these CIDRs bypass api_key entirely.
+# Defaults cover loopback + RFC1918 private LAN, so a fresh install binding
+# 0.0.0.0 works on any home/office network without a token. External requests
+# (outside trusted_networks) still need `Authorization: Bearer <api_key>` when
+# api_key is set, or are rejected with 401 when it isn't.
+trusted_networks = [
+    "127.0.0.0/8", "::1/128",
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+    "fc00::/7", "fe80::/10",
+]
+# api_key = "..."             # optional Bearer token for external clients
+# unsafe_disable_auth = false # dev escape hatch — opens the daemon completely
+
 [resources]
 max_gpu_memory_fraction  = 0.75   # fraction of VRAM available to LMForge
-max_concurrent_requests  = 4
-request_queue_size       = 32
+max_concurrent_requests  = 4      # in-flight cap; excess requests get 503
+request_queue_size       = 32     # how long to wait for a permit (~100ms each)
 min_free_disk_gb         = 10
 
 [orchestrator]
 keep_alive        = "5m"          # unload idle models after this duration
 max_loaded_models = 0             # 0 = unlimited (bounded by VRAM)
 embed_batch_size  = 32            # max inputs per engine call for /v1/embeddings
+# auto_load = ["qwen3:4b:4bit", "qwen2.5-vl:7b:4bit", "qwen3-embed:0.6b:8bit"]
+# Models cold-loaded serially at daemon startup. Empty by default.
+# Order matters when VRAM is tight: load larger models first.
 ```
+
+### Environment knobs
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LMFORGE_REFUSE_UNSAFE_BIND` | `0` | Refuse startup when bind is non-loopback and no `api_key`/`trusted_networks` are configured. |
+| `LMFORGE_IMAGE_MAX_BYTES` | `20971520` (20 MB) | Per-image cap for the chat preflight. |
+| `LMFORGE_ENGINE_LOG_MAX_MB` | `50` | Rotate per-model engine logs above this size. |
+| `LMFORGE_ENGINE_LOG_KEEP` | `3` | How many rotated copies to retain per stream. |
+| `LMFORGE_SGLANG_MEM_FRACTION` | `0.5` | SGLang `--mem-fraction-static` (raise to `0.85` for single-slot deployments). |
+| `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN` | unset | Used by the downloader for gated repos. |
+
+### Observability
+
+- `GET /health` — bypasses auth; reports daemon and engine status.
+- `GET /metrics` — Prometheus exposition (`text/plain; version=0.0.4`); also auth-bypassed. Counters and histograms include `lmforge_requests_total{endpoint,status}`, `lmforge_request_duration_seconds`, `lmforge_model_loads_total{model,result}`, `lmforge_model_load_duration_seconds`, `lmforge_active_models`, `lmforge_image_inputs_total{result}`, and `lmforge_auth_rejections_total`.
+- `~/.lmforge/logs/engine-<model>.{stdout,stderr}.log` — one file per model id (sanitized: `:` and `/` → `_`); rotated when files exceed `LMFORGE_ENGINE_LOG_MAX_MB`. Older copies are `.1`, `.2`, … and pruned beyond `LMFORGE_ENGINE_LOG_KEEP`.
+- `lmforge clean --logs --max-mb 100` — deletes oldest log files until total size ≤ 100 MB. Without `--max-mb` the legacy behaviour (truncate-all) still applies.
+
+### Image preflight
+
+Chat requests with `image_url.url` pointing at remote `http(s)://` images are
+fetched server-side (real `User-Agent`, 15 s timeout) and rewritten as inline
+`data:` URLs before reaching the engine. This stops engines from silently
+failing on hosts that block empty UAs (Wikimedia, several CDNs). Failures
+return a 400 with `code:image_fetch_failed`; oversized payloads return 413.
+
+### Container image
+
+The repo ships a CPU/llama.cpp `Dockerfile`:
+
+```bash
+docker build -t lmforge:cpu .
+docker run --rm -p 11430:11430 -v lmforge-data:/root/.lmforge lmforge:cpu
+```
+
+The image binds `0.0.0.0` by default and relies on the RFC1918 `trusted_networks`
+defaults so requests from the host work without a token. Set
+`LMFORGE_REFUSE_UNSAFE_BIND=1` (or set `api_key`) for production deployments.
+The CUDA / SGLang variant is not yet provided.
+
+### Vision-language models (VLMs)
+
+LMForge serves VLMs through the same `/v1/chat/completions` endpoint as text
+models. Send images using OpenAI's content-block format:
+
+```json
+{
+  "model": "qwen2.5-vl:7b:4bit",
+  "messages": [{
+    "role": "user",
+    "content": [
+      {"type": "text", "text": "Describe this image."},
+      {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,<...>"}}
+    ]
+  }]
+}
+```
+
+Ollama clients (`/api/chat`) can use the legacy `images: ["<base64>"]` field per
+message — LMForge translates them to OpenAI image blocks before forwarding.
+Vision-incapable models receive a 400 with `vision_not_supported` instead of
+silently confusing the engine.
+
+Curated VLM shortcuts:
+
+| Shortcut                | Engine        | Backbone                     |
+|-------------------------|---------------|------------------------------|
+| `qwen2.5-vl:3b:4bit`    | oMLX / llama.cpp | Qwen 2.5-VL 3B (Q4_K_M + mmproj-f16) |
+| `qwen2.5-vl:7b:4bit`    | oMLX / llama.cpp | Qwen 2.5-VL 7B (Q4_K_M + mmproj-f16) |
+| `qwen2.5-vl:7b`         | SGLang (safetensors) | Qwen 2.5-VL 7B FP16 |
+
+GGUF VLMs ship with a multimodal projector sidecar (`mmproj-*.gguf`); LMForge
+downloads it alongside the main weights and passes `--mmproj` to llama-server
+automatically. SGLang VLMs use `--chat-template` derived from `model_type`.
+
+### Re-ranking on Linux + NVIDIA (SGLang gap)
+
+SGLang v0.5.10's cross-encoder reranker support is experimental and
+intentionally disabled in `engines.toml`. On Linux + NVIDIA hosts, `/v1/rerank`
+returns 501 because the daemon currently routes all models through one engine.
+**Workarounds**: (a) use an LLM-as-reranker via `/v1/chat/completions`, or
+(b) run a second LMForge instance on a different port pinned to llama.cpp via
+`engines.toml` user override. Multi-engine routing (one engine per model) is
+tracked for the next iteration.
 
 Per-directory overrides via `lmforge.yaml`:
 

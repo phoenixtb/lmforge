@@ -112,10 +112,8 @@ fn write_model_index(
             capabilities: ModelCapabilities {
                 chat: *chat,
                 embeddings: *embeddings,
-                reranking: false,
-                thinking: false,
                 embedding_dims: if *embeddings { Some(1536) } else { None },
-                pooling: None,
+                ..Default::default()
             },
             added_at: "2025-01-01".to_string(),
         })
@@ -194,7 +192,16 @@ fn build_app_state(
 
     spawn_fake_manager(port_map, cmd_rx);
 
-    let router = lmforge::server::build_router(state);
+    // Tests run via tower::Service::oneshot which doesn't go through TcpListener
+    // so ConnectInfo is absent; using unsafe_disable_auth keeps the test
+    // surface focused on routing/handler behaviour rather than auth wiring.
+    let auth_policy = Arc::new(lmforge::server::auth::AuthPolicy::from_config(
+        None,
+        &[],
+        true,
+    ));
+    let concurrency = lmforge::server::concurrency::ConcurrencyLimit::new(0, 0);
+    let router = lmforge::server::build_router(state, auth_policy, concurrency, 32 * 1024 * 1024);
     (router, status_tx)
 }
 

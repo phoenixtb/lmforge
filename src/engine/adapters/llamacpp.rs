@@ -60,14 +60,12 @@ impl EngineAdapter for LlamacppAdapter {
             "Spawning llama-server"
         );
 
-        let stdout_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(logs_dir.join("engine-stdout.log"))?;
-        let stderr_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(logs_dir.join("engine-stderr.log"))?;
+        // Per-model log files with size-based rotation; see logging::rotation
+        // for the threshold/keep tunables (LMFORGE_ENGINE_LOG_MAX_MB / KEEP).
+        let stdout_file =
+            crate::logging::rotation::prepare_engine_log(logs_dir, model_id, "stdout")?;
+        let stderr_file =
+            crate::logging::rotation::prepare_engine_log(logs_dir, model_id, "stderr")?;
 
         let port_str = port.to_string();
         let gguf_str = gguf_path.to_string_lossy().to_string();
@@ -97,6 +95,21 @@ impl EngineAdapter for LlamacppAdapter {
                 // (Qwen3-Reranker) work with this flag from llama.cpp b4355+.
                 args.push("--reranking".to_string());
             }
+        }
+
+        // VLM: when an mmproj sidecar is present in the model dir, llama-server
+        // needs --mmproj <path> to load the multimodal projector. We also bump
+        // --ctx-size since image tokens consume the context window aggressively
+        // (Qwen2.5-VL packs 1280 tokens per high-res image tile).
+        if let Some(mmproj_path) = find_mmproj_file(model_dir) {
+            info!(
+                mmproj = %mmproj_path.display(),
+                "VLM mmproj sidecar detected — enabling multimodal mode"
+            );
+            args.push("--mmproj".to_string());
+            args.push(mmproj_path.to_string_lossy().to_string());
+            args.push("--ctx-size".to_string());
+            args.push("8192".to_string());
         }
 
         let child = Command::new(&self.executable)
@@ -146,24 +159,48 @@ impl EngineAdapter for LlamacppAdapter {
 
 /// Find the best .gguf file in a model directory.
 /// Picks the largest file (prefers full-weight over split shards).
+/// Skips `mmproj-*.gguf` projector files — those are handled separately
+/// by `find_mmproj_file` and must never be passed as `--model`.
 fn find_gguf_file(model_dir: &Path) -> Option<std::path::PathBuf> {
     let entries = std::fs::read_dir(model_dir).ok()?;
     let mut gguf_files: Vec<(u64, std::path::PathBuf)> = entries
         .flatten()
         .filter_map(|e| {
             let path = e.path();
-            if path.extension().and_then(|x| x.to_str()) == Some("gguf") {
-                let size = path.metadata().map(|m| m.len()).unwrap_or(0);
-                Some((size, path))
-            } else {
-                None
+            if path.extension().and_then(|x| x.to_str()) != Some("gguf") {
+                return None;
             }
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with("mmproj-") {
+                return None;
+            }
+            let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+            Some((size, path))
         })
         .collect();
 
     // Largest file first — single-file models win over small split shards
     gguf_files.sort_by_key(|b| std::cmp::Reverse(b.0));
     gguf_files.into_iter().next().map(|(_, path)| path)
+}
+
+/// Find the multimodal projector sidecar (`mmproj-*.gguf`) in the model dir.
+/// llama.cpp loads this via `--mmproj` to enable image input on VLMs.
+fn find_mmproj_file(model_dir: &Path) -> Option<std::path::PathBuf> {
+    let mut matches: Vec<std::path::PathBuf> = std::fs::read_dir(model_dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with("mmproj-") && n.ends_with(".gguf"))
+                    .unwrap_or(false)
+        })
+        .collect();
+    matches.sort();
+    matches.into_iter().next()
 }
 
 #[cfg(test)]
@@ -188,6 +225,64 @@ mod tests {
 
         let result = find_gguf_file(&dir).unwrap();
         assert_eq!(result.file_name().unwrap(), "model-large.gguf");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_find_gguf_skips_mmproj_for_main_weights() {
+        // VLM scenario: main weights + mmproj sidecar in the same dir.
+        // find_gguf_file must NEVER return the mmproj file (would break llama-server).
+        let dir = std::env::temp_dir().join("lmforge_test_gguf_vlm_main");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(
+            dir.join("Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"),
+            vec![0u8; 100],
+        )
+        .unwrap();
+        // mmproj is intentionally LARGER than weights to confirm it's skipped
+        // even when it would win the largest-file selection.
+        std::fs::write(
+            dir.join("mmproj-Qwen2.5-VL-7B-Instruct-f16.gguf"),
+            vec![0u8; 5000],
+        )
+        .unwrap();
+
+        let result = find_gguf_file(&dir).unwrap();
+        assert_eq!(
+            result.file_name().unwrap(),
+            "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",
+            "find_gguf_file must skip mmproj sidecars"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_find_mmproj_file_finds_sidecar() {
+        let dir = std::env::temp_dir().join("lmforge_test_find_mmproj");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(dir.join("Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"), b"weights").unwrap();
+        std::fs::write(dir.join("mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf"), b"proj").unwrap();
+
+        let result = find_mmproj_file(&dir).unwrap();
+        assert_eq!(
+            result.file_name().unwrap(),
+            "mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_find_mmproj_file_none_for_chat_only_model() {
+        let dir = std::env::temp_dir().join("lmforge_test_no_mmproj");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Qwen3-8B-Q4_K_M.gguf"), b"weights").unwrap();
+
+        assert!(find_mmproj_file(&dir).is_none());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
