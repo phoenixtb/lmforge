@@ -14,6 +14,17 @@
 # Health:  curl http://localhost:11430/health
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Stage 1a — build the SvelteKit dashboard (static)
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:22-bookworm-slim AS ui-builder
+WORKDIR /ui
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY ui/ ./
+# adapter-static writes the bundle to /ui/build
+RUN npm run build
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Stage 1 — build the lmforge binary
 # ─────────────────────────────────────────────────────────────────────────────
 FROM rust:1.83-slim-bookworm AS builder
@@ -87,6 +98,12 @@ RUN curl -fsSL -o /tmp/llamacpp.zip \
  && rm -rf /var/lib/apt/lists/* /tmp/llamacpp.zip
 
 COPY --from=builder /usr/local/bin/lmforge /usr/local/bin/lmforge
+
+# Dashboard static bundle. Mounted at /ui by the daemon when LMFORGE_UI_DIR
+# resolves to a directory containing index.html. Path matches the env var
+# below — change both together.
+COPY --from=ui-builder /ui/build /usr/local/share/lmforge/ui
+ENV LMFORGE_UI_DIR=/usr/local/share/lmforge/ui
 
 # Persistent state mount point. Models, logs, hardware probe, models.json,
 # and the `engines/` PID files all live here. Host should bind a volume.

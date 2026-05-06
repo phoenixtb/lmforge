@@ -17,8 +17,19 @@ pub async fn run(
     _foreground: bool,
     external_status_tx: Option<tokio::sync::broadcast::Sender<crate::engine::manager::EngineState>>,
 ) -> Result<()> {
+    // Precedence: CLI flag > LMFORGE_BIND env > config.bind_address.
+    // Env override exists primarily for containerised deployments where the
+    // image cannot ship a custom config.toml.
+    let bind_addr = bind
+        .or_else(|| std::env::var("LMFORGE_BIND").ok().filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| config.bind_address.clone());
     let api_port = port.unwrap_or(config.port);
-    let bind_addr = bind.unwrap_or_else(|| config.bind_address.clone());
+    // Same precedence model for the bearer token. CLI has no flag for it
+    // (security: no shell history), so this is env > config.
+    let resolved_api_key = std::env::var("LMFORGE_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| config.api_key.clone());
     let engine_port: u16 = 11431; // Internal engine port
     let data_dir = config.data_dir();
 
@@ -158,7 +169,7 @@ pub async fn run(
         engine_config: engine_config.clone(),
         adapter: shared_adapter,
         data_dir: data_dir.clone(),
-        api_key: config.api_key.clone(),
+        api_key: resolved_api_key.clone(),
         bind_address: bind_addr.clone(),
         config: std::sync::Arc::new(tokio::sync::RwLock::new(config.clone())),
         command_tx: cmd_tx.clone(),
@@ -172,7 +183,7 @@ pub async fn run(
     // Build auth policy + emit a startup warning when the daemon is exposed
     // beyond loopback without any auth coverage.
     let auth_policy = std::sync::Arc::new(crate::server::auth::AuthPolicy::from_config(
-        config.api_key.clone(),
+        resolved_api_key.clone(),
         &config.trusted_networks,
         config.unsafe_disable_auth,
     ));
@@ -185,7 +196,7 @@ pub async fn run(
             "⚠ unsafe_disable_auth=true — daemon is fully open. Disable in config.toml for any non-dev use."
         );
     } else if !is_loopback_bind(&bind_addr)
-        && config.api_key.is_none()
+        && resolved_api_key.is_none()
         && config.trusted_networks.is_empty()
     {
         // No coverage at all: bind public, no token, no allowlist. By default
@@ -411,10 +422,17 @@ async fn ensure_port_free(port: u16) -> anyhow::Result<()> {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
 
+    #[cfg(unix)]
+    let manual_hint = format!("lsof -ti :{port} | xargs kill -9");
+    #[cfg(windows)]
+    let manual_hint = format!(
+        "for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :{port}') do taskkill /F /PID %a"
+    );
+
     anyhow::bail!(
-        "Port {} is still occupied after cleanup. Kill it manually:\n  lsof -ti :{} | xargs kill -9",
+        "Port {} is still occupied after cleanup. Kill it manually:\n  {}",
         port,
-        port
+        manual_hint
     )
 }
 

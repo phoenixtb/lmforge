@@ -18,6 +18,23 @@ use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use tracing::{info, warn};
 
 static HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
+static DAEMON_START: OnceLock<Instant> = OnceLock::new();
+
+/// Daemon uptime in whole seconds since the first call to `init()`.
+/// Returns 0 if init was never called (test paths, embedded modes).
+pub fn uptime_secs() -> u64 {
+    DAEMON_START
+        .get()
+        .map(|s| s.elapsed().as_secs())
+        .unwrap_or(0)
+}
+
+/// Render the current Prometheus exposition text. `None` when the recorder
+/// failed to install at startup. Useful for the JSON digest endpoint that
+/// re-parses our own output instead of duplicating bookkeeping.
+pub fn render_text() -> Option<String> {
+    HANDLE.get().map(|h| h.render())
+}
 
 /// Counter / histogram names. Kept here so renames stay consistent across
 /// emit sites. Industry naming convention: `lmforge_<subsystem>_<unit>`.
@@ -35,6 +52,11 @@ pub mod names {
 /// Always returns Ok — failures are logged and the server boots without
 /// metrics, never blocked by them.
 pub fn init() {
+    // Stamp the daemon start time on the first init() call. Subsequent calls
+    // (e.g. embedded Tauri after a reload) keep the original boot moment so
+    // uptime is monotonic across re-invocations of init.
+    let _ = DAEMON_START.set(Instant::now());
+
     if HANDLE.get().is_some() {
         return;
     }

@@ -3,7 +3,9 @@ pub mod catalog;
 pub mod concurrency;
 pub mod health;
 pub mod image_preflight;
+pub mod logs_api;
 pub mod metrics;
+pub mod metrics_api;
 pub mod native;
 pub mod ollama;
 pub mod openai;
@@ -127,7 +129,14 @@ pub fn build_router(
 ) -> Router {
     info!(max_body_bytes, "Building API router");
 
-    Router::new()
+    let ui_dir = resolve_ui_dir();
+    if let Some(d) = &ui_dir {
+        info!(ui_dir = %d.display(), "Serving dashboard UI at /ui");
+    } else {
+        info!("No UI build found; /ui route disabled (set LMFORGE_UI_DIR or run from repo root)");
+    }
+
+    let router = Router::new()
         // Health
         .route("/health", get(health::health))
         // Prometheus metrics (auth-bypass at the middleware layer alongside /health)
@@ -144,6 +153,10 @@ pub fn build_router(
         .route("/api/generate", post(ollama::generate))
         .route("/api/tags", get(ollama::tags))
         // LMForge native endpoints
+        .route("/lf/metrics", get(metrics_api::metrics_digest))
+        .route("/lf/logs/list", get(logs_api::logs_list))
+        .route("/lf/logs/tail", get(logs_api::logs_tail))
+        .route("/lf/logs/stream", get(logs_api::logs_stream))
         .route("/lf/status", get(native::status))
         .route("/lf/status/stream", get(native::status_stream))
         .route("/lf/hardware", get(native::hardware))
@@ -159,7 +172,20 @@ pub fn build_router(
         )
         .route("/lf/shutdown", post(native::shutdown))
         .route("/lf/catalog", get(catalog::catalog_list))
-        .with_state(state)
+        .with_state(state);
+
+    // Optional static dashboard mount. Only when a real ui/build directory
+    // is present (env override, repo-relative path in dev, or copied into
+    // the container image at /usr/local/share/lmforge/ui).
+    let router = if let Some(dir) = ui_dir {
+        let serve = tower_http::services::ServeDir::new(&dir)
+            .fallback(tower_http::services::ServeFile::new(dir.join("index.html")));
+        router.nest_service("/ui", serve)
+    } else {
+        router
+    };
+
+    router
         // Layer order from inner to outer (last applied = outermost):
         //   1. metrics_layer  — observes status & latency for every authed request
         //   2. concurrency    — gates inflight count, returns 503 when saturated
@@ -181,6 +207,32 @@ pub fn build_router(
         // with 413 before the request even reaches our middleware stack.
         .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
         .layer(tower_http::cors::CorsLayer::permissive())
+}
+
+/// Locate the SvelteKit static build for the dashboard.
+///
+/// Resolution order:
+///   1. `LMFORGE_UI_DIR` env var (used by the Docker image to point at
+///      `/usr/local/share/lmforge/ui` after the multi-stage `npm run build`).
+///   2. `$CARGO_MANIFEST_DIR/ui/build` for `cargo run` from the repo root.
+///
+/// Returns `None` when neither path resolves to a directory containing
+/// `index.html` — the `/ui` route is then skipped entirely so the daemon
+/// keeps booting in environments without a UI bundle.
+pub fn resolve_ui_dir() -> Option<std::path::PathBuf> {
+    if let Ok(s) = std::env::var("LMFORGE_UI_DIR") {
+        let p = std::path::PathBuf::from(s);
+        if p.join("index.html").is_file() {
+            return Some(p);
+        }
+    }
+    let dev = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("ui")
+        .join("build");
+    if dev.join("index.html").is_file() {
+        return Some(dev);
+    }
+    None
 }
 
 /// Resolve the effective request body cap in bytes from config + env.

@@ -101,8 +101,13 @@ pub async fn auth_layer(
     // daemon without leaking credentials. Operators that don't want to
     // expose /metrics publicly should bind 127.0.0.1 or scrape over a
     // private network — same trust boundary as /health.
+    //
+    // /ui/* serves static dashboard assets (HTML/CSS/JS bundle). The actual
+    // privileged surface is /lf/* and /v1/*, which the JS calls separately
+    // and which still go through this middleware. Bypassing /ui/* lets
+    // browsers load the dashboard before the user has supplied credentials.
     let path = req.uri().path();
-    if path == "/health" || path == "/metrics" {
+    if path == "/health" || path == "/metrics" || path.starts_with("/ui/") || path == "/ui" {
         return next.run(req).await;
     }
 

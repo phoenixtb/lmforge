@@ -407,3 +407,135 @@ export function fmtUptime(secs: number): string {
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
 }
+
+// ─── Observability: metrics digest + log tail/follow ─────────────────────────
+
+/** Per-endpoint stats from /lf/metrics. Mirrors EndpointStats in metrics_api.rs. */
+export interface EndpointStats {
+  requests_total: number;
+  errors_total: number;
+  by_status: Record<string, number>;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  p99_ms: number | null;
+}
+
+export interface ModelLoadStats {
+  success: number;
+  failure: number;
+  last_dur_s: number | null;
+}
+
+export interface ImageMix {
+  accepted: number;
+  rejected: number;
+  data_url: number;
+}
+
+/** Digest of /metrics, parsed into stable JSON for dashboard widgets. */
+export interface MetricsDigest {
+  endpoints: Record<string, EndpointStats>;
+  requests_total: number;
+  errors_total: number;
+  error_rate: number;
+  active_models: number;
+  model_loads: Record<string, ModelLoadStats>;
+  image_inputs: ImageMix;
+  auth_rejections: number;
+  uptime_secs: number;
+  recorder_unavailable: boolean;
+}
+
+/** GET /lf/metrics — JSON digest for the observability dashboard. */
+export const getMetricsDigest = (): Promise<MetricsDigest> => get('/lf/metrics');
+
+export interface LogStream {
+  stream: 'stdout' | 'stderr' | string;
+  size_bytes: number;
+  mtime_secs: number;
+}
+
+export interface LogComponent {
+  component: string;
+  component_safe: string;
+  streams: LogStream[];
+}
+
+export interface LogIndex {
+  components: LogComponent[];
+}
+
+/** GET /lf/logs/list — discover available log streams. */
+export const listLogs = (): Promise<LogIndex> => get('/lf/logs/list');
+
+/** GET /lf/logs/tail — last N lines as plain text. Bounded at 5000 lines / 2 MB. */
+export async function tailLog(
+  component: string,
+  stream: 'stdout' | 'stderr' | 'main' = 'stderr',
+  lines = 200
+): Promise<string> {
+  const params = new URLSearchParams({
+    component,
+    stream,
+    lines: String(lines),
+  });
+  const res = await fetch(`${BASE}/lf/logs/tail?${params}`);
+  if (!res.ok) throw new Error(`tailLog ${component}/${stream}: ${res.status}`);
+  return res.text();
+}
+
+/**
+ * GET /lf/logs/stream — SSE follow. Each new line emits one event with
+ * `{ "line": "..." }`. Returns a cancel function.
+ */
+export function streamLog(
+  component: string,
+  stream: 'stdout' | 'stderr' | 'main',
+  onLine: (line: string) => void,
+  onError: (msg: string) => void
+): () => void {
+  const params = new URLSearchParams({ component, stream });
+  const url = `${BASE}/lf/logs/stream?${params}`;
+  let cancelled = false;
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok || !res.body) {
+        onError(`Server error ${res.status}`);
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done || cancelled) break;
+        buf += decoder.decode(value, { stream: true });
+        const events = buf.split('\n\n');
+        buf = events.pop() ?? '';
+        for (const evt of events) {
+          for (const line of evt.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            const payload = line.slice(6);
+            if (payload === '{}') continue; // heartbeat
+            try {
+              const obj = JSON.parse(payload);
+              if (typeof obj.line === 'string') onLine(obj.line);
+            } catch {
+              // ignore malformed events
+            }
+          }
+        }
+      }
+    } catch (e) {
+      if (!cancelled) onError(String(e));
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+    controller.abort();
+  };
+}

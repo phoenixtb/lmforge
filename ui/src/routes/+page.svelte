@@ -4,28 +4,35 @@
   import { statusStore, isOnline } from '$lib/stores/status';
   import { hardwareStore } from '$lib/stores/hardware';
   import { sysInfoStore } from '$lib/stores/sysinfo';
+  import { metricsStore, startMetricsPolling, stopMetricsPolling } from '$lib/stores/metrics';
   import { fmtUptime } from '$lib/api';
   import { dragOnEmpty } from '$lib/drag';
 
   $: status  = $statusStore.overall_status;
   $: engine  = $statusStore.engine_id;
   $: version = $statusStore.engine_version;
-  $: metrics = $statusStore.metrics;
   $: slots   = Object.values($statusStore.running_models);
   $: hw      = $hardwareStore;
   $: sys     = $sysInfoStore;
+  // Live metrics from /lf/metrics (5 s poll). Replaces the legacy
+  // EngineMetrics fields on $statusStore which were never populated.
+  $: mx     = $metricsStore;
 
   // ── Uptime ticker ─────────────────────────────────────────────────────────────
   let clientUptime = 0;
   let uptimeTick: ReturnType<typeof setInterval> | null = null;
   let uptimeBase = 0, uptimeBaseAt = Date.now();
-  $: { uptimeBase = metrics.uptime_secs ?? 0; uptimeBaseAt = Date.now(); }
+  $: { uptimeBase = mx.uptime_secs ?? 0; uptimeBaseAt = Date.now(); }
   onMount(() => {
+    startMetricsPolling();
     uptimeTick = setInterval(() => {
       clientUptime = Math.round(uptimeBase + (Date.now() - uptimeBaseAt) / 1000);
     }, 1000);
   });
-  onDestroy(() => { if (uptimeTick) clearInterval(uptimeTick); });
+  onDestroy(() => {
+    if (uptimeTick) clearInterval(uptimeTick);
+    stopMetricsPolling();
+  });
 
   function fmtSecs(s: number) {
     if (s < 60)   return `${s}s`;
@@ -34,9 +41,13 @@
   }
 
   // ── Metrics ────────────────────────────────────────────────────────────────
-  $: ttft    = metrics.ttft_avg_ms > 0 ? `${Math.round(metrics.ttft_avg_ms)} ms` : '—';
-  $: ttftSub = metrics.ttft_avg_ms > 0 ? 'avg first token' : 'no requests yet';
-  $: reqs    = metrics.requests_total.toLocaleString();
+  // Avg TTFT proxy: chat p95 (closest signal until we instrument true TTFT).
+  $: chatP95 = mx.endpoints['/v1/chat/completions']?.p95_ms ?? null;
+  $: ttftStr = chatP95 != null ? `${Math.round(chatP95)} ms` : '—';
+  $: ttftSub = chatP95 != null ? 'p95 chat latency' : 'no chat traffic yet';
+  $: reqsStr = mx.requests_total.toLocaleString();
+  $: failedLoads = Object.values(mx.model_loads).reduce((acc, s) => acc + s.failure, 0);
+  $: uptimeStr = clientUptime > 0 ? fmtSecs(clientUptime) : '—';
 
   // ── Model VRAM (slot estimates only) ─────────────────────────────────────────
   $: modelVramGb  = slots.reduce((s, m) => s + (m.vram_est_gb ?? 0), 0);
@@ -135,12 +146,28 @@
 
   <div class="body">
 
-    <!-- ── Metrics strip ─────────────────────────────────────────────────────── -->
+    <!-- ── Metrics strip (live from /lf/metrics) ─────────────────────────── -->
     <div class="metrics">
-      <div class="metric metric--dim"><span class="mv mono">—</span><span class="ml">Avg TTFT</span><span class="ms">coming soon</span></div>
-      <div class="metric metric--dim"><span class="mv mono">—</span><span class="ml">Uptime</span><span class="ms">coming soon</span></div>
-      <div class="metric metric--dim"><span class="mv mono">—</span><span class="ml">Requests</span><span class="ms">coming soon</span></div>
-      <div class="metric metric--dim"><span class="mv mono">—</span><span class="ml">Restarts</span><span class="ms">coming soon</span></div>
+      <div class="metric">
+        <span class="mv mono">{ttftStr}</span>
+        <span class="ml">Avg latency</span>
+        <span class="ms">{ttftSub}</span>
+      </div>
+      <div class="metric">
+        <span class="mv mono">{uptimeStr}</span>
+        <span class="ml">Uptime</span>
+        <span class="ms">since daemon start</span>
+      </div>
+      <div class="metric">
+        <span class="mv mono">{reqsStr}</span>
+        <span class="ml">Requests</span>
+        <span class="ms">all endpoints</span>
+      </div>
+      <div class="metric" class:warn={failedLoads > 0}>
+        <span class="mv mono">{failedLoads}</span>
+        <span class="ml">Failed loads</span>
+        <span class="ms">cold-load failures</span>
+      </div>
     </div>
 
     <!-- ── Main panels ────────────────────────────────────────────────────────── -->

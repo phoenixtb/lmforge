@@ -45,38 +45,61 @@ pub async fn install(
 
 /// Check if the engine binary is already available
 fn find_existing_install(engine: &EngineConfig, data_dir: &std::path::Path) -> Option<String> {
-    // Check if the start command is in PATH
     let cmd = &engine.start_cmd;
-    if let Ok(output) = std::process::Command::new("which").arg(cmd).output()
-        && output.status.success()
+    if let Some(path) = which_in_path(cmd)
+        && verify_engine_version(engine, &path)
     {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        // Verify version if possible
-        if verify_engine_version(engine, &path) {
-            return Some(path);
-        }
+        return Some(path);
     }
 
-    // Check local engine directory
     if let Some(ref binary) = engine.binary {
-        let local_path = data_dir.join("engines").join(binary);
+        let resolved = if cfg!(windows) && !binary.ends_with(".exe") {
+            format!("{}.exe", binary)
+        } else {
+            binary.clone()
+        };
+        let local_path = data_dir.join("engines").join(&resolved);
         if local_path.exists() {
             return Some(local_path.to_string_lossy().to_string());
         }
     }
 
-    // Check venv for pip installs
-    let venv_bin = data_dir
-        .join("engines")
-        .join(&engine.id)
-        .join("venv")
-        .join("bin")
-        .join(cmd);
+    let venv_bin = if cfg!(windows) {
+        data_dir
+            .join("engines")
+            .join(&engine.id)
+            .join("venv")
+            .join("Scripts")
+            .join(format!("{}.exe", cmd))
+    } else {
+        data_dir
+            .join("engines")
+            .join(&engine.id)
+            .join("venv")
+            .join("bin")
+            .join(cmd)
+    };
     if venv_bin.exists() {
         return Some(venv_bin.to_string_lossy().to_string());
     }
 
     None
+}
+
+/// Resolve `cmd` against PATH using the platform-native locator.
+/// Unix: `which`. Windows: `where`. Returns the first hit or `None`.
+fn which_in_path(cmd: &str) -> Option<String> {
+    let locator = if cfg!(windows) { "where" } else { "which" };
+    let output = std::process::Command::new(locator).arg(cmd).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .next()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Verify the installed engine version matches what we expect
@@ -654,13 +677,10 @@ fn walkdir(dir: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
     Ok(results)
 }
 
-/// Check if a command exists in PATH
+/// Check if a command exists in PATH using the platform-native locator
+/// (`which` on Unix, `where` on Windows).
 fn command_exists(cmd: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(cmd)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    which_in_path(cmd).is_some()
 }
 
 /// Find a suitable Python 3.10+ interpreter
@@ -740,7 +760,11 @@ mod tests {
 
     #[test]
     fn test_command_exists_true() {
-        assert!(command_exists("ls"));
+        // `cmd` exists on Windows by default (cmd.exe is on PATH);
+        // `ls` exists on macOS/Linux. Pick by platform so the test
+        // passes natively on every supported OS.
+        let probe = if cfg!(windows) { "cmd" } else { "ls" };
+        assert!(command_exists(probe), "{probe} should be on PATH");
     }
 
     #[test]
