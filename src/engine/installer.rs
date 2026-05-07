@@ -852,6 +852,29 @@ mod tests {
     }
 
     #[test]
+    fn cudart_pattern_matches_upstream_asset_format() {
+        // The llama.cpp release page publishes:
+        //   cudart-llama-bin-win-cuda-12.4-x64.zip
+        //   cudart-llama-bin-win-cuda-13.1-x64.zip
+        // If this pattern drifts again, Windows installs 404 silently.
+        let registry = crate::engine::EngineRegistry::load(None).unwrap();
+        let llama = registry.get("llamacpp").expect("llamacpp engine");
+        let pattern = llama
+            .cudart_pattern
+            .as_ref()
+            .expect("cudart_pattern must be set for llama.cpp Windows installs");
+        for variant in &["12.4", "13.1"] {
+            let resolved = format!("{}.zip", pattern.replace("{cuda_variant}", variant));
+            let expected = format!("cudart-llama-bin-win-cuda-{}-x64.zip", variant);
+            assert_eq!(
+                resolved, expected,
+                "cudart asset name must match upstream: got {} expected {}",
+                resolved, expected
+            );
+        }
+    }
+
+    #[test]
     fn test_resolve_platform_windows_nvidia_uses_zip() {
         let profile = HardwareProfile {
             os: Os::Windows,
