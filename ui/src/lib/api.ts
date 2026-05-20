@@ -189,9 +189,14 @@ export const shutdown = (): Promise<{ status: string }> => post('/lf/shutdown');
 export interface CatalogEntry {
   shortcut: string;     // e.g. "qwen3:8b:4bit"
   hf_repo: string;      // e.g. "mlx-community/Qwen3-8B-4bit"
-  format: string;       // "mlx" | "gguf"
+  format: string;       // "mlx" | "gguf" | "safetensors"
   tags: string[];       // ["qwen3", "8b", "4bit"]
   role: string;         // "chat" | "embed" | "rerank" | "vision" | "code"
+  /** GGUF-only: exact .gguf filename to download. Used to fetch the size
+   *  of just this quant rather than summing every quant in the repo. */
+  file?: string | null;
+  /** GGUF-only: VLM multimodal projector filename (llama.cpp --mmproj). */
+  mmproj?: string | null;
 }
 
 export interface CatalogResponse {
@@ -354,23 +359,34 @@ export function fmtBytes(bytes: number): string {
 }
 
 /**
- * Fetch the total disk size (in bytes) for a single HuggingFace model repo.
+ * Fetch the disk size (in bytes) for a HuggingFace model repo.
  *
- * Important: HF's `usedStorage` field double-counts LFS blobs (once for the
- * LFS pointer, once for the actual stored bytes), so it is ~2× the real size.
- * Summing `siblings[].size` from the `?blobs=true` endpoint gives the correct
- * on-disk figure that matches what LMForge actually downloads.
+ * - When `fileName` is provided (GGUF entries), returns the size of just
+ *   that one file. mradermacher / lmstudio-community style repos pack
+ *   8+ quant variants per repo; summing all of them inflates the figure
+ *   by ~10× and bears no relation to what the user will actually download.
+ *
+ * - Without `fileName` (MLX / safetensors — whole repo is downloaded),
+ *   returns the sum of all `siblings[].size`. `usedStorage` is not used
+ *   because it double-counts LFS blobs.
  *
  * Returns null on error or if no size data is available.
  */
-export async function fetchHfModelSize(hfRepo: string): Promise<number | null> {
+export async function fetchHfModelSize(
+  hfRepo: string,
+  fileName?: string | null,
+): Promise<number | null> {
   try {
     const res = await fetch(`https://huggingface.co/api/models/${hfRepo}?blobs=true`, {
       headers: { Accept: 'application/json' },
     });
     if (!res.ok) return null;
     const data = await res.json();
-    const siblings: { size?: number }[] = data.siblings ?? [];
+    const siblings: { rfilename?: string; size?: number }[] = data.siblings ?? [];
+    if (fileName) {
+      const match = siblings.find((s) => s.rfilename === fileName);
+      return match?.size && match.size > 0 ? match.size : null;
+    }
     const total = siblings.reduce((sum, s) => sum + (s.size ?? 0), 0);
     return total > 0 ? total : null;
   } catch {
@@ -378,18 +394,25 @@ export async function fetchHfModelSize(hfRepo: string): Promise<number | null> {
   }
 }
 
+/** A repo + optional GGUF filename to size, keyed by repo in the result. */
+export interface HfSizeQuery {
+  repo: string;
+  file?: string | null;
+}
+
 /**
  * Batch-fetch HF model sizes for a list of repos in parallel.
- * Returns a map of hfRepo → bytes.  Failed lookups are silently omitted.
+ * Returns a map of hfRepo → bytes. Failed lookups are silently omitted.
+ * For GGUF entries pass `{ repo, file }` so the size reflects just that quant.
  */
 export async function fetchHfSizesBatch(
-  hfRepos: string[]
+  queries: HfSizeQuery[],
 ): Promise<Record<string, number>> {
   const results = await Promise.allSettled(
-    hfRepos.map(async (repo) => {
-      const bytes = await fetchHfModelSize(repo);
+    queries.map(async ({ repo, file }) => {
+      const bytes = await fetchHfModelSize(repo, file);
       return { repo, bytes };
-    })
+    }),
   );
   const map: Record<string, number> = {};
   for (const r of results) {

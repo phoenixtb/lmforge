@@ -42,13 +42,23 @@
   let catalogEntries: CatalogEntry[] = [];
   let loadingCatalog = false;
   let catalogError: string | null = null;
-  let catalogFetched = false;
+  /** Tracks the format that was last successfully fetched, so we refetch
+   *  when the engine (and therefore the catalog) changes underneath us. */
+  let catalogFetchedFormat: string | null = null;
 
-  // Derive the right format for this machine from the hardware profile.
-  // macOS uses MLX (Apple Silicon); Linux + Windows use GGUF.
+  // Derive the right catalog format for the *active engine*. Different
+  // engines on the same OS pick different catalog files — Linux + NVIDIA
+  // can run either SGLang (safetensors) or llama.cpp (gguf), so OS alone
+  // is not enough.
   $: platformFormat = (() => {
+    const engineId = ($statusStore.engine_id ?? '').toLowerCase();
+    if (engineId.includes('sglang'))                       return 'safetensors';
+    if (engineId.includes('mlx') || engineId === 'omlx')   return 'mlx';
+    if (engineId.includes('llama'))                        return 'gguf';
+    // Engine not reported yet — fall back to OS heuristic so the UI
+    // still renders something useful on cold start.
     const os = ($hardwareStore?.os ?? '').toLowerCase();
-    if (os.includes('mac') || os.includes('darwin')) return 'mlx';
+    if (os.includes('mac') || os.includes('darwin'))       return 'mlx';
     return 'gguf';
   })();
 
@@ -72,21 +82,22 @@
   let catalogSizesReady = false;  // false = fetch still in flight
 
   async function fetchCatalog() {
-    if (catalogFetched) return; // lazy — fetch only on first visit
-    loadingCatalog = true;
-    catalogError   = null;
+    if (catalogFetchedFormat === platformFormat) return;
+    loadingCatalog    = true;
+    catalogError      = null;
+    catalogSizes      = {};
+    catalogSizesReady = false;
     try {
       const res = await getCatalog(platformFormat);
-      catalogEntries = res.entries;
-      catalogFetched = true;
-      // Fire background size fetch — cards update reactively as data arrives
-      fetchHfSizesBatch(res.entries.map((e) => e.hf_repo)).then((sizes) => {
+      catalogEntries        = res.entries;
+      catalogFetchedFormat  = platformFormat;
+      fetchHfSizesBatch(res.entries.map((e) => ({ repo: e.hf_repo, file: e.file ?? null }))).then((sizes) => {
         catalogSizes = sizes;
         catalogSizesReady = true;
       });
     } catch (e) {
       catalogError = String(e);
-      catalogSizesReady = true; // avoid perpetual loading skeleton on error
+      catalogSizesReady = true;
     } finally {
       loadingCatalog = false;
     }
@@ -95,6 +106,13 @@
   function onTabChange(tab: Tab) {
     activeTab = tab;
     if (tab === 'recommended') fetchCatalog();
+  }
+
+  // Engine status arrives asynchronously — if it lands after the page
+  // mounted and the Recommended tab has already been opened, refetch
+  // against the correct catalog format.
+  $: if (activeTab === 'recommended' && catalogFetchedFormat && catalogFetchedFormat !== platformFormat) {
+    fetchCatalog();
   }
 
   function onCatalogPulled() {
@@ -173,8 +191,11 @@
       const url = `https://huggingface.co/api/models?search=${encodeURIComponent(searchQuery)}&limit=20&sort=downloads${filter}`;
       const data: HfApiModel[] = await (await fetch(url)).json();
       searchResults = data.map(hfToEntry);
-      // Batch-fetch real sizes from individual model API (search API doesn't expose usedStorage)
-      fetchHfSizesBatch(searchResults.map((e) => e.hf_repo)).then((sizes) => {
+      // Discover hits HF directly so we don't know per-quant filenames —
+      // ask for the whole-repo size (MLX / safetensors style). For GGUF
+      // search hits this still overcounts multi-quant repos, but that's
+      // inherent to the search-result shape: there is no "selected file".
+      fetchHfSizesBatch(searchResults.map((e) => ({ repo: e.hf_repo }))).then((sizes) => {
         discoverSizes = sizes;
         discoverSizesReady = true;
       });
@@ -282,7 +303,7 @@
       {:else if catalogError}
         <div class="tab-error" role="alert">
           Failed to load recommended models: {catalogError}
-          <button class="btn btn--ghost btn--sm" onclick={() => { catalogFetched = false; fetchCatalog(); }} style="margin-top:10px;">Retry</button>
+          <button class="btn btn--ghost btn--sm" onclick={() => { catalogFetchedFormat = null; fetchCatalog(); }} style="margin-top:10px;">Retry</button>
         </div>
 
       {:else}

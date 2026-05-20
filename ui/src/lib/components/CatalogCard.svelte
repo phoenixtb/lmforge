@@ -37,9 +37,10 @@
   // ── Engine compatibility ──────────────────────────────────────────────────────
   $: requiredFormat = (() => {
     const id = ($statusStore.engine_id ?? '').toLowerCase();
-    if (id.includes('mlx'))                          return 'mlx';
-    if (id.includes('llama') || id.includes('gguf')) return 'gguf';
-    return null; // unknown engine — no restriction
+    if (id.includes('mlx') || id === 'omlx')                  return 'mlx';
+    if (id.includes('sglang') || id.includes('safetensors'))  return 'safetensors';
+    if (id.includes('llama') || id.includes('gguf'))          return 'gguf';
+    return null;
   })();
   $: incompatible = !!requiredFormat && !!entry.format && entry.format !== requiredFormat;
   let showIncompatWarning = false;
@@ -53,8 +54,9 @@
     code:   'badge--grey',
   };
   const FORMAT_CLS: Record<string, string> = {
-    mlx:  'badge--purple',
-    gguf: 'badge--grey',
+    mlx:          'badge--purple',
+    gguf:         'badge--grey',
+    safetensors:  'badge--blue',
   };
 
   function startPull() {

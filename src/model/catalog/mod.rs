@@ -151,12 +151,23 @@ pub struct CatalogEntry {
     pub shortcut: String,
     /// The resolved HuggingFace repo, e.g. `"mlx-community/Qwen3-8B-4bit"`.
     pub hf_repo: String,
-    /// Engine format: `"mlx"` or `"gguf"`.
+    /// Engine format: `"mlx"`, `"gguf"`, or `"safetensors"`.
     pub format: String,
     /// Tags derived by splitting the shortcut on `':'`, e.g. `["qwen3","8b","4bit"]`.
     pub tags: Vec<String>,
     /// Inferred capability role: `"chat"`, `"embed"`, `"rerank"`, `"vision"`, or `"code"`.
     pub role: String,
+    /// GGUF-only: the specific `.gguf` filename to download from the repo.
+    /// Lets the UI fetch the size of *this* quant rather than summing every
+    /// quant variant in the repo (a single mradermacher GGUF repo can hold
+    /// 8+ variants totalling ~10x the actual file size).
+    /// `None` for MLX / safetensors entries (whole repo is downloaded).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// GGUF-only: the multimodal projector filename for VLMs (llama.cpp `--mmproj`).
+    /// `None` for non-vision models.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mmproj: Option<String>,
 }
 
 /// Return all catalog entries for the requested format(s).
@@ -199,6 +210,8 @@ pub fn list_for_ui(format: &str) -> Vec<CatalogEntry> {
                         format: fmt.to_string(),
                         tags,
                         role,
+                        file: None,
+                        mmproj: None,
                     });
                 }
             }
@@ -225,6 +238,8 @@ pub fn list_for_ui(format: &str) -> Vec<CatalogEntry> {
                         format: fmt.to_string(),
                         tags,
                         role,
+                        file: Some(entry.file),
+                        mmproj: entry.mmproj,
                     });
                 }
             }
@@ -803,6 +818,50 @@ mod tests {
         assert_eq!(
             shortcuts, sorted,
             "list_for_ui must return entries sorted by shortcut"
+        );
+    }
+
+    #[test]
+    fn test_list_for_ui_gguf_entries_expose_file_field() {
+        // The UI needs the exact filename to ask HF for the size of just
+        // this quant (mradermacher repos pack 8+ quants per repo).
+        let entries = list_for_ui("gguf");
+        for e in &entries {
+            assert!(
+                e.file.as_ref().is_some_and(|f| f.ends_with(".gguf")),
+                "GGUF entry {} must carry a .gguf `file` field, got {:?}",
+                e.shortcut,
+                e.file
+            );
+        }
+    }
+
+    #[test]
+    fn test_list_for_ui_mlx_and_safetensors_have_no_file_field() {
+        for fmt in ["mlx", "safetensors"] {
+            let entries = list_for_ui(fmt);
+            assert!(!entries.is_empty(), "expected entries for format {fmt}");
+            for e in &entries {
+                assert!(
+                    e.file.is_none(),
+                    "{fmt} entry {} must not carry a `file` field (whole repo is downloaded)",
+                    e.shortcut
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_list_for_ui_vlm_entries_carry_mmproj() {
+        let entries = list_for_ui("gguf");
+        let vlm = entries
+            .iter()
+            .find(|e| e.shortcut == "qwen2.5-vl:3b:4bit")
+            .expect("qwen2.5-vl:3b:4bit must be in the GGUF catalog");
+        assert!(
+            vlm.mmproj.as_ref().is_some_and(|m| m.contains("mmproj")),
+            "VLM entry must carry mmproj path, got {:?}",
+            vlm.mmproj
         );
     }
 
