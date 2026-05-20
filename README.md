@@ -58,7 +58,7 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 - **Multi-model orchestration** — run inference *and* embedding models simultaneously, each independently managed with its own keep-alive lifecycle
 - **Hardware-aware engine selection** — automatically picks the best engine:
   - 🍎 **Apple Silicon** → [oMLX](https://github.com/jundot/omlx) — OpenAI-compatible server, runs natively on Metal via MLX
-  - 🖥️ **NVIDIA GPU (Linux)** → [SGLang](https://github.com/sgl-project/sglang) — CUDA, high-concurrency (24 GB+ VRAM recommended)
+  - 🖥️ **NVIDIA GPU (Linux)** → [SGLang](https://github.com/sgl-project/sglang) — CUDA, high-concurrency (8 GB+ VRAM; tune `LMFORGE_SGLANG_MEM_FRACTION` down on 8 GB cards)
   - 🪟 **NVIDIA GPU (Windows)** → [llama.cpp](https://github.com/ggerganov/llama.cpp) with CUDA prebuilts — SGLang is Linux-only upstream; use WSL2 if you need it
   - 💻 **CPU / any hardware** → [llama.cpp](https://github.com/ggerganov/llama.cpp) — universal cross-platform fallback
 - **VRAM-aware LRU eviction** — loads models up to detected VRAM budget; evicts least-recently-used when full
@@ -78,7 +78,7 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 | Platform | Architecture | Engine | Core | Desktop UI |
 |---|---|---|---|---|
 | macOS 13+ | Apple Silicon (arm64) | oMLX (Metal/MLX) | ✅ | ✅ DMG |
-| Ubuntu 22.04 / 24.04 / 26.04 | x86_64 | SGLang (NVIDIA, 24 GB+) / llama.cpp | ✅ | ✅ AppImage |
+| Ubuntu 22.04 / 24.04 / 26.04 | x86_64 | SGLang (NVIDIA, 8 GB+) / llama.cpp | ✅ | ✅ AppImage |
 | Ubuntu 22.04 / 24.04 / 26.04 | arm64 | llama.cpp | ✅ | 🔜 Planned |
 | Windows 10/11 | x86_64 | llama.cpp (CPU + NVIDIA CUDA) | ✅ | ✅ NSIS installer |
 | Windows 10/11 + WSL2 | x86_64 | SGLang (NVIDIA via CUDA-on-WSL) | ✅ (inside WSL) | run via Linux build |
@@ -248,6 +248,22 @@ curl -s http://127.0.0.1:11430/v1/models | jq '[.data[] | {id, capabilities}]'
 ```
 
 > If you set an API key (`api_key` in `config.toml` or `LMFORGE_API_KEY` env), add `-H "Authorization: Bearer <your-key>"` to every request above.
+
+### Confirm the engine that was selected
+
+```bash
+curl -s http://127.0.0.1:11430/lf/status | jq '.engine'
+# Expected on Linux + NVIDIA ≥ 8 GB VRAM: { "id": "sglang", "version": "..." }
+# Expected on Apple Silicon:              { "id": "omlx", "version": "..." }
+# Anything else (incl. Windows + NVIDIA): { "id": "llamacpp", "version": "..." }
+```
+
+If you see `llamacpp` on a Linux machine with ≥ 8 GB NVIDIA VRAM, **restart the daemon — the engine is re-selected on every `start`**, so this is enough; SGLang will auto-install on first launch:
+
+```bash
+lmforge stop
+lmforge start   # logs will show "Engine not installed, running installer..." for SGLang
+```
 
 ---
 

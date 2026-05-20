@@ -31,7 +31,11 @@ version         = "0.5.10.post1"
 matches_os      = "linux"
 matches_arch    = "x86_64"
 matches_gpu     = "nvidia"
-min_vram_gb     = 24.0
+# 8 GB is the practical floor for SGLang on this catalog. The 1.7B / 4B
+# AWQ models fit comfortably; 7B/8B AWQ fits with a tighter mem fraction
+# (export LMFORGE_SGLANG_MEM_FRACTION=0.3). Below 8 GB SGLang's KV cache
+# reservation starves model weights — fall back to llama.cpp there.
+min_vram_gb     = 8.0
 install_method  = "pip"
 pip_package     = "sglang[all]==0.5.10.post1"
 preflight       = ["nvcc", "nvidia-smi", "python3"]

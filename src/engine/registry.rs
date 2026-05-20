@@ -282,6 +282,20 @@ mod tests {
         }
     }
 
+    fn nvidia_tiny() -> HardwareProfile {
+        HardwareProfile {
+            os: Os::Linux,
+            arch: Arch::X86_64,
+            is_tegra: false,
+            gpu_vendor: GpuVendor::Nvidia,
+            vram_gb: 4.0,
+            unified_mem: false,
+            total_ram_gb: 16.0,
+            cpu_cores: 4,
+            cpu_model: "Intel i5".to_string(),
+        }
+    }
+
     fn cpu_only() -> HardwareProfile {
         HardwareProfile {
             os: Os::Linux,
@@ -321,10 +335,20 @@ mod tests {
     }
 
     #[test]
-    fn test_select_llamacpp_on_small_nvidia() {
+    fn test_select_sglang_on_8gb_nvidia() {
+        // 8 GB is the documented SGLang floor. Cards in this tier
+        // (RTX 3060 8GB, 4060 8GB, 5060 Ti 16GB, etc.) must pick SGLang.
         let registry = EngineRegistry::load(None).unwrap();
         let selected = registry.select(&nvidia_small()).unwrap();
-        // SGLang needs 24GB+ VRAM, so 8GB falls to llama.cpp
+        assert_eq!(selected.id, "sglang");
+    }
+
+    #[test]
+    fn test_select_llamacpp_on_tiny_nvidia() {
+        // < 8 GB NVIDIA: SGLang's KV cache reservation would starve weights,
+        // so fall through to llama.cpp.
+        let registry = EngineRegistry::load(None).unwrap();
+        let selected = registry.select(&nvidia_tiny()).unwrap();
         assert_eq!(selected.id, "llamacpp");
     }
 
