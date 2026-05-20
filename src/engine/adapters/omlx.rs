@@ -73,14 +73,14 @@ impl EngineAdapter for OmlxAdapter {
             "Spawning native oMLX engine with models parent directory"
         );
 
-        let stdout_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(logs_dir.join("engine-stdout.log"))?;
-        let stderr_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(logs_dir.join("engine-stderr.log"))?;
+        // Per-model log files with size-based rotation. oMLX serves all
+        // discovered models from a single process so the log file groups by
+        // the *requested* model id — easier to grep when one specific model
+        // misbehaves (e.g. the qwen2.5-vl preflight 403 we hit earlier).
+        let stdout_file =
+            crate::logging::rotation::prepare_engine_log(logs_dir, model_id, "stdout")?;
+        let stderr_file =
+            crate::logging::rotation::prepare_engine_log(logs_dir, model_id, "stderr")?;
 
         let child = Command::new(&self.executable)
             .args([

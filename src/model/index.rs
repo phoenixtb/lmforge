@@ -24,13 +24,24 @@ pub struct ModelEntry {
     pub added_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelCapabilities {
     pub chat: bool,
     pub embeddings: bool,
     #[serde(default)]
     pub reranking: bool,
     pub thinking: bool,
+    /// True for vision-language models (VLMs) that accept image inputs in chat
+    /// requests via OpenAI's `image_url` / `input_image` content blocks.
+    /// Detected from `model_type` (qwen2_vl, llava, minicpmv, mllama, etc.) or
+    /// from a catalog shortcut hint containing `:vl:` / `-vl-` / `vision`.
+    #[serde(default)]
+    pub vision: bool,
+    /// Absolute path to the multimodal projector file (`mmproj-*.gguf`) for
+    /// llama.cpp-served VLMs. None for engines that ship the projector inside
+    /// the main weights (oMLX/MLX, SGLang/safetensors).
+    #[serde(default)]
+    pub mmproj_path: Option<String>,
     /// Output vector dimensionality — populated for embedding models.
     #[serde(default)]
     pub embedding_dims: Option<u32>,
@@ -165,14 +176,7 @@ pub fn detect_capabilities(
     model_id_hint: Option<&str>,
     hf_repo_hint: Option<&str>,
 ) -> ModelCapabilities {
-    let mut caps = ModelCapabilities {
-        chat: false,
-        embeddings: false,
-        reranking: false,
-        thinking: false,
-        embedding_dims: None,
-        pooling: None,
-    };
+    let mut caps = ModelCapabilities::default();
 
     // =========================================================================
     // Signal D — generation_config.json explicit is_embedding flag
@@ -215,6 +219,64 @@ pub fn detect_capabilities(
         // num_labels == 1 → binary relevance score (cross-encoder re-ranker)
         if is_seq_classifier && num_labels == 1 {
             caps.reranking = true;
+        }
+
+        // --- Vision-language model (VLM) detection ---
+        // VLMs declare a multimodal model_type in their config.json. We flag chat=true
+        // here too because every VLM we ship is also a generative chat model — the
+        // vision flag layers on top of chat. The list is intentionally explicit so
+        // we don't accidentally flag every "vl"-named architecture.
+        let vlm_model_types = [
+            "qwen2_vl",
+            "qwen2_5_vl",
+            "qwen3_vl",
+            "llava",
+            "llava_next",
+            "llava_onevision",
+            "internvl",
+            "internvl_chat",
+            "minicpmv",
+            "minicpm_v",
+            "mllama",
+            "phi3_v",
+            "pixtral",
+            "idefics",
+            "idefics2",
+            "idefics3",
+        ];
+        if vlm_model_types.iter().any(|t| model_type.contains(t)) {
+            caps.vision = true;
+            caps.chat = true;
+            caps.embeddings = false;
+            debug!(
+                model_type,
+                "VLM model_type detected — flagging vision=true, chat=true"
+            );
+        }
+
+        // Architecture-array fallback: catches custom forks where model_type is generic
+        // but the architecture name encodes the modality (e.g. *ForConditionalGeneration
+        // containing 'vl' or 'vision'). We require *both* substrings to limit false hits.
+        if !caps.vision
+            && let Some(archs) = config["architectures"].as_array()
+        {
+            let arch_blob = archs
+                .iter()
+                .filter_map(|a| a.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase();
+            if arch_blob.contains("forconditionalgeneration")
+                && (arch_blob.contains("vl") || arch_blob.contains("vision"))
+            {
+                caps.vision = true;
+                caps.chat = true;
+                caps.embeddings = false;
+                debug!(
+                    arch = %arch_blob,
+                    "VLM architecture pattern detected — flagging vision=true"
+                );
+            }
         }
 
         // --- Chat model detection ---
@@ -308,6 +370,24 @@ pub fn detect_capabilities(
         debug!("Signal B: 'embed(ding)' in name — flagging as embedding model");
     }
 
+    // Signal B-vision: vision-language model name heuristic.
+    // Layered separately so VLM flags activate even on chat-typed catalog hints.
+    // Skipped when the model has already been classified as embed/rerank.
+    if !caps.embeddings
+        && !caps.reranking
+        && (name_corpus.contains("-vl-")
+            || name_corpus.contains("_vl_")
+            || name_corpus.ends_with("-vl")
+            || name_corpus.contains("vision")
+            || name_corpus.contains("llava")
+            || name_corpus.contains("minicpm-v")
+            || name_corpus.contains("minicpmv"))
+    {
+        caps.vision = true;
+        caps.chat = true;
+        debug!("Signal B-vision: VL/vision marker in name — flagging vision=true");
+    }
+
     // =========================================================================
     // Signal A — Catalog shortcut name override
     // The logical shortcut used to pull the model is our most reliable signal:
@@ -319,6 +399,13 @@ pub fn detect_capabilities(
         if hint_lower.contains("embed") {
             caps.embeddings = true;
             caps.chat = false;
+            // VL-embedding models stay vision-capable on the embedding side too.
+            if hint_lower.contains(":vl:")
+                || hint_lower.contains("-vl-")
+                || hint_lower.contains("vision")
+            {
+                caps.vision = true;
+            }
             debug!(
                 hint,
                 "Signal A: catalog shortcut contains 'embed' — overriding to embedding model"
@@ -329,6 +416,21 @@ pub fn detect_capabilities(
             debug!(
                 hint,
                 "Signal A: catalog shortcut contains 'rerank' — overriding to re-ranker"
+            );
+        } else if hint_lower.contains(":vl:")
+            || hint_lower.contains("-vl-")
+            || hint_lower.contains("vision")
+            || hint_lower.contains("llava")
+            || hint_lower.contains("minicpm-v")
+            || hint_lower.contains("minicpmv")
+        {
+            // Catalog VLM shortcut: e.g. "qwen2.5-vl:7b:4bit", "minicpm-v:2.6:4bit"
+            caps.vision = true;
+            caps.chat = true;
+            caps.embeddings = false;
+            debug!(
+                hint,
+                "Signal A: catalog shortcut contains VL marker — flagging vision=true"
             );
         }
     }
@@ -404,7 +506,48 @@ pub fn detect_capabilities(
         caps.thinking = true;
     }
 
+    // =========================================================================
+    // VLM mmproj sidecar lookup (llama.cpp-served VLMs only).
+    // Convention: `mmproj-*.gguf` next to the main weights file. If we already
+    // know vision=true we look unconditionally; if vision is unset but a
+    // projector is present we promote vision=true and chat=true.
+    // =========================================================================
+    let mmproj_path = find_mmproj_file(model_dir);
+    if let Some(path) = mmproj_path {
+        if !caps.vision {
+            // mmproj presence is unambiguous evidence of a VLM
+            caps.vision = true;
+            if !caps.embeddings && !caps.reranking {
+                caps.chat = true;
+            }
+            debug!(
+                path = %path.display(),
+                "mmproj sidecar found — flagging vision=true"
+            );
+        }
+        caps.mmproj_path = Some(path.to_string_lossy().to_string());
+    }
+
     caps
+}
+
+/// Find the multimodal projector sidecar (`mmproj-*.gguf`) in the given dir.
+/// Returns the first match (sorted lexicographically for deterministic results).
+fn find_mmproj_file(model_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut matches: Vec<std::path::PathBuf> = std::fs::read_dir(model_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with("mmproj-") && n.ends_with(".gguf"))
+                    .unwrap_or(false)
+        })
+        .collect();
+    matches.sort();
+    matches.into_iter().next()
 }
 
 #[cfg(test)]
@@ -429,11 +572,7 @@ mod tests {
             size_bytes: 1000,
             capabilities: ModelCapabilities {
                 chat: true,
-                embeddings: false,
-                reranking: false,
-                thinking: false,
-                embedding_dims: None,
-                pooling: None,
+                ..Default::default()
             },
             added_at: "2024-01-01".to_string(),
         });
@@ -463,11 +602,7 @@ mod tests {
             size_bytes: 1000,
             capabilities: ModelCapabilities {
                 chat: true,
-                embeddings: false,
-                reranking: false,
-                thinking: false,
-                embedding_dims: None,
-                pooling: None,
+                ..Default::default()
             },
             added_at: "2024-01-01".to_string(),
         };
@@ -790,6 +925,180 @@ mod tests {
             caps.embedding_dims, None,
             "Embedding dims must not be set for chat models"
         );
+        cleanup(&dir);
+    }
+
+    // ── VLM (vision) detection ────────────────────────────────────────────────
+
+    #[test]
+    fn test_vlm_detection_qwen2_5_vl_from_config() {
+        let dir = make_model_dir("vlm_qwen25_config");
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"qwen2_5_vl","architectures":["Qwen2_5_VLForConditionalGeneration"]}"#,
+        );
+        write_json(
+            &dir,
+            "tokenizer_config.json",
+            r#"{"chat_template":"{% for m in messages %}{{m}}{% endfor %}"}"#,
+        );
+
+        let caps = detect_capabilities(&dir, None, None);
+        assert!(caps.vision, "qwen2_5_vl model_type must set vision=true");
+        assert!(caps.chat, "VLM must also be chat=true");
+        assert!(!caps.embeddings, "VLM must not be flagged as embedding");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_vlm_detection_minicpmv_from_config() {
+        let dir = make_model_dir("vlm_minicpmv");
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"minicpmv","architectures":["MiniCPMV"]}"#,
+        );
+        let caps = detect_capabilities(&dir, None, None);
+        assert!(caps.vision, "minicpmv must set vision=true");
+        assert!(caps.chat);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_vlm_detection_llava_from_config() {
+        let dir = make_model_dir("vlm_llava");
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"llava_next","architectures":["LlavaNextForConditionalGeneration"]}"#,
+        );
+        let caps = detect_capabilities(&dir, None, None);
+        assert!(caps.vision);
+        assert!(caps.chat);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_vlm_detection_mllama_from_config() {
+        let dir = make_model_dir("vlm_mllama");
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"mllama","architectures":["MllamaForConditionalGeneration"]}"#,
+        );
+        let caps = detect_capabilities(&dir, None, None);
+        assert!(caps.vision);
+        assert!(caps.chat);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_vlm_detection_via_catalog_hint_only() {
+        // Path: GGUF VLM with no config.json — must still detect from catalog hint.
+        let dir = make_model_dir("vlm_catalog_hint");
+        let caps = detect_capabilities(
+            &dir,
+            Some("qwen2.5-vl:7b:4bit"),
+            Some("bartowski/Qwen2.5-VL-7B-Instruct-GGUF"),
+        );
+        assert!(caps.vision, "Catalog VL hint must set vision=true");
+        assert!(caps.chat, "Catalog VL hint must set chat=true");
+        assert!(!caps.embeddings, "Catalog VL hint must not set embeddings");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_vlm_architecture_fallback_pattern() {
+        // model_type empty/generic but architecture name carries the modality marker.
+        let dir = make_model_dir("vlm_arch_fallback");
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"custom","architectures":["MyCustomVLForConditionalGeneration"]}"#,
+        );
+        let caps = detect_capabilities(&dir, None, None);
+        assert!(
+            caps.vision,
+            "Architecture pattern *VLForConditionalGeneration must set vision=true"
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_vl_embedding_keeps_vision_flag() {
+        // Qwen3-VL-Embedding: VL embedder, not chat.
+        let dir = make_model_dir("vl_embed");
+        let caps = detect_capabilities(
+            &dir,
+            Some("qwen3-vl-embed:2b:4bit"),
+            Some("mlx-community/Qwen3-VL-Embedding-2B-4bit"),
+        );
+        assert!(caps.embeddings, "VL embedding must be embeddings=true");
+        assert!(!caps.chat, "VL embedding must not be chat");
+        assert!(
+            caps.vision,
+            "VL embedding must keep vision=true for image inputs"
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_mmproj_sidecar_promotes_vision_and_sets_path() {
+        // GGUF VLM scenario: mmproj sidecar present alongside main weights.
+        let dir = make_model_dir("vlm_mmproj_promote");
+        // No config.json, no catalog hint — mmproj alone must be sufficient.
+        std::fs::write(dir.join("Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"), b"weights").unwrap();
+        std::fs::write(dir.join("mmproj-Qwen2.5-VL-7B-Instruct-f16.gguf"), b"proj").unwrap();
+
+        let caps = detect_capabilities(&dir, None, None);
+        assert!(caps.vision, "mmproj sidecar must promote vision=true");
+        assert!(caps.chat, "mmproj sidecar must promote chat=true");
+        let mmproj = caps.mmproj_path.expect("mmproj_path must be set");
+        assert!(
+            mmproj.ends_with("mmproj-Qwen2.5-VL-7B-Instruct-f16.gguf"),
+            "mmproj_path was: {mmproj}"
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_mmproj_path_set_when_vision_already_known() {
+        // Catalog hint already sets vision; mmproj_path must still be populated.
+        let dir = make_model_dir("vlm_mmproj_known");
+        std::fs::write(dir.join("mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf"), b"proj").unwrap();
+
+        let caps = detect_capabilities(&dir, Some("qwen2.5-vl:3b:4bit"), None);
+        assert!(caps.vision);
+        assert!(caps.mmproj_path.is_some());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_no_mmproj_does_not_set_vision() {
+        let dir = make_model_dir("no_mmproj");
+        std::fs::write(dir.join("Qwen3-8B-Q4_K_M.gguf"), b"weights").unwrap();
+        let caps = detect_capabilities(&dir, Some("qwen3:8b:4bit"), None);
+        assert!(!caps.vision);
+        assert!(caps.mmproj_path.is_none());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_chat_model_does_not_trigger_vision() {
+        // Use a benign dir name so Signal B-vision doesn't false-trigger on the
+        // test scaffold path itself (production dirs are e.g. `Qwen3-8B-4bit`).
+        let dir = make_model_dir("plain_chat_8b");
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"]}"#,
+        );
+        write_json(&dir, "tokenizer_config.json", r#"{"chat_template":"..."}"#);
+        let caps = detect_capabilities(&dir, Some("qwen3.5:4b:4bit"), None);
+        assert!(caps.chat);
+        assert!(!caps.vision, "Plain chat model must not set vision");
+        assert!(caps.mmproj_path.is_none());
         cleanup(&dir);
     }
 }

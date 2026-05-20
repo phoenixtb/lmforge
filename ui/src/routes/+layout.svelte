@@ -1,7 +1,5 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listen } from '@tauri-apps/api/event';
-  import { invoke } from '@tauri-apps/api/core';
   import '../app.css';
   import Sidebar from '$lib/components/Sidebar.svelte';
   import ToastContainer from '$lib/components/ToastContainer.svelte';
@@ -9,14 +7,28 @@
   import { loadHardware } from '$lib/stores/hardware';
   import { startSysInfoPolling, stopSysInfoPolling } from '$lib/stores/sysinfo';
   import { normalizeStatus } from '$lib/api';
-  import type { LfStatus } from '$lib/api';
+
+  // Tauri runtime detection. Set on window by the Tauri webview before any
+  // user JS runs. Absent in plain browsers (vite dev tab, /ui Docker route),
+  // so we fall back to HTTP polling + SSE for status.
+  function isTauri(): boolean {
+    if (typeof window === 'undefined') return false;
+    const w = window as unknown as Record<string, unknown>;
+    return '__TAURI_INTERNALS__' in w || '__TAURI__' in w;
+  }
 
   let unlistenHealth: (() => void) | null = null;
   let unlistenStatus: (() => void) | null = null;
+  let healthPollTimer: ReturnType<typeof setInterval> | null = null;
+  let statusEs: EventSource | null = null;
   let hwRetryTimer: ReturnType<typeof setTimeout> | null = null;
   let destroyed = false;
   let starting = false;
   let startError: string | null = null;
+  // Hide the in-app "Start Engine" button outside Tauri — `invoke` is not
+  // available in a plain browser, so the fallback CLI hint is all we can
+  // offer.
+  let canStartEngine = false;
 
   $: online = $daemonOnline;
   $: connecting = $isConnecting;
@@ -35,7 +47,8 @@
     starting = true;
     startError = null;
     try {
-      await invoke('start_engine');
+      const tauriCore = await import('@tauri-apps/api/core');
+      await tauriCore.invoke('start_engine');
     } catch (e: unknown) {
       startError = String(e);
     } finally {
@@ -43,12 +56,14 @@
     }
   }
 
-  onMount(async () => {
-    // Listen for daemon reachability changes
+  // ── Tauri-mode wiring (preferred when available) ────────────────────────
+  async function setupTauriMode() {
+    canStartEngine = true;
+    const { listen } = await import('@tauri-apps/api/event');
+
     unlistenHealth = await listen<{ online: boolean }>('lf:health', (event) => {
       daemonOnline.set(event.payload.online);
       if (event.payload.online) {
-        // Daemon just came online — kick off hardware load and polling
         tryLoadHardware();
         startSysInfoPolling();
       } else {
@@ -56,10 +71,78 @@
       }
     });
 
-    // Listen for engine state updates
-    unlistenStatus = await listen<LfStatus>('lf:status', (event) => {
-      statusStore.set(normalizeStatus(event.payload as Parameters<typeof normalizeStatus>[0]));
+    type RawStatus = Parameters<typeof normalizeStatus>[0];
+    unlistenStatus = await listen<RawStatus>('lf:status', (event) => {
+      statusStore.set(normalizeStatus(event.payload));
     });
+  }
+
+  // ── Browser-mode wiring (vite dev tab or /ui served by daemon) ──────────
+  // Mirrors the rust-side Tauri loop: poll GET /health every 2 s, subscribe
+  // to GET /lf/status/stream for live engine state. SSE auto-reconnects via
+  // the browser's built-in EventSource backoff.
+  function setupBrowserMode() {
+    const BASE = window.location.origin === 'http://localhost:1420'
+      ? 'http://localhost:11430'   // vite dev → daemon on the conventional port
+      : window.location.origin;     // /ui served by the daemon → same origin
+
+    const pollHealth = async () => {
+      try {
+        const res = await fetch(`${BASE}/health`, { cache: 'no-store' });
+        const wasOnline = $daemonOnline === true;
+        const nowOnline = res.ok;
+        daemonOnline.set(nowOnline);
+        if (nowOnline && !wasOnline) {
+          tryLoadHardware();
+          startSysInfoPolling();
+          openStatusStream(BASE);
+        } else if (!nowOnline) {
+          stopSysInfoPolling();
+          closeStatusStream();
+        }
+      } catch {
+        daemonOnline.set(false);
+        stopSysInfoPolling();
+        closeStatusStream();
+      }
+    };
+    pollHealth();
+    healthPollTimer = setInterval(pollHealth, 2000);
+  }
+
+  function openStatusStream(base: string) {
+    closeStatusStream();
+    try {
+      statusEs = new EventSource(`${base}/lf/status/stream`);
+      statusEs.onmessage = (evt) => {
+        try {
+          const raw = JSON.parse(evt.data);
+          statusStore.set(normalizeStatus(raw));
+        } catch {
+          // ignore malformed frames
+        }
+      };
+      statusEs.onerror = () => {
+        // EventSource auto-reconnects; nothing to do here.
+      };
+    } catch {
+      // EventSource unsupported — health polling still works.
+    }
+  }
+
+  function closeStatusStream() {
+    if (statusEs) {
+      statusEs.close();
+      statusEs = null;
+    }
+  }
+
+  onMount(async () => {
+    if (isTauri()) {
+      await setupTauriMode();
+    } else {
+      setupBrowserMode();
+    }
   });
 
   onDestroy(() => {
@@ -67,6 +150,8 @@
     unlistenHealth?.();
     unlistenStatus?.();
     if (hwRetryTimer) clearTimeout(hwRetryTimer);
+    if (healthPollTimer) clearInterval(healthPollTimer);
+    closeStatusStream();
     stopSysInfoPolling();
   });
 </script>
@@ -98,16 +183,22 @@
         <p class="start-error">{startError}</p>
       {/if}
 
-      <button class="start-btn" on:click={startEngine} disabled={starting}>
-        {#if starting}
-          <span class="btn-spinner"></span> Starting…
-        {:else}
-          ▶ Start Engine
-        {/if}
-      </button>
+      {#if canStartEngine}
+        <button class="start-btn" on:click={startEngine} disabled={starting}>
+          {#if starting}
+            <span class="btn-spinner"></span> Starting…
+          {:else}
+            ▶ Start Engine
+          {/if}
+        </button>
+      {/if}
 
       <p class="hint-small">
-        Or install as a service so it starts automatically:<br>
+        {#if canStartEngine}
+          Or install as a service so it starts automatically:<br>
+        {:else}
+          Start it from a terminal, or install it as a system service:<br>
+        {/if}
         <code>lmforge service install</code>
       </p>
     </div>

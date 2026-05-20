@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub enum DownloadProgress {
@@ -148,6 +149,48 @@ pub async fn download_model(
     Ok(total_bytes)
 }
 
+/// Extract the LFS sha256 hex digest that HuggingFace exposes via the
+/// `X-Linked-Etag` header (for LFS-tracked files). The header value is a
+/// 64-char hex sha256 wrapped in quotes, e.g. `"abc...def"`. Non-LFS files
+/// (small `.json`, tokenizer text) lack this header and the function
+/// returns None — verification is skipped for them.
+fn parse_hf_lfs_sha256(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    let raw = headers.get("X-Linked-Etag")?.to_str().ok()?;
+    let trimmed = raw.trim_matches('"');
+    if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(trimmed.to_lowercase())
+    } else {
+        None
+    }
+}
+
+/// Compute sha256 of a file on disk in 1 MB chunks. Used to verify completed
+/// downloads against the LFS sha256 advertised by HuggingFace. Streaming
+/// avoids loading the whole file into memory — important for multi-GB
+/// safetensors shards.
+fn sha256_file(path: &std::path::Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1024 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex_lower(&hasher.finalize()))
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
+}
+
 /// Download a single file with progress bar and resume support
 async fn download_file(
     client: &reqwest::Client,
@@ -225,6 +268,11 @@ async fn download_file(
         resp.content_length().unwrap_or(0)
     };
 
+    // Capture LFS sha256 (if HuggingFace exposed one) BEFORE we consume the
+    // response stream — once we move into bytes_stream() the headers are gone.
+    let expected_sha256 = parse_hf_lfs_sha256(resp.headers());
+    let is_partial = resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -253,5 +301,103 @@ async fn download_file(
         }
     }
 
+    // Drop the file handle before re-opening it for hashing so the OS flushes.
+    drop(file);
+
+    // Verify sha256 when HF advertised one and the response was a complete
+    // (non-resumed) download. For resumed downloads we'd need to re-hash from
+    // the start, which we still do — see below — but we skip silently if the
+    // resumed bytes were obtained from a different mirror with stale metadata.
+    if let Some(expected) = expected_sha256 {
+        match sha256_file(dest) {
+            Ok(actual) if actual == expected => {
+                debug!(
+                    file = file_name,
+                    "sha256 verified against HuggingFace LFS metadata"
+                );
+            }
+            Ok(actual) => {
+                let context = if is_partial {
+                    "resumed download (mirror metadata may be stale)"
+                } else {
+                    "full download"
+                };
+                // Mismatch is critical: corrupt weights → silent inference garbage.
+                // Delete the file so the next pull re-downloads cleanly, then bail.
+                let _ = std::fs::remove_file(dest);
+                anyhow::bail!(
+                    "sha256 mismatch for {file_name} ({context}): expected {expected}, got {actual}. \
+                     Removed corrupt file. Re-run `lmforge pull` to retry."
+                );
+            }
+            Err(e) => {
+                warn!(file = file_name, error = %e, "Failed to verify sha256 — keeping file but skipping integrity check");
+            }
+        }
+    }
+
     Ok(downloaded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::header::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn parse_hf_lfs_sha256_extracts_64_char_hex() {
+        let mut h = HeaderMap::new();
+        let s = "a".repeat(64);
+        h.insert(
+            "X-Linked-Etag",
+            HeaderValue::from_str(&format!("\"{s}\"")).unwrap(),
+        );
+        assert_eq!(parse_hf_lfs_sha256(&h), Some(s));
+    }
+
+    #[test]
+    fn parse_hf_lfs_sha256_rejects_non_hex() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "X-Linked-Etag",
+            HeaderValue::from_static(
+                "\"not-a-real-sha-just-text-padding-to-the-right-length-12345678\"",
+            ),
+        );
+        assert_eq!(parse_hf_lfs_sha256(&h), None);
+    }
+
+    #[test]
+    fn parse_hf_lfs_sha256_returns_none_when_header_missing() {
+        let h = HeaderMap::new();
+        assert_eq!(parse_hf_lfs_sha256(&h), None);
+    }
+
+    #[test]
+    fn sha256_file_matches_known_vector() {
+        let dir = std::env::temp_dir().join("lmforge_sha_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("hello.bin");
+        std::fs::write(&p, b"hello").unwrap();
+
+        let expected = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+        assert_eq!(sha256_file(&p).unwrap(), expected);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sha256_file_handles_empty_file() {
+        let dir = std::env::temp_dir().join("lmforge_sha_empty");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("empty.bin");
+        std::fs::write(&p, b"").unwrap();
+
+        assert_eq!(
+            sha256_file(&p).unwrap(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

@@ -6,6 +6,7 @@ use bytes::Bytes;
 use tracing::debug;
 
 use super::AppState;
+use super::image_preflight;
 use super::proxy;
 use super::thinking;
 
@@ -17,6 +18,73 @@ fn load_index(data_dir: &std::path::Path) -> crate::model::index::ModelIndex {
             models: vec![],
         }
     })
+}
+
+/// Returns true if the request body contains any multimodal image content block.
+/// Recognised shapes (per OpenAI Chat Completions spec + common SDK aliases):
+///   - `{"type": "image_url",  "image_url": {...}}`
+///   - `{"type": "input_image", "image_url": "..."}`  (Responses API style)
+///   - `{"type": "image",       "source": {...}}`     (Anthropic-compatible)
+///
+/// Walks `messages[*].content` when content is an array. String content is
+/// always text-only.
+pub(crate) fn request_has_image(body: &serde_json::Value) -> bool {
+    let Some(messages) = body.get("messages").and_then(|m| m.as_array()) else {
+        return false;
+    };
+    for msg in messages {
+        let Some(content) = msg.get("content") else {
+            continue;
+        };
+        let Some(arr) = content.as_array() else {
+            continue;
+        };
+        for block in arr {
+            let t = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if matches!(t, "image_url" | "input_image" | "image") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Public re-export for the Ollama handler.
+#[allow(clippy::result_large_err)]
+pub(crate) fn check_vision_capability_pub(
+    index: &crate::model::index::ModelIndex,
+    model_id: &str,
+    body: &serde_json::Value,
+) -> Result<(), Response<Body>> {
+    check_vision_capability(index, model_id, body)
+}
+
+/// Reject requests that send images to a model without vision capability.
+/// Models not in the index are allowed through (engine will surface the error).
+#[allow(clippy::result_large_err)]
+fn check_vision_capability(
+    index: &crate::model::index::ModelIndex,
+    model_id: &str,
+    body: &serde_json::Value,
+) -> Result<(), Response<Body>> {
+    if !request_has_image(body) {
+        return Ok(());
+    }
+    let Some(entry) = index.get(model_id) else {
+        return Ok(());
+    };
+    if entry.capabilities.vision {
+        return Ok(());
+    }
+    let body_msg = format!(
+        r#"{{"error":{{"message":"Model '{}' does not support image input. Use a vision-language model such as 'qwen2.5-vl:3b:4bit' or 'qwen2.5-vl:7b:4bit'.","type":"invalid_request_error","param":"messages","code":"vision_not_supported"}}}}"#,
+        model_id
+    );
+    Err(Response::builder()
+        .status(StatusCode::BAD_REQUEST)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body_msg))
+        .unwrap())
 }
 
 /// Check that a model's capabilities are appropriate for the requested role.
@@ -166,6 +234,21 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     // Capability gate: reject embedding and re-ranking models sent to the chat endpoint.
     // (index already loaded above)
     if let Err(resp) = check_model_role(&index, &model_id, true, false) {
+        return resp.into_response();
+    }
+
+    // Vision capability gate: reject image_url content blocks for non-vision models.
+    if let Err(resp) = check_vision_capability(&index, &model_id, &body_value) {
+        return resp.into_response();
+    }
+
+    // Preflight image URLs: fetch remote `http(s)://` images server-side (with
+    // a real User-Agent + size cap), rewrite as `data:` URLs, or 4xx on
+    // failure. This stops engines from silently degrading to text-only when
+    // they can't fetch the image themselves.
+    if request_has_image(&body_value)
+        && let Err(resp) = image_preflight::normalise_image_urls(&mut body_value).await
+    {
         return resp.into_response();
     }
 
@@ -626,6 +709,57 @@ async fn maybe_update_embedding_dims(
     }
 }
 
+/// `GET /v1/models/{id}` — Return capability metadata for a single model.
+/// Returns 404 if the model is not in the index.
+pub async fn model_get(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let index = crate::model::index::ModelIndex::load(&state.data_dir).unwrap_or_else(|_| {
+        crate::model::index::ModelIndex {
+            schema_version: 1,
+            models: vec![],
+        }
+    });
+
+    let Some(m) = index.get(&id) else {
+        let body = format!(
+            r#"{{"error":{{"message":"Model '{}' not found","type":"invalid_request_error","code":"model_not_found"}}}}"#,
+            id
+        );
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .unwrap();
+    };
+
+    let payload = serde_json::json!({
+        "id": m.id,
+        "object": "model",
+        "owned_by": "lmforge",
+        "engine": m.engine,
+        "format": m.format,
+        "size_bytes": m.size_bytes,
+        "added_at": m.added_at,
+        "capabilities": {
+            "chat": m.capabilities.chat,
+            "embeddings": m.capabilities.embeddings,
+            "reranking": m.capabilities.reranking,
+            "thinking": m.capabilities.thinking,
+            "vision": m.capabilities.vision,
+            "embedding_dims": m.capabilities.embedding_dims,
+            "mmproj_path": m.capabilities.mmproj_path,
+        }
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_string(&payload).unwrap()))
+        .unwrap()
+}
+
 /// `GET /v1/models` — List available models with capability metadata
 pub async fn models(State(state): State<AppState>) -> impl IntoResponse {
     let index = crate::model::index::ModelIndex::load(&state.data_dir).unwrap_or_else(|_| {
@@ -648,6 +782,7 @@ pub async fn models(State(state): State<AppState>) -> impl IntoResponse {
                     "embeddings": m.capabilities.embeddings,
                     "reranking": m.capabilities.reranking,
                     "thinking": m.capabilities.thinking,
+                    "vision": m.capabilities.vision,
                     "embedding_dims": m.capabilities.embedding_dims,
                 }
             })
@@ -661,4 +796,151 @@ pub async fn models(State(state): State<AppState>) -> impl IntoResponse {
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(serde_json::to_string(&resp).unwrap()))
         .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::index::{ModelCapabilities, ModelEntry, ModelIndex};
+
+    fn empty_index() -> ModelIndex {
+        ModelIndex {
+            schema_version: 1,
+            models: vec![],
+        }
+    }
+
+    fn index_with(model_id: &str, vision: bool) -> ModelIndex {
+        ModelIndex {
+            schema_version: 1,
+            models: vec![ModelEntry {
+                id: model_id.to_string(),
+                path: format!("/tmp/{model_id}"),
+                format: "gguf".to_string(),
+                engine: "llamacpp".to_string(),
+                hf_repo: None,
+                size_bytes: 0,
+                capabilities: ModelCapabilities {
+                    chat: true,
+                    vision,
+                    ..Default::default()
+                },
+                added_at: "2026-01-01".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn test_request_has_image_text_only_string() {
+        let body = serde_json::json!({
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+        assert!(!request_has_image(&body));
+    }
+
+    #[test]
+    fn test_request_has_image_text_only_array() {
+        let body = serde_json::json!({
+            "messages": [{
+                "role": "user",
+                "content": [{"type": "text", "text": "hello"}]
+            }]
+        });
+        assert!(!request_has_image(&body));
+    }
+
+    #[test]
+    fn test_request_has_image_image_url_block() {
+        let body = serde_json::json!({
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what's in this?"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,XYZ"}}
+                ]
+            }]
+        });
+        assert!(request_has_image(&body));
+    }
+
+    #[test]
+    fn test_request_has_image_input_image_block() {
+        // OpenAI Responses API alias.
+        let body = serde_json::json!({
+            "messages": [{
+                "role": "user",
+                "content": [{"type": "input_image", "image_url": "https://example.com/cat.jpg"}]
+            }]
+        });
+        assert!(request_has_image(&body));
+    }
+
+    #[test]
+    fn test_request_has_image_anthropic_image_block() {
+        let body = serde_json::json!({
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/jpeg", "data": "..."}
+                }]
+            }]
+        });
+        assert!(request_has_image(&body));
+    }
+
+    #[test]
+    fn test_request_has_image_no_messages() {
+        let body = serde_json::json!({});
+        assert!(!request_has_image(&body));
+    }
+
+    #[test]
+    fn test_vision_gate_text_only_against_non_vision_model() {
+        let idx = index_with("qwen3:8b:4bit", false);
+        let body = serde_json::json!({
+            "model": "qwen3:8b:4bit",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        assert!(check_vision_capability(&idx, "qwen3:8b:4bit", &body).is_ok());
+    }
+
+    #[test]
+    fn test_vision_gate_image_against_vision_model_ok() {
+        let idx = index_with("qwen2.5-vl:7b:4bit", true);
+        let body = serde_json::json!({
+            "model": "qwen2.5-vl:7b:4bit",
+            "messages": [{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,X"}}
+            ]}]
+        });
+        assert!(check_vision_capability(&idx, "qwen2.5-vl:7b:4bit", &body).is_ok());
+    }
+
+    #[test]
+    fn test_vision_gate_image_against_non_vision_model_rejected() {
+        let idx = index_with("qwen3:8b:4bit", false);
+        let body = serde_json::json!({
+            "model": "qwen3:8b:4bit",
+            "messages": [{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,X"}}
+            ]}]
+        });
+        let err = check_vision_capability(&idx, "qwen3:8b:4bit", &body)
+            .expect_err("non-vision model with image must be rejected");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_vision_gate_unknown_model_passes_through() {
+        // Unknown model: let the engine handle it (consistent with check_model_role).
+        let idx = empty_index();
+        let body = serde_json::json!({
+            "model": "unknown-model",
+            "messages": [{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": "https://x"}}
+            ]}]
+        });
+        assert!(check_vision_capability(&idx, "unknown-model", &body).is_ok());
+    }
 }

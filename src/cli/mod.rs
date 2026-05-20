@@ -122,6 +122,11 @@ pub enum Command {
         #[arg(long)]
         logs: bool,
 
+        /// When pruning logs, keep at most this many MB total (oldest deleted
+        /// first). 0 = truncate everything (legacy behaviour).
+        #[arg(long, default_value = "0")]
+        max_mb: u64,
+
         /// Remove HuggingFace cache entries duplicated in ~/.lmforge/models/
         #[arg(long)]
         hf_cache: bool,
@@ -201,6 +206,7 @@ pub async fn dispatch(cli: Cli, config: LmForgeConfig) -> Result<()> {
             all,
             partial,
             logs,
+            max_mb,
             hf_cache,
         } => {
             clean::run(
@@ -212,6 +218,7 @@ pub async fn dispatch(cli: Cli, config: LmForgeConfig) -> Result<()> {
                     partial,
                     hf_cache,
                     logs,
+                    max_mb,
                 },
             )
             .await

@@ -55,8 +55,9 @@ binary          = "llama-server"
 release_url     = "https://github.com/ggml-org/llama.cpp/releases/download/b8870"
 # {platform} is resolved by the installer; extension (.tar.gz or .zip) is appended by OS
 asset_pattern   = "llama-b8870-bin-{platform}"
-# Windows CUDA builds also require the CUDA runtime DLL package (downloaded separately):
-cudart_pattern  = "cudart-llama-bin-win-{cuda_variant}"
+# Windows CUDA builds also require the CUDA runtime DLL package (downloaded separately).
+# Upstream filename pattern: cudart-llama-bin-win-cuda-<variant>-x64.zip
+cudart_pattern  = "cudart-llama-bin-win-cuda-{cuda_variant}-x64"
 model_format    = "gguf"
 hf_org          = "bartowski"
 start_cmd       = "llama-server"

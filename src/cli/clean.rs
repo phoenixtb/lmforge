@@ -11,6 +11,9 @@ pub struct CleanOptions {
     pub partial: bool,
     pub hf_cache: bool,
     pub all: bool,
+    /// When >0, prune oldest log files until total size ≤ `max_mb` MB.
+    /// When 0 (default), truncate everything (legacy behaviour).
+    pub max_mb: u64,
 }
 
 /// `lmforge clean` — Disk usage audit and cleanup
@@ -212,10 +215,23 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
         idx2.save(&data_dir)?;
     }
 
-    // Logs
+    // Logs — two modes:
+    //   max_mb > 0 → prune oldest files until total ≤ max_mb (rotation-friendly)
+    //   max_mb = 0 → truncate everything (legacy / explicit "wipe" behaviour)
     if log_size > 0 && (do_all || opts.logs || confirm("Clear log files?")?) {
-        truncate_logs(&logs_dir)?;
-        println!("  ✓ Cleared {} of logs", fmt_size(log_size));
+        if opts.max_mb > 0 {
+            let kept = prune_logs_to_cap(&logs_dir, opts.max_mb)?;
+            let freed = log_size.saturating_sub(kept);
+            println!(
+                "  ✓ Pruned logs to ≤ {} MB (kept {}, freed {})",
+                opts.max_mb,
+                fmt_size(kept),
+                fmt_size(freed)
+            );
+        } else {
+            truncate_logs(&logs_dir)?;
+            println!("  ✓ Cleared {} of logs", fmt_size(log_size));
+        }
     }
 
     // HF cache duplicates
@@ -254,6 +270,49 @@ fn truncate_logs(logs_dir: &std::path::Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Prune oldest log files (by mtime) until the total bytes is at or below
+/// `cap_mb` MB. Returns the total bytes retained.
+///
+/// We never *truncate* a file in this mode — files are deleted whole — so the
+/// cap is an upper bound, not a precise size. That's fine for log retention:
+/// users care about "stop using more than X MB", not byte-perfect accounting.
+fn prune_logs_to_cap(logs_dir: &std::path::Path, cap_mb: u64) -> Result<u64> {
+    let cap_bytes = cap_mb.saturating_mul(1024 * 1024);
+
+    // Collect (path, size, mtime) for every file.
+    let mut files: Vec<(std::path::PathBuf, u64, std::time::SystemTime)> =
+        std::fs::read_dir(logs_dir)?
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                let m = p.metadata().ok()?;
+                if !m.is_file() {
+                    return None;
+                }
+                let mt = m.modified().ok()?;
+                Some((p, m.len(), mt))
+            })
+            .collect();
+
+    // Newest first — we delete from the tail (oldest) until we fit.
+    files.sort_by(|a, b| b.2.cmp(&a.2));
+
+    let mut total: u64 = files.iter().map(|(_, s, _)| s).sum();
+    while total > cap_bytes {
+        let Some((path, size, _)) = files.pop() else {
+            break;
+        };
+        // Best-effort delete; keep going if a single file is locked.
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(size);
+        } else {
+            // Couldn't remove — move on without subtracting.
+            continue;
+        }
+    }
+    Ok(total)
 }
 
 fn fmt_size(bytes: u64) -> String {

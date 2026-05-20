@@ -17,8 +17,19 @@ pub async fn run(
     _foreground: bool,
     external_status_tx: Option<tokio::sync::broadcast::Sender<crate::engine::manager::EngineState>>,
 ) -> Result<()> {
+    // Precedence: CLI flag > LMFORGE_BIND env > config.bind_address.
+    // Env override exists primarily for containerised deployments where the
+    // image cannot ship a custom config.toml.
+    let bind_addr = bind
+        .or_else(|| std::env::var("LMFORGE_BIND").ok().filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| config.bind_address.clone());
     let api_port = port.unwrap_or(config.port);
-    let bind_addr = bind.unwrap_or_else(|| config.bind_address.clone());
+    // Same precedence model for the bearer token. CLI has no flag for it
+    // (security: no shell history), so this is env > config.
+    let resolved_api_key = std::env::var("LMFORGE_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| config.api_key.clone());
     let engine_port: u16 = 11431; // Internal engine port
     let data_dir = config.data_dir();
 
@@ -158,12 +169,54 @@ pub async fn run(
         engine_config: engine_config.clone(),
         adapter: shared_adapter,
         data_dir: data_dir.clone(),
-        api_key: None,
+        api_key: resolved_api_key.clone(),
         bind_address: bind_addr.clone(),
         config: std::sync::Arc::new(tokio::sync::RwLock::new(config.clone())),
         command_tx: cmd_tx.clone(),
         status_tx,
     };
+
+    // Install the Prometheus recorder before the router is built so the
+    // /metrics endpoint has descriptors already registered.
+    crate::server::metrics::init();
+
+    // Build auth policy + emit a startup warning when the daemon is exposed
+    // beyond loopback without any auth coverage.
+    let auth_policy = std::sync::Arc::new(crate::server::auth::AuthPolicy::from_config(
+        resolved_api_key.clone(),
+        &config.trusted_networks,
+        config.unsafe_disable_auth,
+    ));
+    if config.unsafe_disable_auth {
+        warn!(
+            "unsafe_disable_auth is true — every request is allowed unauthenticated. \
+             Do NOT use this in production."
+        );
+        println!(
+            "⚠ unsafe_disable_auth=true — daemon is fully open. Disable in config.toml for any non-dev use."
+        );
+    } else if !is_loopback_bind(&bind_addr)
+        && resolved_api_key.is_none()
+        && config.trusted_networks.is_empty()
+    {
+        // No coverage at all: bind public, no token, no allowlist. By default
+        // we just warn (every request will 401, daemon stays up). Opt-in
+        // strict mode via env refuses startup so misconfigured prod boxes
+        // fail loudly instead of silently rejecting traffic.
+        let refuse = std::env::var("LMFORGE_REFUSE_UNSAFE_BIND")
+            .ok()
+            .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+        let msg = format!(
+            "Bind {bind_addr} has no api_key and no trusted_networks — external requests will 401. \
+             Add a CIDR to trusted_networks (e.g. 192.168.0.0/16) or set api_key in config.toml."
+        );
+        if refuse {
+            anyhow::bail!("{msg} Refusing to start because LMFORGE_REFUSE_UNSAFE_BIND is set.");
+        }
+        warn!(bind = %bind_addr, "{msg}");
+        println!("⚠ {msg}");
+    }
 
     // Pre-warm the requested model if provided
     if let Some(m) = model {
@@ -174,7 +227,44 @@ pub async fn run(
         });
     }
 
-    let app = crate::server::build_router(app_state);
+    // Auto-load: serial cold-load of configured models so the first request to
+    // each is warm. We run this in the background so the API is reachable while
+    // models load — clients hitting an unloaded model just pay the usual
+    // ensure_model cost on first use.
+    if !config.orchestrator.auto_load.is_empty() {
+        let auto_load = config.orchestrator.auto_load.clone();
+        let app_state_clone = app_state.clone();
+        tokio::spawn(async move {
+            let total = auto_load.len();
+            for (i, model_id) in auto_load.iter().enumerate() {
+                let n = i + 1;
+                info!(model = %model_id, "auto_load {}/{}: starting cold-load", n, total);
+                println!("⚙ auto_load {}/{}: {}", n, total, model_id);
+                match app_state_clone.ensure_model(model_id, None).await {
+                    Ok(port) => {
+                        info!(model = %model_id, port, "auto_load {}/{}: ready", n, total);
+                        println!("  ✓ {} ready on port {}", model_id, port);
+                    }
+                    Err(_) => {
+                        warn!(model = %model_id, "auto_load {}/{}: failed", n, total);
+                        println!(
+                            "  ✗ {} failed (see logs); continuing with next model",
+                            model_id
+                        );
+                    }
+                }
+            }
+            info!("auto_load: all {} models processed", total);
+        });
+    }
+
+    let concurrency = crate::server::concurrency::ConcurrencyLimit::new(
+        config.resources.max_concurrent_requests as usize,
+        config.resources.request_queue_size as usize,
+    );
+    let max_body_bytes =
+        crate::server::resolve_max_body_bytes(config.resources.max_request_body_mb);
+    let app = crate::server::build_router(app_state, auth_policy, concurrency, max_body_bytes);
     let addr = format!("{}:{}", bind_addr, api_port);
     // Port was verified free in startup_cleanup — bind must succeed now.
     let listener = tokio::net::TcpListener::bind(&addr)
@@ -183,13 +273,17 @@ pub async fn run(
 
     info!(addr = %addr, "API server listening");
 
-    // Run server with graceful shutdown on Ctrl+C
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            tokio::signal::ctrl_c().await.ok();
-            println!("\n⚙ Shutting down...");
-        })
-        .await?;
+    // ConnectInfo<SocketAddr> is required by the auth middleware to extract the
+    // client IP for trusted_networks matching.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        tokio::signal::ctrl_c().await.ok();
+        println!("\n⚙ Shutting down...");
+    })
+    .await?;
 
     supervise_handle.abort();
     engine::daemon::remove_pid_file(&data_dir);
@@ -328,10 +422,17 @@ async fn ensure_port_free(port: u16) -> anyhow::Result<()> {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
 
+    #[cfg(unix)]
+    let manual_hint = format!("lsof -ti :{port} | xargs kill -9");
+    #[cfg(windows)]
+    let manual_hint = format!(
+        "for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :{port}') do taskkill /F /PID %a"
+    );
+
     anyhow::bail!(
-        "Port {} is still occupied after cleanup. Kill it manually:\n  lsof -ti :{} | xargs kill -9",
+        "Port {} is still occupied after cleanup. Kill it manually:\n  {}",
         port,
-        port
+        manual_hint
     )
 }
 
@@ -418,6 +519,16 @@ fn kill_port_holder_via_lsof(port: u16) {
             }
         }
     }
+}
+
+/// True when the bind address is a loopback address.
+/// Used at startup to decide whether to print the non-loopback auth warning.
+fn is_loopback_bind(bind: &str) -> bool {
+    matches!(bind, "127.0.0.1" | "localhost" | "::1")
+        || bind
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
 }
 
 /// Resolve the engine command path

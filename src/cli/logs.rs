@@ -4,6 +4,12 @@ use tracing::info;
 use crate::config::LmForgeConfig;
 
 /// `lmforge logs` — View logs
+///
+/// Selection rules:
+/// - `engine=false` → main daemon log (`lmforge.log*`).
+/// - `engine=true`, `component=None` → all per-model engine stderr logs (combined),
+///   pre-Phase-B engines wrote to `engine-stderr.log` (still picked up).
+/// - `engine=true`, `component=Some(model_id)` → that one model's stderr log.
 pub async fn run(
     config: &LmForgeConfig,
     follow: bool,
@@ -16,10 +22,16 @@ pub async fn run(
 
     // The rolling appender creates date-suffixed files like lmforge.log.2026-03-28
     // Find the most recent log file(s) by listing the directory
-    let log_prefix = if engine {
-        "engine-stdout.log"
+    let log_prefix: String = if engine {
+        match component.as_deref() {
+            Some(model_id) => {
+                let safe = crate::logging::rotation::sanitize_model_id(model_id);
+                format!("engine-{safe}.stderr.log")
+            }
+            None => "engine-".to_string(),
+        }
     } else {
-        "lmforge.log"
+        "lmforge.log".to_string()
     };
 
     let mut log_files: Vec<_> = std::fs::read_dir(&logs_dir)?
@@ -27,7 +39,7 @@ pub async fn run(
         .filter(|e| {
             e.file_name()
                 .to_str()
-                .map(|n| n.starts_with(log_prefix))
+                .map(|n| n.starts_with(log_prefix.as_str()))
                 .unwrap_or(false)
         })
         .map(|e| e.path())
@@ -57,8 +69,10 @@ pub async fn run(
     let start = lines.len().saturating_sub(tail);
 
     for line in &lines[start..] {
-        // Apply component filter if set
-        if let Some(ref comp) = component
+        // Apply component filter only for the main daemon log — engine logs
+        // already use `component` as the model id selector at the file level.
+        if !engine
+            && let Some(ref comp) = component
             && !line.contains(comp)
         {
             continue;

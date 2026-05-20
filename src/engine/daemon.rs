@@ -165,8 +165,9 @@ mod tests {
 
     #[test]
     fn test_pid_file_path() {
-        let path = pid_file_path(std::path::Path::new("/tmp/test"));
-        assert_eq!(path, std::path::PathBuf::from("/tmp/test/lmforge.pid"));
+        let base = std::env::temp_dir().join("lmforge-pid-test");
+        let path = pid_file_path(&base);
+        assert_eq!(path, base.join("lmforge.pid"));
     }
 
     #[test]
@@ -175,17 +176,18 @@ mod tests {
         assert!(is_process_running(pid));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_is_process_running_nonexistent() {
-        // PID 99999 is very unlikely to exist
+        // PID 99999 is very unlikely to exist on Unix. On Windows we fall
+        // back to "assume running" inside is_process_running, so this
+        // assertion is meaningless there — gate to unix.
         assert!(!is_process_running(99999));
     }
 
     #[test]
     fn test_read_pid_nonexistent() {
-        assert_eq!(
-            read_pid(std::path::Path::new("/tmp/nonexistent-lmforge-test")),
-            None
-        );
+        let base = std::env::temp_dir().join("lmforge-pid-nonexistent-test");
+        assert_eq!(read_pid(&base), None);
     }
 }

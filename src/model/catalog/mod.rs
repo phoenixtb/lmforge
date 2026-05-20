@@ -10,13 +10,21 @@ pub const BUNDLED_MLX: &str = include_str!("../../../data/catalogs/mlx.json");
 /// The bundled default GGUF catalog — embedded at compile time.
 pub const BUNDLED_GGUF: &str = include_str!("../../../data/catalogs/gguf.json");
 
+/// The bundled default safetensors catalog — used by SGLang on Linux + NVIDIA.
+/// Same `{ shortcut: "org/repo" }` shape as the MLX catalog.
+pub const BUNDLED_SAFETENSORS: &str = include_str!("../../../data/catalogs/safetensors.json");
+
 // ── GGUF raw catalog types ────────────────────────────────────────────────────
 
 /// A single GGUF catalog entry: repo + exact filename to download.
+/// `mmproj` is the multimodal projector file for VLMs (llama.cpp `--mmproj`);
+/// optional and absent for non-vision models.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct GgufEntry {
     pub repo: String,
     pub file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mmproj: Option<String>,
 }
 
 /// Untagged serde type so we can handle both model entries (`{repo, file}`)
@@ -80,7 +88,8 @@ fn resolve_from_content(
     format_str: &str,
 ) -> Option<CatalogResult> {
     match format_str {
-        "mlx" => {
+        // mlx and safetensors share the same `{ shortcut: "org/repo" }` shape.
+        "mlx" | "safetensors" => {
             let map: HashMap<String, String> = serde_json::from_str(content).ok()?;
             map.get(normalized).cloned().map(CatalogResult::AllFiles)
         }
@@ -100,6 +109,7 @@ pub fn resolve_from_bundled(normalized: &str, format_str: &str) -> Option<Catalo
     let content = match format_str {
         "mlx" => BUNDLED_MLX,
         "gguf" => BUNDLED_GGUF,
+        "safetensors" => BUNDLED_SAFETENSORS,
         _ => return None,
     };
     resolve_from_content(content, normalized, format_str)
@@ -110,14 +120,16 @@ pub fn resolve_from_bundled(normalized: &str, format_str: &str) -> Option<Catalo
 /// All available shortcuts across all bundled catalogs for a given format.
 /// Used to generate helpful suggestions in error messages.
 pub fn bundled_shortcuts(format_str: &str) -> Vec<String> {
-    let content = match format_str.to_lowercase().as_str() {
+    let format_lower = format_str.to_lowercase();
+    let content = match format_lower.as_str() {
         "mlx" => BUNDLED_MLX,
         "gguf" => BUNDLED_GGUF,
+        "safetensors" => BUNDLED_SAFETENSORS,
         _ => return vec![],
     };
 
-    let keys: Vec<String> = match format_str {
-        "mlx" => serde_json::from_str::<HashMap<String, String>>(content)
+    let keys: Vec<String> = match format_lower.as_str() {
+        "mlx" | "safetensors" => serde_json::from_str::<HashMap<String, String>>(content)
             .map(|m| m.into_keys().collect())
             .unwrap_or_default(),
         _ => serde_json::from_str::<HashMap<String, RawGgufValue>>(content)
@@ -155,14 +167,19 @@ pub fn list_for_ui(format: &str) -> Vec<CatalogEntry> {
     let formats: &[(&str, &str)] = match format.to_lowercase().as_str() {
         "mlx" => &[("mlx", BUNDLED_MLX)],
         "gguf" => &[("gguf", BUNDLED_GGUF)],
-        _ => &[("mlx", BUNDLED_MLX), ("gguf", BUNDLED_GGUF)],
+        "safetensors" => &[("safetensors", BUNDLED_SAFETENSORS)],
+        _ => &[
+            ("mlx", BUNDLED_MLX),
+            ("gguf", BUNDLED_GGUF),
+            ("safetensors", BUNDLED_SAFETENSORS),
+        ],
     };
 
     let mut entries: Vec<CatalogEntry> = Vec::new();
 
     for &(fmt, content) in formats {
         match fmt {
-            "mlx" => {
+            "mlx" | "safetensors" => {
                 let map: HashMap<String, String> = match serde_json::from_str(content) {
                     Ok(m) => m,
                     Err(_) => continue,
@@ -232,7 +249,15 @@ fn infer_role(shortcut: &str, repo: &str) -> String {
     if s.contains("embed") || s.contains("embedding") {
         return "embed".to_string();
     }
-    if s.contains("vision") || s.contains("-vl") || s.contains("_vl") {
+    if s.contains("vision")
+        || s.contains("-vl-")
+        || s.contains("_vl_")
+        || s.contains("-vl:")
+        || s.contains("/vl-")
+        || s.contains("llava")
+        || s.contains("minicpm-v")
+        || s.contains("minicpmv")
+    {
         return "vision".to_string();
     }
     if s.contains("code") || s.contains("coder") {
@@ -564,6 +589,133 @@ mod tests {
                 "mlx-community/Qwen3-VL-Embedding-2B-4bit"
             ),
             "vision"
+        );
+    }
+
+    #[test]
+    fn test_infer_role_vision_qwen25_vl_chat() {
+        // The new Qwen2.5-VL chat-style VLM shortcuts must classify as "vision".
+        assert_eq!(
+            infer_role(
+                "qwen2.5-vl:7b:4bit",
+                "bartowski/Qwen2.5-VL-7B-Instruct-GGUF"
+            ),
+            "vision"
+        );
+        assert_eq!(
+            infer_role(
+                "qwen2.5-vl:3b:4bit",
+                "mlx-community/Qwen2.5-VL-3B-Instruct-4bit"
+            ),
+            "vision"
+        );
+        assert_eq!(
+            infer_role("minicpm-v:2.6:4bit", "openbmb/MiniCPM-V-2_6"),
+            "vision"
+        );
+    }
+
+    // ── safetensors catalog ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_bundled_safetensors_catalog_is_valid_json() {
+        let result: Result<HashMap<String, String>, _> = serde_json::from_str(BUNDLED_SAFETENSORS);
+        assert!(
+            result.is_ok(),
+            "safetensors catalog is not valid JSON: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_safetensors_has_vlm_entries() {
+        let map: HashMap<String, String> = serde_json::from_str(BUNDLED_SAFETENSORS).unwrap();
+        assert_eq!(
+            map.get("qwen2.5-vl:3b").unwrap(),
+            "Qwen/Qwen2.5-VL-3B-Instruct"
+        );
+        assert_eq!(
+            map.get("qwen2.5-vl:7b").unwrap(),
+            "Qwen/Qwen2.5-VL-7B-Instruct"
+        );
+    }
+
+    #[test]
+    fn test_resolve_from_bundled_safetensors() {
+        let r = resolve_from_bundled("qwen2.5-vl:7b", "safetensors").unwrap();
+        let CatalogResult::AllFiles(repo) = r else {
+            panic!("expected AllFiles for safetensors");
+        };
+        assert_eq!(repo, "Qwen/Qwen2.5-VL-7B-Instruct");
+    }
+
+    #[test]
+    fn test_safetensors_shortcuts_listed() {
+        let s = bundled_shortcuts("safetensors");
+        assert!(s.contains(&"qwen2.5-vl:7b".to_string()));
+        assert!(s.iter().all(|k| !k.starts_with('_')));
+    }
+
+    // ── VLM mmproj field ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_gguf_vlm_entries_have_mmproj() {
+        let map: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        for key in &["qwen2.5-vl:3b:4bit", "qwen2.5-vl:7b:4bit"] {
+            let val = map.get(*key).unwrap_or_else(|| panic!("missing {key}"));
+            let RawGgufValue::Entry(entry) = val else {
+                panic!("{key} is a comment, not an entry");
+            };
+            assert!(
+                entry.mmproj.is_some(),
+                "{key} VLM entry must have mmproj field"
+            );
+            let mmproj = entry.mmproj.as_ref().unwrap();
+            assert!(
+                mmproj.starts_with("mmproj-") && mmproj.ends_with(".gguf"),
+                "{key} mmproj filename has unexpected shape: {mmproj}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_gguf_non_vlm_entries_have_no_mmproj() {
+        let map: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+        for key in &["qwen3:8b:4bit", "qwen3-embed:0.6b:8bit"] {
+            let RawGgufValue::Entry(entry) = map.get(*key).unwrap() else {
+                panic!()
+            };
+            assert!(
+                entry.mmproj.is_none(),
+                "{key} non-VLM entry must not have mmproj"
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_qwen25_vl_gguf_carries_mmproj() {
+        let r = resolve_from_bundled("qwen2.5-vl:7b:4bit", "gguf").unwrap();
+        let CatalogResult::SingleFile(e) = r else {
+            panic!("expected SingleFile")
+        };
+        assert_eq!(e.repo, "bartowski/Qwen2.5-VL-7B-Instruct-GGUF");
+        assert_eq!(e.file, "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf");
+        assert_eq!(
+            e.mmproj.as_deref(),
+            Some("mmproj-Qwen2.5-VL-7B-Instruct-f16.gguf")
+        );
+    }
+
+    #[test]
+    fn test_mlx_has_vlm_entries() {
+        let map: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
+        assert_eq!(
+            map.get("qwen2.5-vl:3b:4bit").unwrap(),
+            "mlx-community/Qwen2.5-VL-3B-Instruct-4bit"
+        );
+        assert_eq!(
+            map.get("qwen2.5-vl:7b:4bit").unwrap(),
+            "mlx-community/Qwen2.5-VL-7B-Instruct-4bit"
         );
     }
 

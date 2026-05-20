@@ -187,13 +187,19 @@ async fn resolve_logical_name(
             // GGUF explicit entry: exact file pinned in catalog — no HF API call needed.
             CatalogResult::SingleFile(entry) => {
                 let dir_name = name.replace(':', "-");
+                let mut files = vec![entry.file.clone()];
+                // VLM: pull the multimodal projector alongside the main weights.
+                if let Some(mmproj) = entry.mmproj.clone() {
+                    debug!(name, mmproj = %mmproj, "Catalog entry includes mmproj projector");
+                    files.push(mmproj);
+                }
                 debug!(name, repo = %entry.repo, file = %entry.file, "Resolved GGUF explicit file from catalog");
                 return Ok(ResolvedModel {
                     id: name.to_string(),
                     dir_name,
                     hf_repo: entry.repo,
                     format: ModelFormat::Gguf,
-                    files: vec![entry.file],
+                    files,
                 });
             }
 
@@ -364,6 +370,42 @@ mod tests {
     fn test_detect_format() {
         assert_eq!(detect_format_from_engine("mlx"), ModelFormat::Mlx);
         assert_eq!(detect_format_from_engine("gguf"), ModelFormat::Gguf);
+        assert_eq!(
+            detect_format_from_engine("safetensors"),
+            ModelFormat::Safetensors
+        );
+    }
+
+    // ── VLM resolver: catalog mmproj must be appended to files ────────────────
+
+    #[tokio::test]
+    async fn test_resolve_vlm_gguf_catalog_includes_mmproj() {
+        // qwen2.5-vl:7b:4bit ships with mmproj in the bundled GGUF catalog.
+        let tmp = std::env::temp_dir().join("lmforge_resolver_vlm_test");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let resolved = resolve("qwen2.5-vl:7b:4bit", "gguf", &tmp)
+            .await
+            .expect("VLM catalog resolve must succeed");
+
+        assert_eq!(resolved.format, ModelFormat::Gguf);
+        assert_eq!(resolved.hf_repo, "bartowski/Qwen2.5-VL-7B-Instruct-GGUF");
+        assert_eq!(resolved.files.len(), 2, "main weights + mmproj");
+        assert_eq!(resolved.files[0], "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf");
+        assert_eq!(resolved.files[1], "mmproj-Qwen2.5-VL-7B-Instruct-f16.gguf");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_non_vlm_gguf_does_not_add_mmproj() {
+        let tmp = std::env::temp_dir().join("lmforge_resolver_chat_test");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let resolved = resolve("qwen3:8b:4bit", "gguf", &tmp).await.unwrap();
+        assert_eq!(resolved.files.len(), 1, "non-VLM has no mmproj sidecar");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     // ── extract_quant_hint ────────────────────────────────────────────────────

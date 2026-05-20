@@ -112,10 +112,8 @@ fn write_model_index(
             capabilities: ModelCapabilities {
                 chat: *chat,
                 embeddings: *embeddings,
-                reranking: false,
-                thinking: false,
                 embedding_dims: if *embeddings { Some(1536) } else { None },
-                pooling: None,
+                ..Default::default()
             },
             added_at: "2025-01-01".to_string(),
         })
@@ -194,7 +192,16 @@ fn build_app_state(
 
     spawn_fake_manager(port_map, cmd_rx);
 
-    let router = lmforge::server::build_router(state);
+    // Tests run via tower::Service::oneshot which doesn't go through TcpListener
+    // so ConnectInfo is absent; using unsafe_disable_auth keeps the test
+    // surface focused on routing/handler behaviour rather than auth wiring.
+    let auth_policy = Arc::new(lmforge::server::auth::AuthPolicy::from_config(
+        None,
+        &[],
+        true,
+    ));
+    let concurrency = lmforge::server::concurrency::ConcurrencyLimit::new(0, 0);
+    let router = lmforge::server::build_router(state, auth_policy, concurrency, 32 * 1024 * 1024);
     (router, status_tx)
 }
 
@@ -666,4 +673,210 @@ async fn tc08_batch_embedding_chunking() {
         "✓ TC-08 passed — {TOTAL_INPUTS} inputs split into {EXPECTED_CALLS} engine calls of {BATCH_SIZE}, \
          merged with correct sequential indices"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC-09 — Request body limit enforced (axum 413) and configurable
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Regression for the VLM body-size ceiling that was tripping DocIntel: axum's
+// default 2 MB cap rejected high-DPI PDF page renders sent as base64 image
+// data URLs. We now expose `max_request_body_mb` (default 32 MB, env override
+// `LMFORGE_MAX_BODY_MB`). This test pins both ends of the contract:
+//   1. A body just over the configured limit returns 413 Payload Too Large.
+//   2. A body just under the limit gets through to the handler.
+#[tokio::test]
+async fn tc09_request_body_limit_enforced_and_configurable() {
+    use axum::body::to_bytes;
+    use lmforge::server::auth::AuthPolicy;
+    use lmforge::server::concurrency::ConcurrencyLimit;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let chat = chat_model();
+    write_model_index(tmp.path(), &[(chat.as_str(), "chat", false, false)]);
+
+    // Build router with a deliberately tiny 1 MB cap so we don't have to
+    // round-trip megabytes of payload to test the boundary.
+    let limit_bytes = 1024 * 1024;
+    let port_map: HashMap<String, u16> = HashMap::new();
+    let (cmd_tx, cmd_rx) = mpsc::channel(64);
+    let (status_tx, _) = broadcast::channel(16);
+    let engine_config = fake_engine_config();
+    let engine_state = Arc::new(RwLock::new(EngineState {
+        overall_status: EngineStatus::Ready,
+        engine_id: engine_config.id.clone(),
+        engine_version: engine_config.version.clone(),
+        running_models: HashMap::new(),
+        metrics: EngineMetrics::default(),
+    }));
+    let cfg = lmforge::config::LmForgeConfig::default();
+    let state = AppState {
+        engine_state,
+        engine_config,
+        adapter: Arc::new(lmforge::engine::adapter::EngineAdapterInstance::Omlx(
+            lmforge::engine::adapters::omlx::OmlxAdapter::default(),
+        )),
+        data_dir: tmp.path().to_path_buf(),
+        api_key: None,
+        bind_address: "127.0.0.1:11430".to_string(),
+        config: Arc::new(RwLock::new(cfg)),
+        command_tx: cmd_tx,
+        status_tx,
+    };
+    spawn_fake_manager(port_map, cmd_rx);
+
+    let auth_policy = Arc::new(AuthPolicy::from_config(None, &[], true));
+    let concurrency = ConcurrencyLimit::new(0, 0);
+    let router = lmforge::server::build_router(state, auth_policy, concurrency, limit_bytes);
+
+    // ── Over the limit: handler must never see this; axum returns 413.
+    let oversized_payload = vec![b'x'; limit_bytes + 1024];
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("content-type", "application/json")
+        .body(Body::from(oversized_payload))
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "body just over {limit_bytes}-byte cap should 413"
+    );
+
+    // ── Under the limit: must NOT 413. Body is bogus JSON so the handler
+    //    will reject it later (400/422), but that proves the framework
+    //    accepted the upload — which is the contract being tested here.
+    let undersized_payload = vec![b'x'; limit_bytes - 1024];
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("content-type", "application/json")
+        .body(Body::from(undersized_payload))
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_ne!(
+        resp.status(),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "body under cap must not 413; got {}",
+        resp.status()
+    );
+    let _ = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+
+    println!("✓ TC-09 passed — body limit enforced at {limit_bytes} bytes");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC-10: /lf/metrics returns a valid JSON digest
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Smoke-tests the new dashboard data feed: /lf/metrics must always emit a
+// well-formed JSON object so the SvelteKit dashboard never blanks out, even
+// before the recorder has accumulated traffic.
+#[tokio::test]
+async fn tc10_metrics_digest_returns_valid_json() {
+    use axum::body::to_bytes;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let chat = chat_model();
+    write_model_index(tmp.path(), &[(chat.as_str(), "chat", true, false)]);
+    let (router, _) = build_app_state(tmp.path().to_owned(), HashMap::new(), 128);
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/lf/metrics")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let v: Value = serde_json::from_slice(&body).expect("digest must be valid JSON");
+
+    // Stable contract for the dashboard: these keys must always be present.
+    for k in [
+        "endpoints",
+        "requests_total",
+        "errors_total",
+        "error_rate",
+        "active_models",
+        "model_loads",
+        "image_inputs",
+        "auth_rejections",
+        "uptime_secs",
+        "recorder_unavailable",
+    ] {
+        assert!(v.get(k).is_some(), "digest missing key {k}: {v}");
+    }
+    assert!(v["endpoints"].is_object());
+    assert!(v["image_inputs"].is_object());
+
+    println!("✓ TC-10 passed — /lf/metrics digest schema is stable");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC-11: /lf/logs/list returns 200 + JSON even when logs dir is empty
+// ─────────────────────────────────────────────────────────────────────────────
+#[tokio::test]
+async fn tc11_logs_list_handles_empty_dir() {
+    use axum::body::to_bytes;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let chat = chat_model();
+    write_model_index(tmp.path(), &[(chat.as_str(), "chat", true, false)]);
+    let (router, _) = build_app_state(tmp.path().to_owned(), HashMap::new(), 128);
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/lf/logs/list")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let v: Value = serde_json::from_slice(&body).unwrap();
+    assert!(v["components"].is_array());
+
+    println!("✓ TC-11 passed — /lf/logs/list emits empty index without error");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC-12: /lf/logs/tail honours bounds and returns 404 for unknown components
+// ─────────────────────────────────────────────────────────────────────────────
+#[tokio::test]
+async fn tc12_logs_tail_404s_unknown_component() {
+    let tmp = tempfile::tempdir().unwrap();
+    let chat = chat_model();
+    write_model_index(tmp.path(), &[(chat.as_str(), "chat", true, false)]);
+    let (router, _) = build_app_state(tmp.path().to_owned(), HashMap::new(), 128);
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/lf/logs/tail?component=does-not-exist&stream=stderr&lines=10")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    println!("✓ TC-12 passed — /lf/logs/tail 404s on missing files");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC-13: /lf/logs/tail rejects invalid stream names
+// ─────────────────────────────────────────────────────────────────────────────
+#[tokio::test]
+async fn tc13_logs_tail_rejects_path_traversal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let chat = chat_model();
+    write_model_index(tmp.path(), &[(chat.as_str(), "chat", true, false)]);
+    let (router, _) = build_app_state(tmp.path().to_owned(), HashMap::new(), 128);
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/lf/logs/tail?component=anything&stream=../etc/passwd")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    println!("✓ TC-13 passed — invalid stream values rejected");
 }

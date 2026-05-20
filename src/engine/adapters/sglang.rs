@@ -121,14 +121,12 @@ impl EngineAdapter for SglangAdapter {
 
         info!(model_id = %model_id, port = port, role = ?role, "Spawning native SGLang python instance");
 
-        let stdout_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(logs_dir.join("engine-stdout.log"))?;
-        let stderr_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(logs_dir.join("engine-stderr.log"))?;
+        // Per-model log files with size-based rotation; see logging::rotation
+        // for the threshold/keep tunables (LMFORGE_ENGINE_LOG_MAX_MB / KEEP).
+        let stdout_file =
+            crate::logging::rotation::prepare_engine_log(logs_dir, model_id, "stdout")?;
+        let stderr_file =
+            crate::logging::rotation::prepare_engine_log(logs_dir, model_id, "stderr")?;
 
         let port_str = port.to_string();
         let model_path = model_dir.to_string_lossy().to_string();
@@ -152,9 +150,34 @@ impl EngineAdapter for SglangAdapter {
             args.push(pooling);
         }
 
+        // VLM: SGLang needs a `--chat-template` matching the model's multimodal
+        // input convention. SGLang ships a curated registry of templates; pick
+        // by config.json model_type. If the model isn't a VLM (or model_type is
+        // unknown), we leave the flag off and SGLang falls back to its default.
+        if let Some(template) = detect_vlm_chat_template(model_dir) {
+            info!(template, "VLM detected — passing --chat-template to SGLang");
+            args.push("--chat-template".to_string());
+            args.push(template);
+        }
+
+        // VRAM: SGLang reserves a fraction of *total* card memory at startup for
+        // KV cache. With multiple models co-resident this fraction must be tuned
+        // per-slot, otherwise the second `launch_server` OOMs even if there's
+        // free VRAM. Until full per-slot orchestration lands (tracked in next
+        // iteration's multi-engine routing), expose this as a config knob:
+        //   LMFORGE_SGLANG_MEM_FRACTION = "0.5"  (default; safe for 2 co-resident slots)
+        // Operators with single-slot deployments can bump to 0.85 for max throughput.
+        let mem_fraction = std::env::var("LMFORGE_SGLANG_MEM_FRACTION")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok())
+            .filter(|f| (0.05..=0.95).contains(f))
+            .unwrap_or(0.5);
+        args.push("--mem-fraction-static".to_string());
+        args.push(format!("{:.3}", mem_fraction));
+
         let child = Command::new(&self.executable)
             .args(&args)
-            // Future parity params: --tp 2 --gpu-memory-utilization 0.9 --chunked-prefill-size
+            // Future parity params: --tp 2 --chunked-prefill-size
             .stdout(std::process::Stdio::from(stdout_file))
             .stderr(std::process::Stdio::from(stderr_file))
             .kill_on_drop(true)
@@ -215,6 +238,30 @@ fn dir_size(path: &Path) -> u64 {
         }
     }
     total
+}
+
+/// Map a VLM's HuggingFace `model_type` to the SGLang chat-template name.
+///
+/// SGLang ships a registry of templates in `python/sglang/srt/conversation.py`.
+/// Returns None for non-VLMs (no flag is passed; SGLang uses its default).
+fn detect_vlm_chat_template(model_dir: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(model_dir.join("config.json")).ok()?;
+    let config: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let model_type = config["model_type"].as_str()?.to_lowercase();
+
+    let template = match model_type.as_str() {
+        "qwen2_vl" | "qwen2_5_vl" | "qwen3_vl" => "qwen2-vl",
+        "llava_onevision" => "llava_onevision",
+        "llava_next" => "llava_next",
+        "llava" => "vicuna_v1.1",
+        "minicpmv" | "minicpm_v" => "minicpmv",
+        "mllama" => "llama_3_vision",
+        "internvl" | "internvl_chat" => "internvl-2-5",
+        "phi3_v" => "phi-3-vision",
+        "pixtral" => "pixtral",
+        _ => return None,
+    };
+    Some(template.to_string())
 }
 
 /// Read the pooling strategy from the model's config.json.
@@ -281,6 +328,50 @@ mod tests {
         std::fs::write(dir.join("a.bin"), vec![0u8; 1024]).unwrap();
         std::fs::write(dir.join("b.bin"), vec![0u8; 512]).unwrap();
         assert_eq!(dir_size(&dir), 1536);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_detect_vlm_chat_template_qwen2_5_vl() {
+        let dir = std::env::temp_dir().join("lmforge_sglang_vlm_qwen25");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"model_type":"qwen2_5_vl","architectures":["Qwen2_5_VLForConditionalGeneration"]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(detect_vlm_chat_template(&dir), Some("qwen2-vl".to_string()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_detect_vlm_chat_template_minicpmv() {
+        let dir = std::env::temp_dir().join("lmforge_sglang_vlm_minicpmv");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), r#"{"model_type":"minicpmv"}"#).unwrap();
+        assert_eq!(detect_vlm_chat_template(&dir), Some("minicpmv".to_string()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_detect_vlm_chat_template_none_for_chat_only() {
+        let dir = std::env::temp_dir().join("lmforge_sglang_chat_only");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), r#"{"model_type":"qwen3"}"#).unwrap();
+        assert!(
+            detect_vlm_chat_template(&dir).is_none(),
+            "Plain chat models must not trigger --chat-template"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_detect_vlm_chat_template_none_when_config_missing() {
+        let dir = std::env::temp_dir().join("lmforge_sglang_no_config");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(detect_vlm_chat_template(&dir).is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

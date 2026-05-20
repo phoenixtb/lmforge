@@ -433,22 +433,15 @@ mod tests {
     fn thinking_caps() -> ModelCapabilities {
         ModelCapabilities {
             chat: true,
-            embeddings: false,
-            reranking: false,
             thinking: true,
-            embedding_dims: None,
-            pooling: None,
+            ..Default::default()
         }
     }
 
     fn non_thinking_caps() -> ModelCapabilities {
         ModelCapabilities {
             chat: true,
-            embeddings: false,
-            reranking: false,
-            thinking: false,
-            embedding_dims: None,
-            pooling: None,
+            ..Default::default()
         }
     }
 
@@ -657,11 +650,8 @@ mod tests {
         // other thinking models. We warn in logs but leave the value untouched.
         let caps = crate::model::index::ModelCapabilities {
             chat: true,
-            embeddings: false,
-            reranking: false,
             thinking: true,
-            embedding_dims: None,
-            pooling: None,
+            ..Default::default()
         };
         let mut body = serde_json::json!({
             "model": "qwen3.5:4b:4bit",
@@ -687,11 +677,8 @@ mod tests {
     fn test_omlx_think_true_high_temperature_unchanged() {
         let caps = crate::model::index::ModelCapabilities {
             chat: true,
-            embeddings: false,
-            reranking: false,
             thinking: true,
-            embedding_dims: None,
-            pooling: None,
+            ..Default::default()
         };
         let mut body = serde_json::json!({
             "model": "qwen3.5:4b:4bit",

@@ -1,6 +1,11 @@
 pub mod auth;
 pub mod catalog;
+pub mod concurrency;
 pub mod health;
+pub mod image_preflight;
+pub mod logs_api;
+pub mod metrics;
+pub mod metrics_api;
 pub mod native;
 pub mod ollama;
 pub mod openai;
@@ -102,22 +107,56 @@ impl AppState {
     }
 }
 
-/// Build the full axum Router with all routes
-pub fn build_router(state: AppState) -> Router {
-    info!("Building API router");
+/// Build the full axum Router with all routes.
+///
+/// `auth_policy` is wrapped in an Axum middleware layer that enforces the
+/// trusted_networks + Bearer token decision matrix on every route. The
+/// middleware itself short-circuits `/health` and `/metrics` so liveness
+/// probes and Prometheus scrapers don't need credentials.
+///
+/// `concurrency` caps in-flight requests; observe `lmforge_requests_total`
+/// with `status="503"` to detect saturation.
+///
+/// `max_body_bytes` overrides axum's 2 MB default request-body cap. VLM
+/// payloads with inline base64 images (especially DocIntel-style high-DPI
+/// PDF page renders) routinely exceed the default and trip 413s. Sized via
+/// `ResourceConfig.max_request_body_mb` (env: `LMFORGE_MAX_BODY_MB`).
+pub fn build_router(
+    state: AppState,
+    auth_policy: Arc<auth::AuthPolicy>,
+    concurrency: concurrency::ConcurrencyLimit,
+    max_body_bytes: usize,
+) -> Router {
+    info!(max_body_bytes, "Building API router");
 
-    Router::new()
+    let ui_dir = resolve_ui_dir();
+    if let Some(d) = &ui_dir {
+        info!(ui_dir = %d.display(), "Serving dashboard UI at /ui");
+    } else {
+        info!("No UI build found; /ui route disabled (set LMFORGE_UI_DIR or run from repo root)");
+    }
+
+    let router = Router::new()
+        // Health
+        .route("/health", get(health::health))
+        // Prometheus metrics (auth-bypass at the middleware layer alongside /health)
+        .route("/metrics", get(metrics::metrics_handler))
         // OpenAI-compatible endpoints
         .route("/v1/chat/completions", post(openai::chat_completions))
         .route("/v1/completions", post(openai::completions))
         .route("/v1/embeddings", post(openai::embeddings))
         .route("/v1/rerank", post(rerank::rerank))
         .route("/v1/models", get(openai::models))
+        .route("/v1/models/{id}", get(openai::model_get))
         // Ollama-compatible endpoints
         .route("/api/chat", post(ollama::chat))
         .route("/api/generate", post(ollama::generate))
         .route("/api/tags", get(ollama::tags))
         // LMForge native endpoints
+        .route("/lf/metrics", get(metrics_api::metrics_digest))
+        .route("/lf/logs/list", get(logs_api::logs_list))
+        .route("/lf/logs/tail", get(logs_api::logs_tail))
+        .route("/lf/logs/stream", get(logs_api::logs_stream))
         .route("/lf/status", get(native::status))
         .route("/lf/status/stream", get(native::status_stream))
         .route("/lf/hardware", get(native::hardware))
@@ -133,10 +172,137 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/lf/shutdown", post(native::shutdown))
         .route("/lf/catalog", get(catalog::catalog_list))
-        // Health
-        .route("/health", get(health::health))
-        // State
-        .with_state(state)
-        // Global CORS to allow local UIs (Tauri, Web) to connect
+        .with_state(state);
+
+    // Optional static dashboard mount. Only when a real ui/build directory
+    // is present (env override, repo-relative path in dev, or copied into
+    // the container image at /usr/local/share/lmforge/ui).
+    let router = if let Some(dir) = ui_dir {
+        let serve = tower_http::services::ServeDir::new(&dir)
+            .fallback(tower_http::services::ServeFile::new(dir.join("index.html")));
+        router.nest_service("/ui", serve)
+    } else {
+        router
+    };
+
+    router
+        // Layer order from inner to outer (last applied = outermost):
+        //   1. metrics_layer  — observes status & latency for every authed request
+        //   2. concurrency    — gates inflight count, returns 503 when saturated
+        //   3. auth_layer     — checks Bearer/CIDR before any work happens
+        //   4. CORS           — outermost so preflight OPTIONS bypasses everything
+        // Concurrency runs after auth (auth=cheap, no point burning a permit
+        // on a request that will 401 anyway).
+        .layer(axum::middleware::from_fn(metrics::metrics_layer))
+        .layer(axum::middleware::from_fn_with_state(
+            concurrency,
+            concurrency::limit_layer,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            auth_policy,
+            auth::auth_layer,
+        ))
+        // Body limit is applied OUTSIDE auth so a hostile client can't burn
+        // the daemon's auth path with multi-GB upload attempts. Axum rejects
+        // with 413 before the request even reaches our middleware stack.
+        .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
         .layer(tower_http::cors::CorsLayer::permissive())
+}
+
+/// Locate the SvelteKit static build for the dashboard.
+///
+/// Resolution order:
+///   1. `LMFORGE_UI_DIR` env var (used by the Docker image to point at
+///      `/usr/local/share/lmforge/ui` after the multi-stage `npm run build`).
+///   2. `$CARGO_MANIFEST_DIR/ui/build` for `cargo run` from the repo root.
+///
+/// Returns `None` when neither path resolves to a directory containing
+/// `index.html` — the `/ui` route is then skipped entirely so the daemon
+/// keeps booting in environments without a UI bundle.
+pub fn resolve_ui_dir() -> Option<std::path::PathBuf> {
+    if let Ok(s) = std::env::var("LMFORGE_UI_DIR") {
+        let p = std::path::PathBuf::from(s);
+        if p.join("index.html").is_file() {
+            return Some(p);
+        }
+    }
+    let dev = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("ui")
+        .join("build");
+    if dev.join("index.html").is_file() {
+        return Some(dev);
+    }
+    None
+}
+
+/// Resolve the effective request body cap in bytes from config + env.
+/// `LMFORGE_MAX_BODY_MB`, when set, wins over the config value so ops can
+/// bump the limit without editing config.toml. Bounded to a sane minimum
+/// (1 MB) to prevent footgun configs from rejecting normal chat traffic.
+pub fn resolve_max_body_bytes(config_mb: usize) -> usize {
+    let env_mb = std::env::var("LMFORGE_MAX_BODY_MB")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|n| *n > 0);
+    let mb = env_mb.unwrap_or(config_mb).max(1);
+    mb * 1024 * 1024
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Use a guard to serialise env-var mutation across tests; cargo runs
+    /// tests in parallel and `set_var` is process-global.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn body_limit_uses_config_when_env_unset() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: serialised via ENV_LOCK; no concurrent reads of this var
+        // happen elsewhere in the test binary.
+        unsafe {
+            std::env::remove_var("LMFORGE_MAX_BODY_MB");
+        }
+        assert_eq!(resolve_max_body_bytes(32), 32 * 1024 * 1024);
+        assert_eq!(resolve_max_body_bytes(64), 64 * 1024 * 1024);
+    }
+
+    #[test]
+    fn body_limit_env_overrides_config() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: serialised via ENV_LOCK.
+        unsafe {
+            std::env::set_var("LMFORGE_MAX_BODY_MB", "128");
+        }
+        assert_eq!(resolve_max_body_bytes(32), 128 * 1024 * 1024);
+        // SAFETY: serialised via ENV_LOCK.
+        unsafe {
+            std::env::remove_var("LMFORGE_MAX_BODY_MB");
+        }
+    }
+
+    #[test]
+    fn body_limit_floors_to_one_mb() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: serialised via ENV_LOCK.
+        unsafe {
+            std::env::remove_var("LMFORGE_MAX_BODY_MB");
+        }
+        assert_eq!(resolve_max_body_bytes(0), 1024 * 1024);
+    }
+
+    #[test]
+    fn body_limit_ignores_malformed_env() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: serialised via ENV_LOCK.
+        unsafe {
+            std::env::set_var("LMFORGE_MAX_BODY_MB", "not-a-number");
+        }
+        assert_eq!(resolve_max_body_bytes(16), 16 * 1024 * 1024);
+        // SAFETY: serialised via ENV_LOCK.
+        unsafe {
+            std::env::remove_var("LMFORGE_MAX_BODY_MB");
+        }
+    }
 }

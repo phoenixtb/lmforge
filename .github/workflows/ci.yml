@@ -39,14 +39,14 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
 
-  # ── Core unit + integration tests (macOS + Linux) ─────────────────────────
+  # ── Core unit + integration tests (macOS + Linux + Windows) ───────────────
   test:
     name: Tests — ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [ubuntu-latest, macos-14, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -65,6 +65,10 @@ jobs:
       - name: Install Linux deps
         if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y pkg-config libssl-dev
+
+      # Windows: rustls is the default TLS backend in our deps, so no
+      # OpenSSL install needed. The Windows runner already has python on PATH
+      # (used by find_python in tests).
 
       - name: cargo test
         run: cargo test --all-targets --verbose
