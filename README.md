@@ -1325,16 +1325,38 @@ rm -rf ~/.lmforge/
 
 #### Clean Cargo build artefacts
 
+The repo has **two independent Cargo workspaces**:
+
+| Manifest | Output | Built by |
+|---|---|---|
+| `Cargo.toml` (root) | `target/` | `cargo build` for the daemon + CLI |
+| `ui/src-tauri/Cargo.toml` | `ui/src-tauri/target/` | `npm run tauri build` for the desktop app |
+
+`cargo clean` only touches the workspace it is invoked from, so cleaning the
+root does **not** delete the Tauri build (which contains a `LMForge.app`
+that Spotlight will keep indexing until removed).
+
 ```bash
-# Removes target/ — frees several GB; next build takes longer
-cargo clean --workspace
+# Clean only the daemon/CLI workspace
+cargo clean
+
+# Clean only the Tauri desktop app workspace
+cargo clean --manifest-path ui/src-tauri/Cargo.toml
 
 # Clean only the UI node_modules and dist
 rm -rf ui/node_modules ui/.svelte-kit ui/build
 
-# Full workspace clean in one shot (Rust + UI)
-cargo clean --workspace && rm -rf ui/node_modules ui/.svelte-kit ui/build
+# Full clean in one shot (daemon + Tauri + node)
+cargo clean \
+  && cargo clean --manifest-path ui/src-tauri/Cargo.toml \
+  && rm -rf ui/node_modules ui/.svelte-kit ui/build
 ```
+
+> **Tip — keep Spotlight quiet:** if `LMForge.app` keeps appearing in
+> Spotlight after you uninstall the released app, it's probably a leftover
+> Tauri build under `ui/src-tauri/target/.../bundle/macos/`. Either run the
+> full clean above, or exclude the project folder from Spotlight via
+> *System Settings → Siri & Spotlight → Spotlight Privacy*.
 
 #### Quick dev reset (no model loss)
 
