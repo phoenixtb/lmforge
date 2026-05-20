@@ -14,7 +14,7 @@
 Run multiple LLMs simultaneously on your local hardware.  
 LMForge is a persistent daemon that manages model loading, VRAM allocation, and engine selection automatically — then exposes a single OpenAI-compatible REST API to every app on your machine.
 
-[**Install**](#install) · [**Quick Start**](#quick-start) · [**CLI Reference**](#cli-reference) · [**REST API**](#rest-api) · [**Model Catalog**](#model-catalog) · [**Developer Guide**](#developer-guide) · [**Contributing**](#contributing)
+[**Install**](#install) · [**Quick Start**](#quick-start) · [**Verify Installation**](#verify-installation) · [**CLI Reference**](#cli-reference) · [**REST API**](#rest-api) · [**Model Catalog**](#model-catalog) · [**Developer Guide**](#developer-guide) · [**Contributing**](#contributing)
 
 </div>
 
@@ -78,8 +78,8 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 | Platform | Architecture | Engine | Core | Desktop UI |
 |---|---|---|---|---|
 | macOS 13+ | Apple Silicon (arm64) | oMLX (Metal/MLX) | ✅ | ✅ DMG |
-| Ubuntu 22.04+ | x86_64 | SGLang (NVIDIA, 24 GB+) / llama.cpp | ✅ | ✅ AppImage |
-| Ubuntu 22.04+ | arm64 | llama.cpp | ✅ | 🔜 Planned |
+| Ubuntu 22.04 / 24.04 / 26.04 | x86_64 | SGLang (NVIDIA, 24 GB+) / llama.cpp | ✅ | ✅ AppImage |
+| Ubuntu 22.04 / 24.04 / 26.04 | arm64 | llama.cpp | ✅ | 🔜 Planned |
 | Windows 10/11 | x86_64 | llama.cpp (CPU + NVIDIA CUDA) | ✅ | ✅ NSIS installer |
 | Windows 10/11 + WSL2 | x86_64 | SGLang (NVIDIA via CUDA-on-WSL) | ✅ (inside WSL) | run via Linux build |
 
@@ -90,6 +90,8 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 > **Windows 10 users** must install the Edge WebView2 Runtime before launching the desktop UI (preinstalled on Windows 11). Get it from <https://developer.microsoft.com/microsoft-edge/webview2/>.
 
 > **Windows Firewall**: when LMForge first binds to a non-loopback address (e.g. `0.0.0.0` for LAN access), Windows will pop a Defender Firewall dialog asking to allow `lmforge.exe` on Private/Public networks. Allow it on **Private** networks only unless you intentionally want WAN exposure.
+
+> **Ubuntu 26.04 — building from source**: `libwebkit2gtk-4.1-dev` was removed in 26.04. Use `libwebkitgtk-6.0-dev` instead when installing Tauri build dependencies manually. The pre-built AppImage and core binary (released binaries built on Ubuntu 22.04) run on 26.04 without modification.
 
 ---
 
@@ -196,6 +198,56 @@ curl http://127.0.0.1:11430/v1/embeddings \
   -H "Content-Type: application/json" \
   -d '{"model": "nomic-embed-text:v1.5", "input": "Hello world"}'
 ```
+
+---
+
+## Verify Installation
+
+After `lmforge start`, run these smoke tests to confirm the daemon is healthy and models respond correctly.
+
+```bash
+# ── 1. Health / status ───────────────────────────────────────────────────────
+curl -s http://127.0.0.1:11430/health
+curl -s http://127.0.0.1:11430/lf/status | jq '{state, engine, loaded_models}'
+
+# ── 2. Pull the recommended inference + embedding models ─────────────────────
+lmforge pull qwen3:8b:4bit           # chat / reasoning (~4.5 GB)
+lmforge pull qwen3-embed:0.6b:8bit   # embeddings (~0.6 GB)
+
+# ── 3. Chat completion (non-streaming) ───────────────────────────────────────
+curl -s http://127.0.0.1:11430/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3:8b:4bit",
+    "messages": [{"role": "user", "content": "Say: OK"}],
+    "max_tokens": 16
+  }' | jq '.choices[0].message.content'
+# Expected: "OK" (or similar short acknowledgement)
+
+# ── 4. Chat completion (streaming) ───────────────────────────────────────────
+curl -sN http://127.0.0.1:11430/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3:8b:4bit",
+    "messages": [{"role": "user", "content": "Count to 5."}],
+    "stream": true
+  }'
+# Expected: a series of data: {"choices":[{"delta":{"content":"..."}}]} lines
+
+# ── 5. Embeddings ─────────────────────────────────────────────────────────────
+curl -s http://127.0.0.1:11430/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3-embed:0.6b:8bit",
+    "input": "The quick brown fox"
+  }' | jq '.data[0].embedding | length'
+# Expected: 1024 (embedding dimension for the 0.6B model)
+
+# ── 6. List loaded models ─────────────────────────────────────────────────────
+curl -s http://127.0.0.1:11430/v1/models | jq '[.data[] | {id, capabilities}]'
+```
+
+> If you set an API key (`api_key` in `config.toml` or `LMFORGE_API_KEY` env), add `-H "Authorization: Bearer <your-key>"` to every request above.
 
 ---
 
