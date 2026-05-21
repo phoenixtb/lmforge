@@ -9,6 +9,12 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Opt into Node 24 for JS-based actions (actions/checkout, cache,
+  # upload-artifact, setup-node). Node 20 is forced off the runners on
+  # 2026-06-02. Safe to set today — newer runtime is backward-compatible
+  # with the bundled action code.
+  # See: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   # ── Format & lint (fast gate — fails early) ───────────────────────────────
