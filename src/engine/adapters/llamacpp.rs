@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::process::Command;
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, info, warn};
@@ -10,13 +10,16 @@ use crate::model::downloader::DownloadProgress;
 
 #[derive(Clone)]
 pub struct LlamacppAdapter {
+    /// The basename of the binary the installer drops into `<data_dir>/engines/`.
+    /// We resolve the absolute path at `start()` time using `data_dir`, so the
+    /// adapter doesn't need to know the data dir at construction.
     pub executable: String,
 }
 
 impl Default for LlamacppAdapter {
     fn default() -> Self {
         Self {
-            executable: "llama-server".to_string(), // Typical binary payload
+            executable: "llama-server".to_string(),
         }
     }
 }
@@ -38,10 +41,17 @@ impl EngineAdapter for LlamacppAdapter {
         model_id: &str,
         model_dir: &Path,
         port: u16,
-        _data_dir: &Path,
+        data_dir: &Path,
         logs_dir: &Path,
         role: ModelRole,
     ) -> Result<ActiveEngine> {
+        // Resolve the absolute path to `llama-server` from the install location
+        // (`<data_dir>/engines/llama-server`) before any other work. If the
+        // installer hasn't run yet — or the binary was removed via
+        // `lmforge clean --engines` — fall back to a PATH lookup so users with
+        // a system-wide install (homebrew / apt / built-from-source) still work.
+        let executable = resolve_executable(&self.executable, data_dir);
+
         // llama-server requires a single .gguf file path, not a directory.
         // Find the largest .gguf file in the model directory.
         let gguf_path = find_gguf_file(model_dir).ok_or_else(|| {
@@ -107,6 +117,29 @@ impl EngineAdapter for LlamacppAdapter {
             plan.ngl.to_string(),
         ];
 
+        // --cache-ram (b4400+): host-memory prefix cache. KV blocks for prefixes
+        // that fall off the GPU cache are kept in pinned host RAM and re-uploaded
+        // on hit instead of re-computed. Closes the "agentic prefix-cache" gap
+        // that previously favoured vLLM/SGLang — see ADR-001.
+        //
+        // Default budget: min(25% of system RAM, 4096 MiB). Aggressive enough to
+        // help on dev boxes (16 GB RAM → 4 GiB cap), conservative enough to leave
+        // headroom for the OS and the model itself. Chat role only — embed and
+        // rerank workloads have negligible prefix-reuse benefit and the cache
+        // would just trade RAM for nothing.
+        if matches!(role, ModelRole::Chat) {
+            let cache_ram_mib = resolve_cache_ram_mib(profile.total_ram_gb);
+            if cache_ram_mib > 0 {
+                info!(
+                    cache_ram_mib,
+                    total_ram_gb = profile.total_ram_gb,
+                    "llama.cpp host-memory prefix cache enabled"
+                );
+                args.push("--cache-ram".to_string());
+                args.push(cache_ram_mib.to_string());
+            }
+        }
+
         match role {
             ModelRole::Chat => {}
             ModelRole::Embed => {
@@ -129,13 +162,25 @@ impl EngineAdapter for LlamacppAdapter {
             args.push(plan.ctx_size.to_string());
         }
 
-        let child = Command::new(&self.executable)
+        info!(
+            executable = %executable.display(),
+            args = ?args,
+            "Spawning llama-server"
+        );
+
+        let child = Command::new(&executable)
             .args(&args)
             .stdout(std::process::Stdio::from(stdout_file))
             .stderr(std::process::Stdio::from(stderr_file))
             .kill_on_drop(true)
             .spawn()
-            .context("Failed to spawn native Llama-server engine")?;
+            .with_context(|| {
+                format!(
+                    "Failed to spawn llama-server at {}. \
+                     Run `lmforge init` to (re-)install the bundled binary.",
+                    executable.display()
+                )
+            })?;
 
         Ok(ActiveEngine {
             process: child,
@@ -172,6 +217,47 @@ impl EngineAdapter for LlamacppAdapter {
         }
         Ok(())
     }
+}
+
+/// Pick the absolute path to `llama-server` to spawn.
+///
+/// Resolution order (first hit wins):
+///   1. `LMFORGE_LLAMACPP_BIN` env override — absolute path. Useful for
+///      hacking on a locally-built `llama.cpp` without re-running `init`.
+///   2. `<data_dir>/engines/<basename>` — where `installer::install_via_binary`
+///      stages the prebuilt download. Primary path for end users.
+///   3. `<data_dir>/engines/<basename>.exe` — Windows fallback when `.exe`
+///      wasn't already on `basename`.
+///   4. Bare `basename` — relies on PATH. Works for system-wide installs
+///      (homebrew / apt / built-from-source).
+///
+/// Pure function — exposed for unit tests.
+pub(crate) fn resolve_executable(basename: &str, data_dir: &Path) -> PathBuf {
+    if let Ok(s) = std::env::var("LMFORGE_LLAMACPP_BIN")
+        && !s.is_empty()
+    {
+        let p = PathBuf::from(s);
+        if p.is_file() {
+            return p;
+        }
+    }
+
+    let engines_dir = data_dir.join("engines");
+    let primary = engines_dir.join(basename);
+    if primary.is_file() {
+        return primary;
+    }
+
+    // Windows: try the `.exe` suffix if the caller passed bare `llama-server`.
+    if cfg!(windows) && !basename.ends_with(".exe") {
+        let win = engines_dir.join(format!("{basename}.exe"));
+        if win.is_file() {
+            return win;
+        }
+    }
+
+    // Last resort — PATH lookup. Spawn will fail with a clear error if missing.
+    PathBuf::from(basename)
 }
 
 /// Find the best .gguf file in a model directory.
@@ -317,20 +403,32 @@ fn plan_runtime(
 /// profile when probing fails so the planner picks the CPU branch instead of
 /// crashing the engine spawn.
 fn resolve_profile_with_vram() -> HardwareProfile {
-    let mut profile =
-        crate::hardware::probe::detect_platform().unwrap_or_else(|_| HardwareProfile {
-            os: crate::hardware::probe::Os::Unknown,
-            arch: crate::hardware::probe::Arch::Unknown,
-            is_tegra: false,
-            gpu_vendor: GpuVendor::None,
-            vram_gb: 0.0,
-            unified_mem: false,
-            total_ram_gb: 0.0,
-            cpu_cores: 0,
-            cpu_model: String::new(),
-        });
+    let mut profile = crate::hardware::probe::detect_platform().unwrap_or_default();
     profile.vram_gb = crate::hardware::vram::estimate_vram(&profile);
     profile
+}
+
+/// Compute the `--cache-ram` budget in MiB.
+///
+/// Default heuristic: `min(0.25 * total_ram_gb * 1024, 4096)`.
+/// On 16 GB RAM systems (the 5060 Ti target) this gives 4 GiB; on 64 GB+
+/// systems it caps at 4 GiB to leave room for the model + OS + workload.
+///
+/// Overrides (always win):
+///   * `LMFORGE_LLAMACPP_CACHE_RAM_MIB=<n>` — exact MiB budget; `0` disables.
+///
+/// Returns `0` when caching should be disabled (no RAM info, or operator set to 0).
+pub(crate) fn resolve_cache_ram_mib(total_ram_gb: f32) -> u32 {
+    if let Ok(s) = std::env::var("LMFORGE_LLAMACPP_CACHE_RAM_MIB")
+        && let Ok(n) = s.parse::<u32>()
+    {
+        return n;
+    }
+    if total_ram_gb <= 0.0 || !total_ram_gb.is_finite() {
+        return 0;
+    }
+    let quarter_mib = (total_ram_gb * 1024.0 * 0.25) as u32;
+    quarter_mib.min(4096)
 }
 
 /// Find the multimodal projector sidecar (`mmproj-*.gguf`) in the model dir.
@@ -511,6 +609,146 @@ mod tests {
         // 6.5 GB free, 2.4 GB + 0.6 GB → 3.5 GB after → 4096.
         let p = plan_runtime(GpuVendor::Nvidia, 16.0, 6.5, 2.4, 0.6, true);
         assert_eq!(p.ctx_size, 4096);
+    }
+
+    // ── resolve_cache_ram_mib ────────────────────────────────────────────────
+
+    fn clear_cache_ram_override() {
+        // SAFETY: process-global env mutation, gated by `ENV_LOCK`.
+        unsafe { std::env::remove_var("LMFORGE_LLAMACPP_CACHE_RAM_MIB") }
+    }
+
+    #[test]
+    fn cache_ram_default_on_16gb_box() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_cache_ram_override();
+        // 16 GB RAM → 25% = 4 GiB, exactly at the cap.
+        assert_eq!(resolve_cache_ram_mib(16.0), 4096);
+    }
+
+    #[test]
+    fn cache_ram_default_on_8gb_box() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_cache_ram_override();
+        // 8 GB RAM → 25% = 2 GiB, below cap.
+        assert_eq!(resolve_cache_ram_mib(8.0), 2048);
+    }
+
+    #[test]
+    fn cache_ram_caps_on_large_ram() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_cache_ram_override();
+        // 128 GB RAM → would be 32 GiB unbounded, but cap is 4 GiB.
+        assert_eq!(resolve_cache_ram_mib(128.0), 4096);
+    }
+
+    #[test]
+    fn cache_ram_zero_on_no_ram_info() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_cache_ram_override();
+        assert_eq!(resolve_cache_ram_mib(0.0), 0);
+        assert_eq!(resolve_cache_ram_mib(-1.0), 0);
+        assert_eq!(resolve_cache_ram_mib(f32::NAN), 0);
+    }
+
+    #[test]
+    fn cache_ram_env_override_wins() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_cache_ram_override();
+
+        unsafe { std::env::set_var("LMFORGE_LLAMACPP_CACHE_RAM_MIB", "8192") }
+        // Override exceeds the default cap — operator opt-in to bigger cache.
+        assert_eq!(resolve_cache_ram_mib(16.0), 8192);
+
+        // 0 disables the cache entirely.
+        unsafe { std::env::set_var("LMFORGE_LLAMACPP_CACHE_RAM_MIB", "0") }
+        assert_eq!(resolve_cache_ram_mib(16.0), 0);
+
+        clear_cache_ram_override();
+    }
+
+    // ── resolve_executable ───────────────────────────────────────────────────
+    //
+    // All four tests mutate `LMFORGE_LLAMACPP_BIN`. Reuse the module-level
+    // `ENV_LOCK` mutex so cargo's parallel test runner can't interleave them:
+    // one test setting the var while another reads it would otherwise produce
+    // intermittent failures like
+    //   `assertion left == right failed` (saw the override path on a "no env"
+    //   test, or saw "llama-server" on the override test).
+
+    #[test]
+    fn resolve_executable_prefers_engines_dir() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("LMFORGE_LLAMACPP_BIN") };
+
+        let dir = std::env::temp_dir().join("lmforge_test_resolve_engines_dir");
+        let _ = std::fs::remove_dir_all(&dir);
+        let engines = dir.join("engines");
+        std::fs::create_dir_all(&engines).unwrap();
+        let bin = engines.join("llama-server");
+        std::fs::write(&bin, "fake").unwrap();
+
+        let resolved = resolve_executable("llama-server", &dir);
+        assert_eq!(resolved, bin);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolve_executable_falls_back_to_path_when_missing() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("LMFORGE_LLAMACPP_BIN") };
+
+        let dir = std::env::temp_dir().join("lmforge_test_resolve_no_binary");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("engines")).unwrap();
+
+        let resolved = resolve_executable("llama-server", &dir);
+        // No file at <data_dir>/engines/llama-server → PATH fallback.
+        assert_eq!(resolved, PathBuf::from("llama-server"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolve_executable_env_override_wins() {
+        let _g = ENV_LOCK.lock().unwrap();
+
+        let dir = std::env::temp_dir().join("lmforge_test_resolve_env_override");
+        let _ = std::fs::remove_dir_all(&dir);
+        let engines = dir.join("engines");
+        std::fs::create_dir_all(&engines).unwrap();
+        let staged = engines.join("llama-server");
+        std::fs::write(&staged, "staged").unwrap();
+        let custom = dir.join("custom-llama-server");
+        std::fs::write(&custom, "custom").unwrap();
+
+        unsafe { std::env::set_var("LMFORGE_LLAMACPP_BIN", custom.to_string_lossy().to_string()) };
+        let resolved = resolve_executable("llama-server", &dir);
+        unsafe { std::env::remove_var("LMFORGE_LLAMACPP_BIN") };
+
+        assert_eq!(resolved, custom);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolve_executable_env_override_ignored_when_missing_file() {
+        let _g = ENV_LOCK.lock().unwrap();
+
+        let dir = std::env::temp_dir().join("lmforge_test_resolve_env_override_bad");
+        let _ = std::fs::remove_dir_all(&dir);
+        let engines = dir.join("engines");
+        std::fs::create_dir_all(&engines).unwrap();
+        let staged = engines.join("llama-server");
+        std::fs::write(&staged, "staged").unwrap();
+
+        unsafe { std::env::set_var("LMFORGE_LLAMACPP_BIN", "/nonexistent/path") };
+        let resolved = resolve_executable("llama-server", &dir);
+        unsafe { std::env::remove_var("LMFORGE_LLAMACPP_BIN") };
+
+        // Bad override → fall through to engines dir.
+        assert_eq!(resolved, staged);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

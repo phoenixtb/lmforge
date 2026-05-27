@@ -280,6 +280,15 @@ info "Creating LMForge data directories..."
 mkdir -p "$HOME/.lmforge/models"
 mkdir -p "$HOME/.lmforge/engines"
 mkdir -p "$HOME/.lmforge/logs"
+mkdir -p "$HOME/.lmforge/bin"
+
+# ── Python toolchain ──────────────────────────────────────────────────────────
+# LMForge no longer relies on system `python3-venv` / `ensurepip` / pip. The
+# pip-based engines (SGLang, future mlx-lm fallback) are installed into a
+# uv-managed venv. uv is a static binary fetched on first `lmforge init` to
+# ~/.lmforge/bin/uv — no sudo, no apt/dnf/pacman branching, no Python install.
+#
+# Nothing to do here at install time; `lmforge init` bootstraps uv lazily.
 
 # ── PATH check ────────────────────────────────────────────────────────────────
 if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then

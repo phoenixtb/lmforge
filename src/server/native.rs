@@ -77,6 +77,10 @@ pub async fn status(State(state): State<AppState>) -> impl IntoResponse {
         },
         "running_models": running_models,
         "metrics": engine_state.metrics,
+        // Phase 2.3: surface the last load failure per model. Empty when
+        // every recent load succeeded. The UI / CLI can show this directly
+        // instead of telling the user to grep ~/.lmforge/logs/.
+        "last_errors": engine_state.last_errors,
         "catalogs_dir": state.config.read().await.catalogs_dir().to_string_lossy(),
     });
 
@@ -161,13 +165,32 @@ pub async fn model_switch(
         .unwrap()
 }
 
-/// `POST /lf/shutdown` — Graceful shutdown (loopback only)
-pub async fn shutdown(State(_state): State<AppState>) -> impl IntoResponse {
+/// `POST /lf/shutdown` — Graceful shutdown (loopback only).
+///
+/// Drains active engine slots through the manager BEFORE calling
+/// `process::exit`. Without this, vLLM's `EngineCore` subprocess (which
+/// holds the bulk of the VRAM) gets reparented to init and lingers until
+/// the user manually `kill -9`s it. SGLang has a milder version of the
+/// same problem.
+pub async fn shutdown(State(state): State<AppState>) -> impl IntoResponse {
     info!("Shutdown requested via API");
 
-    // Trigger shutdown asynchronously
-    tokio::spawn(async {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let cmd_tx = state.command_tx.clone();
+
+    tokio::spawn(async move {
+        // Best-effort drain: ask the manager to stop every active slot
+        // (which calls `adapter.stop()` → killpg on the engine's process
+        // group). Cap the wait at 15s so a wedged adapter can't hold the
+        // shutdown forever; if it times out we still hard-exit and any
+        // surviving children get reaped by `kill_on_drop` on the daemon's
+        // own `Child` handles.
+        if let Err(e) = cmd_tx
+            .send(crate::engine::manager::ManagerCommand::UnloadAll)
+            .await
+        {
+            warn!(error = %e, "Could not send UnloadAll to manager during shutdown");
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         std::process::exit(0);
     });
 
@@ -477,9 +500,19 @@ pub async fn config_update(
         if !mlx_path.exists() {
             let _ = std::fs::write(&mlx_path, include_str!("../../data/catalogs/mlx.json"));
         }
+        let safetensors_path = new_catalogs_dir.join("safetensors.json");
+        if !safetensors_path.exists() {
+            let _ = std::fs::write(
+                &safetensors_path,
+                include_str!("../../data/catalogs/safetensors.json"),
+            );
+        }
         let gguf_path = new_catalogs_dir.join("gguf.json");
         if !gguf_path.exists() {
-            let _ = std::fs::write(&gguf_path, include_str!("../../data/catalogs/gguf.json"));
+            let _ = std::fs::write(
+                &gguf_path,
+                include_str!("../../data/catalogs/gguf.json"),
+            );
         }
     }
 

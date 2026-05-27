@@ -1,7 +1,9 @@
 pub mod probe;
 pub mod vram;
 
-pub use probe::{Arch, GpuVendor, HardwareProfile, Os};
+pub use probe::{
+    Arch, ComputeCap, GpuVendor, HARDWARE_SCHEMA_VERSION, HardwareProfile, Os, OsFamily,
+};
 
 use anyhow::Result;
 

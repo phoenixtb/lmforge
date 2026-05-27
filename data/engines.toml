@@ -4,13 +4,33 @@
 #
 # asset_pattern does NOT include the file extension (.tar.gz / .zip).
 # The installer resolves the correct extension per OS at runtime.
+#
+# ──────────────────────────────────────────────────────────────────────────────
+#  Tier model — see docs/architecture/ADR-001-engine-tiers.md
+# ──────────────────────────────────────────────────────────────────────────────
+#    tier = "default"        Bundled with releases. Auto-selected.
+#    tier = "opt-in"         Requires `lmforge engine install <id>`. Isolated venv.
+#    tier = "experimental"   Kept as cheap insurance. Requires `--engine <id>` and a
+#                            user-confirmed warning prompt to use.
+#
+# Schema-v2 gate fields (used in tandem with `matches_*` v1 fields):
+#    min_compute_cap   = "9.0"   Minimum NVIDIA sm_XY (inclusive). Refuses below this.
+#    max_compute_cap   = "10.3"  Maximum NVIDIA sm_XY (inclusive). Refuses above this.
+#    supported_os_families = ["linux", "windows-wsl2"]
+#                                Engine works in these OS families. Empty = use v1 gates only.
+#
+# These v2 fields are advisory in Phase 0 and become authoritative in Phase 1.5
+# (the engine-selector update).
+# ──────────────────────────────────────────────────────────────────────────────
 
 [[engine]]
 id              = "omlx"
 name            = "oMLX"
 version         = "0.3.6"
+tier            = "default"
 matches_os      = "darwin"
 matches_arch    = "aarch64"
+supported_os_families = ["darwin"]
 install_method  = "brew"
 brew_tap        = "jundot/omlx"
 brew_tap_url    = "https://github.com/jundot/omlx"
@@ -28,9 +48,29 @@ priority        = 10
 id              = "sglang"
 name            = "SGLang"
 version         = "0.5.10.post1"
+# DEMOTED to experimental (Phase 1, May 2026). Reason: upstream `sgl-kernel`
+# wheels ship sm_90 + sm_100 cubins only. Consumer Blackwell (sm_120) GPUs
+# import the cu130 wheel but `common_ops.so` is missing for their arch,
+# causing chat completions to hang at first token. Tested combinations:
+#   sglang 0.5.10.post1 + CUDA 12.8/13.0 + driver 580.95 on RTX 5060 Ti → fail.
+#
+# As of this commit, SGLang is NEVER auto-selected (tier = "experimental"
+# is filtered out of the candidate set unconditionally). To use it, run:
+#   lmforge run --engine sglang <model>
+# The CLI prints a warning prompt before proceeding.
+#
+# RE-EVALUATE WHEN: docs.sglang.ai/whl/cu130/ lists sm120 cubins.
+# Verify with:      curl -s https://docs.sglang.ai/whl/cu130/ | grep -o sm120
+tier            = "experimental"
 matches_os      = "linux"
 matches_arch    = "x86_64"
 matches_gpu     = "nvidia"
+supported_os_families = ["linux"]
+# Even if someone wires `--engine sglang` we refuse to spawn on sm_120 since
+# the import will fail at runtime. Window: Hopper (sm_90) through datacenter
+# Blackwell (sm_103) — the cubins `sgl_kernel` actually ships.
+min_compute_cap = "9.0"
+max_compute_cap = "10.3"
 # 8 GB is the practical floor for SGLang on this catalog. The 1.7B / 4B
 # AWQ models fit comfortably; 7B/8B AWQ fits with a tighter mem fraction
 # (export LMFORGE_SGLANG_MEM_FRACTION=0.3). Below 8 GB SGLang's KV cache
@@ -38,7 +78,9 @@ matches_gpu     = "nvidia"
 min_vram_gb     = 8.0
 install_method  = "pip"
 pip_package     = "sglang[all]==0.5.10.post1"
-preflight       = ["nvcc", "nvidia-smi", "python3"]
+# uv supplies/installs Python, so we no longer require system python3 in PATH.
+# nvcc + nvidia-smi remain mandatory — SGLang needs the CUDA toolkit at install time.
+preflight       = ["nvcc", "nvidia-smi"]
 min_disk_gb     = 15
 model_format    = "safetensors"
 hf_org          = "{original}"
@@ -52,13 +94,18 @@ priority        = 20
 [[engine]]
 id              = "llamacpp"
 name            = "llama.cpp"
-version         = "b8870"
+# Pinned release. Bump together with the release_url + asset_pattern lines
+# below AND regenerate data/engines/llamacpp/SHA256SUMS via:
+#   scripts/bundle-llamacpp.sh --refresh-sums
+version         = "b9351"
+tier            = "default"
+supported_os_families = ["linux", "windows-native", "windows-wsl2", "darwin"]
 matches_fallback = true
 install_method  = "binary"
 binary          = "llama-server"
-release_url     = "https://github.com/ggml-org/llama.cpp/releases/download/b8870"
+release_url     = "https://github.com/ggml-org/llama.cpp/releases/download/b9351"
 # {platform} is resolved by the installer; extension (.tar.gz or .zip) is appended by OS
-asset_pattern   = "llama-b8870-bin-{platform}"
+asset_pattern   = "llama-b9351-bin-{platform}"
 # Windows CUDA builds also require the CUDA runtime DLL package (downloaded separately).
 # Upstream filename pattern: cudart-llama-bin-win-cuda-<variant>-x64.zip
 cudart_pattern  = "cudart-llama-bin-win-cuda-{cuda_variant}-x64"
@@ -70,3 +117,100 @@ health_endpoint = "/health"
 supports_embeddings = true    # via --embeddings flag; LMForge injects automatically
 supports_reranking  = true    # via --reranking flag; stable from b4355+
 priority        = 100
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Opt-in tier: vLLM (Phase 3)
+# ──────────────────────────────────────────────────────────────────────────────
+# Why opt-in instead of default:
+#   * 5+ GB on disk after install (torch, triton, flashinfer, cubins)
+#   * Cold-start adds ~30s of CUDA-graph capture on first request
+#   * llama.cpp + flash attention reaches ~85% of vLLM single-stream tput on
+#     consumer cards. The win is concurrency (batch>=4), which most desktop
+#     users don't hit. Opt-in keeps the default install lean.
+#
+# Why not Windows-native: vLLM relies on `triton` + UNIX-only ipc primitives
+# in its scheduler. The vLLM team explicitly excludes native Windows in their
+# install docs; WSL2 is the supported path on Windows boxes.
+#
+# Compute-cap window: sm_75 (Turing) through sm_120 (consumer Blackwell).
+#   * vLLM 0.20+ default wheel is cu130 / torch 2.11, with sm_120 in the
+#     default arch list — see vllm-project/vllm#39878. No manual cu13X
+#     juggling needed for Blackwell.
+#   * Older arches (Ampere/Ada/Hopper) on CUDA 12.8/12.9 use the `cu129`
+#     variant wheel; the torch-backend resolver picks it automatically.
+#
+# NVFP4 MoE on sm_120 still hits an attention-path bug under batch>1 as of
+# the upstream tracker (open issue). Soft warning emitted by the adapter at
+# start time — see M3.4 / `cli::engine::print_soft_caveats`.
+[[engine]]
+id              = "vllm"
+name            = "vLLM"
+# Pinned to the latest stable. CUDA 13.0 became the default in 0.20.0 and
+# sm_120 lives in its default `TORCH_CUDA_ARCH_LIST` — no override needed
+# for Blackwell. RE-EVALUATE WHEN: vLLM ships the NVFP4 MoE fix on sm_120.
+version         = "0.21.0"
+tier            = "opt-in"
+supported_os_families = ["linux", "windows-wsl2"]
+matches_gpu     = "nvidia"
+# Turing (sm_75) is the practical floor — older arches lack FA2 kernels that
+# vLLM hard-requires. Upper bound left unset; resolver picks the wheel.
+min_compute_cap = "7.5"
+# vLLM's KV-cache reservation + PagedAttention block table needs headroom.
+# Below ~10 GB you'll bounce off OOM on anything beyond 7B-4bit. Set at 12
+# so the soft floor matches what users actually report success on.
+min_vram_gb     = 12.0
+install_method  = "pip"
+pip_package     = "vllm==0.21.0"
+# FlashInfer JIT-compiles a sampling kernel on first model load (its
+# prebuilt cubins don't cover every quant + arch combo). The build uses
+# ninja, which isn't a runtime dep of vLLM's wheel — install it here so
+# the very first chat request doesn't crash with FileNotFoundError.
+pip_extras      = ["ninja"]
+# vLLM needs the CUDA toolkit at install time (compiles its own cubins for
+# attention layouts not in the prebuilt wheel). Same gate as SGLang.
+preflight       = ["nvcc", "nvidia-smi"]
+min_disk_gb     = 12
+model_format    = "safetensors"
+hf_org          = "{original}"
+# vLLM ships its own CLI wrapper; use the venv's `vllm` binary directly so we
+# don't have to know its full python -m path.
+start_cmd       = "vllm"
+start_args      = [
+    "serve",
+    "{model_path}",
+    "--port", "{port}",
+    "--host", "127.0.0.1",
+    "--enable-prefix-caching",
+    # Single-GPU only by default — multi-GPU TP needs `--tensor-parallel-size N`
+    # which the adapter wires conditionally from HardwareProfile.gpu_count.
+]
+health_endpoint = "/health"
+# Embeddings stay on the llama.cpp sidecar — vLLM's embedding pooling layer
+# is per-model and our catalog isn't tagged for it. See ADR-001 §"Sidecar".
+supports_embeddings = false
+supports_reranking  = false
+priority        = 25
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Opt-in tier stub (Phase 4 will populate)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# [[engine]]
+# id              = "exl3"
+# name            = "ExLlamaV3 + TabbyAPI"
+# version         = "x.y"               # pinned in Phase 4
+# tier            = "opt-in"
+# supported_os_families = ["linux", "windows-native", "windows-wsl2"]
+# matches_gpu     = "nvidia"
+# min_compute_cap = "7.5"               # Turing+
+# install_method  = "pip"
+# pip_package     = "tabbyapi"          # plus pinned exllamav3 wheel from data/engines/exl3/
+# preflight       = ["nvidia-smi"]
+# model_format    = "exl3"              # new catalogs/exl3.json
+# hf_org          = "turboderp"
+# start_cmd       = "python"
+# start_args      = ["-m", "tabby.server", "--config", "{data_dir}/engines/exl3/config.yaml"]
+# health_endpoint = "/health"
+# supports_embeddings = false           # embeddings stay on the llama.cpp sidecar
+# supports_reranking  = false
+# priority        = 30

@@ -180,62 +180,40 @@ async fn resolve_logical_name(
 ) -> Result<ResolvedModel> {
     use crate::model::catalog::CatalogResult;
 
-    if let Some(result) =
+    if let Some(CatalogResult::AllFiles(repo)) =
         crate::model::catalog::load_catalog_and_resolve(name, engine_format, catalogs_dir).await
     {
-        match result {
-            // GGUF explicit entry: exact file pinned in catalog — no HF API call needed.
-            CatalogResult::SingleFile(entry) => {
-                let dir_name = name.replace(':', "-");
-                let mut files = vec![entry.file.clone()];
-                // VLM: pull the multimodal projector alongside the main weights.
-                if let Some(mmproj) = entry.mmproj.clone() {
-                    debug!(name, mmproj = %mmproj, "Catalog entry includes mmproj projector");
-                    files.push(mmproj);
-                }
-                debug!(name, repo = %entry.repo, file = %entry.file, "Resolved GGUF explicit file from catalog");
-                return Ok(ResolvedModel {
-                    id: name.to_string(),
-                    dir_name,
-                    hf_repo: entry.repo,
-                    format: ModelFormat::Gguf,
-                    files,
-                });
-            }
-
-            // MLX (or legacy string): query HF API for file listing as before.
-            CatalogResult::AllFiles(repo) => {
-                let quant_hint = extract_quant_hint(name);
-                debug!(
-                    name,
-                    ?quant_hint,
-                    "Resolved repo from catalog, querying HF API"
-                );
-                let mut rm = resolve_hf_repo(&repo, engine_format, quant_hint).await?;
-                rm.id = name.to_string();
-                return Ok(rm);
-            }
-        }
+        let quant_hint = extract_quant_hint(name);
+        debug!(
+            name,
+            ?quant_hint,
+            "Resolved repo from catalog, querying HF API"
+        );
+        let mut rm = resolve_hf_repo(&repo, engine_format, quant_hint).await?;
+        rm.id = name.to_string();
+        return Ok(rm);
     }
 
     // Build a helpful suggestion list from the bundled catalog so it's always accurate.
     let suggestions = crate::model::catalog::bundled_shortcuts(engine_format);
-    let suggestion_str = if suggestions.is_empty() {
-        "run 'lmforge models' to see available shortcuts".to_string()
+    let suggestion_hint = if suggestions.is_empty() {
+        "run 'lmforge catalog list' to see available shortcuts".to_string()
     } else {
-        suggestions
-            .iter()
-            .take(6)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ")
+        format!(
+            "use a shortcut like: {}",
+            suggestions
+                .iter()
+                .take(6)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     };
 
     anyhow::bail!(
-        "Unknown model '{}'. Try a HF repo like 'mlx-community/Qwen3.5-4B-OptiQ-4bit' \
-         or use a shortcut like: {}",
+        "Unknown model '{}'. Try a HF repo like 'Qwen/Qwen3-8B-AWQ' or {}",
         name,
-        suggestion_str
+        suggestion_hint
     );
 }
 
@@ -264,12 +242,18 @@ fn extract_quant_hint(shortcut: &str) -> Option<&str> {
 
 /// Return ordered GGUF filename substrings for a given quant tag.
 /// Accepts both long form ("4bit", "8bit") and short form ("q4", "q8").
+///
+/// Priority: **Unsloth Dynamic (UD-Q*_K_XL)** when available — Unsloth's
+/// dynamic quants give better perplexity at ~5–10 % larger size than the stock
+/// k-quants. Falls back through standard k-quants (Q*_K_M > Q*_K_S > Q*_K)
+/// for repos that don't ship the UD- variants (lmstudio-community, bartowski,
+/// mradermacher, gpustack, …).
 fn gguf_patterns_for_quant(quant: &str) -> &'static [&'static str] {
     match quant {
-        "4bit" | "q4" => &["Q4_K_S", "Q4_K_M", "Q4_K"],
-        "5bit" | "q5" => &["Q5_K_S", "Q5_K_M", "Q5_K"],
-        "6bit" | "q6" => &["Q6_K"],
-        "8bit" | "q8" => &["Q8_0"],
+        "4bit" | "q4" => &["UD-Q4_K_XL", "Q4_K_M", "Q4_K_S", "Q4_K"],
+        "5bit" | "q5" => &["UD-Q5_K_XL", "Q5_K_M", "Q5_K_S", "Q5_K"],
+        "6bit" | "q6" => &["UD-Q6_K_XL", "Q6_K"],
+        "8bit" | "q8" => &["UD-Q8_K_XL", "Q8_0"],
         "f16" | "bf16" => &["F16", "BF16", "f16", "bf16"],
         _ => &[],
     }
@@ -376,37 +360,9 @@ mod tests {
         );
     }
 
-    // ── VLM resolver: catalog mmproj must be appended to files ────────────────
-
-    #[tokio::test]
-    async fn test_resolve_vlm_gguf_catalog_includes_mmproj() {
-        // qwen2.5-vl:7b:4bit ships with mmproj in the bundled GGUF catalog.
-        let tmp = std::env::temp_dir().join("lmforge_resolver_vlm_test");
-        std::fs::create_dir_all(&tmp).unwrap();
-
-        let resolved = resolve("qwen2.5-vl:7b:4bit", "gguf", &tmp)
-            .await
-            .expect("VLM catalog resolve must succeed");
-
-        assert_eq!(resolved.format, ModelFormat::Gguf);
-        assert_eq!(resolved.hf_repo, "bartowski/Qwen2.5-VL-7B-Instruct-GGUF");
-        assert_eq!(resolved.files.len(), 2, "main weights + mmproj");
-        assert_eq!(resolved.files[0], "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf");
-        assert_eq!(resolved.files[1], "mmproj-Qwen2.5-VL-7B-Instruct-f16.gguf");
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[tokio::test]
-    async fn test_resolve_non_vlm_gguf_does_not_add_mmproj() {
-        let tmp = std::env::temp_dir().join("lmforge_resolver_chat_test");
-        std::fs::create_dir_all(&tmp).unwrap();
-
-        let resolved = resolve("qwen3:8b:4bit", "gguf", &tmp).await.unwrap();
-        assert_eq!(resolved.files.len(), 1, "non-VLM has no mmproj sidecar");
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
+    // GGUF catalog tests removed alongside the catalog. Direct HF repo pulls of
+    // GGUF format are still exercised by `should_download_file` + the live HF
+    // API path, but no longer have shortcut entries.
 
     // ── extract_quant_hint ────────────────────────────────────────────────────
 

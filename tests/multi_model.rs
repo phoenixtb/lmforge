@@ -57,31 +57,14 @@ fn fake_engine_config() -> EngineConfig {
         id: "omlx".to_string(),
         name: "oMLX (test stub)".to_string(),
         version: "0.3.0".to_string(),
-        matches_os: None,
-        matches_arch: None,
-        matches_gpu: None,
-        min_vram_gb: None,
         matches_fallback: true,
         install_method: "brew".to_string(),
-        brew_tap: None,
-        brew_formula: None,
-        pip_fallback: None,
-        pip_package: None,
-        preflight: vec![],
-        min_disk_gb: None,
-        binary: None,
-        release_url: None,
-        asset_pattern: None,
         model_format: "mlx".to_string(),
         hf_org: "mlx-community".to_string(),
         start_cmd: "omlx".to_string(),
-        start_args: vec![],
         health_endpoint: "/health".to_string(),
         supports_embeddings: true,
-        supports_reranking: false,
-        brew_tap_url: None,
-        cudart_pattern: None,
-        priority: 0,
+        ..Default::default()
     }
 }
 
@@ -171,6 +154,7 @@ fn build_app_state(
         engine_version: engine_config.version.clone(),
         running_models: HashMap::new(),
         metrics: EngineMetrics::default(),
+        last_errors: HashMap::new(),
     }));
 
     let mut cfg = lmforge::config::LmForgeConfig::default();
@@ -708,6 +692,7 @@ async fn tc09_request_body_limit_enforced_and_configurable() {
         engine_version: engine_config.version.clone(),
         running_models: HashMap::new(),
         metrics: EngineMetrics::default(),
+        last_errors: HashMap::new(),
     }));
     let cfg = lmforge::config::LmForgeConfig::default();
     let state = AppState {

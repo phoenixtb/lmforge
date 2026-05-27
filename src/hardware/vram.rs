@@ -214,13 +214,12 @@ mod tests {
         HardwareProfile {
             os: Os::Darwin,
             arch: Arch::Aarch64,
-            is_tegra: false,
             gpu_vendor: gpu,
-            vram_gb: 0.0,
             unified_mem: gpu == GpuVendor::Apple,
             total_ram_gb: ram_gb,
             cpu_cores: 10,
             cpu_model: "Test".to_string(),
+            ..Default::default()
         }
     }
 

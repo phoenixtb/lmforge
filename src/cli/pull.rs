@@ -1,15 +1,31 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::config::LmForgeConfig;
+use crate::engine::registry::EngineRegistry;
 use crate::model::{downloader, index, resolver};
 
-/// `lmforge pull <model>` — Download a model
-pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
+/// `lmforge pull <model> [--engine <id>]` — Download a model.
+///
+/// When `engine_override` is `None`, the format is determined by the
+/// hardware-aware auto-selector (same as `lmforge run` / `lmforge catalog`).
+/// When set, the registry's `select_explicit` is used so the user can pull
+/// safetensors for vLLM on a host where llamacpp is the default.
+pub async fn run(
+    config: &LmForgeConfig,
+    model_input: &str,
+    engine_override: Option<&str>,
+) -> Result<()> {
     let data_dir = config.data_dir();
     std::fs::create_dir_all(data_dir.join("models"))?;
 
-    // Determine the engine format (default to mlx on this platform)
-    let engine_format = detect_engine_format(&data_dir);
+    // Determine the engine format. Shared with `run`, `catalog`, and the UI
+    // so a fresh-pull / fresh-run / fresh-list never disagree — UNLESS the
+    // user explicitly forces an engine, in which case the format follows
+    // that engine's `model_format` field.
+    let engine_format = match engine_override {
+        Some(id) => resolve_format_for_engine(id, &data_dir)?,
+        None => crate::model::catalog::detect_engine_format(&data_dir),
+    };
 
     // Resolve model input
     println!("⚙ Resolving model: {}", model_input);
@@ -150,37 +166,28 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
     Ok(())
 }
 
-/// Detect engine format by selecting the active engine from the registry against
-/// the cached hardware profile. Falls back to legacy GPU-vendor heuristic on
-/// error, and finally to "gguf" so behaviour stays predictable on fresh installs.
-fn detect_engine_format(data_dir: &std::path::Path) -> String {
-    let hw_path = data_dir.join("hardware.json");
-    let profile_json = match std::fs::read_to_string(&hw_path) {
-        Ok(c) => c,
-        Err(_) => return "gguf".to_string(),
-    };
+// `detect_engine_format` lives in `crate::model::catalog` so pull / run /
+// catalog / init / UI all agree on which catalog the host should resolve
+// against. Phase 2.1 (catalog priority flip).
 
-    if let Ok(profile) =
-        serde_json::from_str::<crate::hardware::probe::HardwareProfile>(&profile_json)
-    {
-        let user_override = data_dir.join("engines.toml");
-        let override_path = if user_override.exists() {
-            Some(user_override.as_path())
-        } else {
-            None
-        };
-        if let Ok(registry) = crate::engine::registry::EngineRegistry::load(override_path)
-            && let Ok(selected) = registry.select(&profile)
-        {
-            return selected.model_format.clone();
-        }
-    }
-
-    // Legacy fallback: trust gpu_vendor=apple → mlx; otherwise gguf
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&profile_json)
-        && v["gpu_vendor"].as_str() == Some("apple")
-    {
-        return "mlx".to_string();
-    }
-    "gguf".to_string()
+/// When the user passes `--engine <id>` to `pull`, route the format through
+/// that engine's `model_format` directly rather than the auto-selector.
+///
+/// Why a stand-alone helper rather than calling `select_explicit` and reading
+/// `cfg.model_format`: hardware probing has its own error surface ("CUDA
+/// driver missing"). At pull-time the user only cares about format. We honour
+/// hardware gates implicitly because the user must `engine install <id>`
+/// first — which DOES enforce the gates.
+fn resolve_format_for_engine(id: &str, data_dir: &std::path::Path) -> Result<String> {
+    let user_engines = data_dir.join("engines.toml");
+    let registry = EngineRegistry::load(if user_engines.exists() {
+        Some(user_engines.as_path())
+    } else {
+        None
+    })
+    .context("Failed to load engine registry")?;
+    let engine = registry
+        .get(id)
+        .with_context(|| format!("Unknown engine id: {}", id))?;
+    Ok(engine.model_format.clone())
 }

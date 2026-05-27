@@ -57,6 +57,7 @@ pub enum EngineAdapterInstance {
     Omlx(crate::engine::adapters::omlx::OmlxAdapter),
     Sglang(crate::engine::adapters::sglang::SglangAdapter),
     Llamacpp(crate::engine::adapters::llamacpp::LlamacppAdapter),
+    Vllm(crate::engine::adapters::vllm::VllmAdapter),
 }
 
 impl EngineAdapter for EngineAdapterInstance {
@@ -70,6 +71,7 @@ impl EngineAdapter for EngineAdapterInstance {
             Self::Omlx(ad) => ad.pull_model(repo, dest_dir, progress_tx).await,
             Self::Sglang(ad) => ad.pull_model(repo, dest_dir, progress_tx).await,
             Self::Llamacpp(ad) => ad.pull_model(repo, dest_dir, progress_tx).await,
+            Self::Vllm(ad) => ad.pull_model(repo, dest_dir, progress_tx).await,
         }
     }
 
@@ -95,6 +97,10 @@ impl EngineAdapter for EngineAdapterInstance {
                 ad.start(model_id, model_dir, port, data_dir, logs_dir, role)
                     .await
             }
+            Self::Vllm(ad) => {
+                ad.start(model_id, model_dir, port, data_dir, logs_dir, role)
+                    .await
+            }
         }
     }
 
@@ -103,6 +109,7 @@ impl EngineAdapter for EngineAdapterInstance {
             Self::Omlx(ad) => ad.stop(active_engine).await,
             Self::Sglang(ad) => ad.stop(active_engine).await,
             Self::Llamacpp(ad) => ad.stop(active_engine).await,
+            Self::Vllm(ad) => ad.stop(active_engine).await,
         }
     }
 }

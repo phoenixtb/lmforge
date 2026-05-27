@@ -152,6 +152,37 @@ fi
 INSTALLED_VER=$("$INSTALL_DIR/$BINARY_NAME" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "?")
 info "lmforge $INSTALLED_VER installed and working"
 
+# ── NVIDIA driver info (Linux + NVIDIA only — informational) ──────────────────
+# The default engine (llama.cpp, bundled) needs nothing more than the NVIDIA
+# driver — no `nvcc`, no Python, no pip. We surface the driver version and
+# CUDA-runtime info here purely so users can sanity-check what they have.
+#
+# The CUDA toolkit (`nvcc`) is only required for the *opt-in* SGLang tier
+# (`lmforge engine install sglang`), which is currently experimental and gated
+# to sm_90 / sm_100. RTX 50-series (sm_120) users don't need nvcc at all.
+if [[ "$(uname -s)" == "Linux" ]] && command -v nvidia-smi &>/dev/null; then
+    section "NVIDIA GPU detected..."
+    DRIVER_VER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 || echo "?")
+    CUDA_RUNTIME=$(nvidia-smi 2>/dev/null | grep -oE 'CUDA Version: [0-9]+\.[0-9]+' | awk '{print $3}' | head -1)
+    COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 || echo "?")
+    info "Driver $DRIVER_VER | CUDA runtime ${CUDA_RUNTIME:-?} | compute cap ${COMPUTE_CAP}"
+
+    if [[ -n "${CUDA_RUNTIME:-}" ]]; then
+        # Quick "if you want the opt-in tiers" hint, not a hard requirement.
+        if ! command -v nvcc &>/dev/null && [[ -x /usr/local/cuda/bin/nvcc ]]; then
+            warn "nvcc lives at /usr/local/cuda/bin/nvcc but is not on PATH."
+            echo "  Add to your shell rc (only needed for opt-in engines that build CUDA kernels):"
+            echo "    export PATH=/usr/local/cuda/bin:\$PATH"
+            echo ""
+        elif ! command -v nvcc &>/dev/null; then
+            echo "  nvcc not found — that's fine for the default llama.cpp tier."
+            echo "  Install it later only if you want SGLang/vLLM/EXL3:"
+            echo "    sudo apt-get install -y nvidia-cuda-toolkit   # (or your distro's equivalent)"
+            echo ""
+        fi
+    fi
+fi
+
 # ── Init (first-time setup) ───────────────────────────────────────────────────
 section "Initializing LMForge..."
 "$INSTALL_DIR/$BINARY_NAME" init

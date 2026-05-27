@@ -1,5 +1,6 @@
 pub mod catalog;
 pub mod clean;
+pub mod engine;
 pub mod init;
 pub mod logs;
 pub mod models;
@@ -57,6 +58,19 @@ pub enum Command {
         /// Run in foreground (default: daemon mode)
         #[arg(long)]
         foreground: bool,
+
+        /// Force a specific engine (e.g. `sglang`, `vllm`) instead of the
+        /// auto-selected default. Hardware gates still apply. When the engine
+        /// is in the `experimental` tier you'll be prompted to confirm; pass
+        /// `--yes-experimental` (or set `LMFORGE_YES_EXPERIMENTAL=1`) to skip
+        /// the prompt in non-interactive shells.
+        #[arg(long)]
+        engine: Option<String>,
+
+        /// Skip the experimental-engine confirmation prompt. Useful for
+        /// scripts / systemd units that explicitly opt into a tier.
+        #[arg(long)]
+        yes_experimental: bool,
     },
 
     /// Stop a running LMForge instance
@@ -69,6 +83,15 @@ pub enum Command {
     Pull {
         /// Model name, HF repo, URL, or local path
         model: String,
+
+        /// Force a specific engine when resolving the model's format.
+        ///
+        /// Without this flag, `pull` uses the engine the auto-selector would
+        /// pick (default tier). Use `--engine vllm` to pull a safetensors
+        /// model when llamacpp is the default — otherwise pull refuses the
+        /// format mismatch.
+        #[arg(long)]
+        engine: Option<String>,
     },
 
     /// Run an interactive REPL with a model
@@ -89,9 +112,15 @@ pub enum Command {
         action: ModelsAction,
     },
 
+    /// Install / uninstall / inspect opt-in inference engines (vLLM, EXL3, ...)
+    Engine {
+        #[command(subcommand)]
+        action: EngineAction,
+    },
+
     /// List available model shortcuts from the bundled catalog
     Catalog {
-        /// Engine format to list (mlx, gguf). Defaults to current platform format.
+        /// Engine format to list (mlx, safetensors, gguf). Defaults to current platform format.
         #[arg(long)]
         format: Option<String>,
 
@@ -130,6 +159,13 @@ pub enum Command {
         /// Remove HuggingFace cache entries duplicated in ~/.lmforge/models/
         #[arg(long)]
         hf_cache: bool,
+
+        /// Remove engine installs (SGLang venv, bundled uv, etc.). Next
+        /// `lmforge init` will re-download uv (~24 MB) and rebuild the venv
+        /// (~2 min for SGLang). Use this after a torch/CUDA version mismatch
+        /// or to reclaim ~5 GB of disk per pip engine.
+        #[arg(long)]
+        engines: bool,
     },
 
     /// View logs
@@ -185,6 +221,45 @@ pub enum ModelsAction {
     Unload,
 }
 
+#[derive(Subcommand, Debug)]
+pub enum EngineAction {
+    /// List every engine in the registry with tier, install status, and
+    /// hardware-compatibility verdict for THIS host.
+    List,
+
+    /// Install an opt-in engine into its own isolated venv at
+    /// `~/.lmforge/engines/<id>/venv/`. Hardware gates are enforced.
+    /// Default-tier engines are auto-installed by `lmforge init`; calling
+    /// `engine install <default-id>` is a no-op once the binary is staged.
+    Install {
+        /// Engine id (e.g. `vllm`, `exl3`)
+        id: String,
+
+        /// Skip the experimental-tier confirmation prompt.
+        #[arg(long)]
+        yes_experimental: bool,
+    },
+
+    /// Remove an engine install (venv + cached wheels for pip engines,
+    /// or the staged binary + sibling libraries for binary engines).
+    /// Models on disk are NOT touched.
+    Uninstall {
+        /// Engine id to remove
+        id: String,
+
+        /// Skip the "are you sure?" prompt (non-interactive scripts).
+        #[arg(short, long)]
+        yes: bool,
+    },
+
+    /// Show install state + hardware compatibility for a single engine.
+    /// Useful for debugging selector decisions.
+    Status {
+        /// Engine id to inspect
+        id: String,
+    },
+}
+
 /// Dispatch CLI command to the appropriate handler
 pub async fn dispatch(cli: Cli, config: LmForgeConfig) -> Result<()> {
     match cli.command {
@@ -194,10 +269,26 @@ pub async fn dispatch(cli: Cli, config: LmForgeConfig) -> Result<()> {
             port,
             bind,
             foreground,
-        } => start::run(&config, model, port, bind, foreground, None).await,
+            engine,
+            yes_experimental,
+        } => {
+            start::run(
+                &config,
+                start::StartOptions {
+                    model,
+                    port,
+                    bind,
+                    foreground,
+                    engine,
+                    yes_experimental,
+                },
+                None,
+            )
+            .await
+        }
         Command::Stop => stop::run(&config).await,
         Command::Status => status::run(&config).await,
-        Command::Pull { model } => pull::run(&config, &model).await,
+        Command::Pull { model, engine } => pull::run(&config, &model, engine.as_deref()).await,
         Command::Models { action } => models::run(&config, action).await,
         Command::Catalog { format, search } => catalog::run(&config, format, search).await,
         Command::Clean {
@@ -208,6 +299,7 @@ pub async fn dispatch(cli: Cli, config: LmForgeConfig) -> Result<()> {
             logs,
             max_mb,
             hf_cache,
+            engines,
         } => {
             clean::run(
                 &config,
@@ -217,6 +309,7 @@ pub async fn dispatch(cli: Cli, config: LmForgeConfig) -> Result<()> {
                     all,
                     partial,
                     hf_cache,
+                    engines,
                     logs,
                     max_mb,
                 },
@@ -224,6 +317,7 @@ pub async fn dispatch(cli: Cli, config: LmForgeConfig) -> Result<()> {
             .await
         }
         Command::Run { model } => run::run(&config, &model).await,
+        Command::Engine { action } => engine::run(&config, action).await,
         Command::Service { action } => match action {
             ServiceAction::Install => service::install(),
             ServiceAction::Uninstall => service::uninstall(),

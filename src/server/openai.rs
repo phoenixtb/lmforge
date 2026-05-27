@@ -257,8 +257,16 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
         Err(resp) => return resp.into_response(),
     };
 
-    // Rewrite model_id to the exact filesystem directory name so engines don't panic
-    if let Some(entry) = index.get(&model_id)
+    // Rewrite model_id to the exact filesystem directory name so engines
+    // that key on the path basename (SGLang / llama.cpp / oMLX) don't 404.
+    //
+    // vLLM is the exception: at spawn time we pass `--served-model-name
+    // <model_id>` so vLLM advertises the model under our canonical id.
+    // Rewriting here would defeat that and cause the 404 we explicitly
+    // engineered against. Keep the rewrite engine-aware.
+    let needs_basename_rewrite = state.engine_config.id != "vllm";
+    if needs_basename_rewrite
+        && let Some(entry) = index.get(&model_id)
         && let Some(dir_name) = std::path::Path::new(&entry.path).file_name()
         && let Some(obj) = body_value.as_object_mut()
     {
@@ -458,7 +466,11 @@ pub async fn completions(State(state): State<AppState>, body: Bytes) -> impl Int
             models: vec![],
         }
     });
-    if let Some(entry) = index.get(&model_id)
+    // Same engine-aware rewrite as `/v1/chat/completions`. See the comment
+    // there for why vLLM is exempt.
+    let needs_basename_rewrite = state.engine_config.id != "vllm";
+    if needs_basename_rewrite
+        && let Some(entry) = index.get(&model_id)
         && let Some(dir_name) = std::path::Path::new(&entry.path).file_name()
         && let Some(obj) = body_value.as_object_mut()
     {

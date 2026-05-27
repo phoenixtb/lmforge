@@ -9,10 +9,12 @@ pub async fn run(
     format: Option<String>,
     search: Option<String>,
 ) -> Result<()> {
-    // Determine engine format for this platform if not specified
+    // Determine engine format for this platform if not specified. Reads
+    // `hardware.json` + `engines.toml` so the listed shortcuts match what
+    // `lmforge pull <shortcut>` will actually fetch.
     let format_str = match format {
         Some(f) => f.to_lowercase(),
-        None => detect_platform_format(),
+        None => crate::model::catalog::detect_engine_format(&config.data_dir()),
     };
 
     // Try runtime file first (user may have customized it), fall back to bundled
@@ -144,28 +146,11 @@ fn parse_ordered(raw: &str) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
-/// Detect the engine format for the current platform.
-/// On macOS (Apple Silicon) → mlx, Linux x86_64 → safetensors/gguf → gguf fallback.
-fn detect_platform_format() -> String {
-    #[cfg(target_os = "macos")]
-    {
-        // Check if oMLX is available (installed by lmforge init on Apple Silicon)
-        if std::process::Command::new("omlx")
-            .arg("--version")
-            .output()
-            .is_ok()
-        {
-            return "mlx".to_string();
-        }
-    }
-    // Default to gguf (covers Linux, Windows, CPU-only macOS)
-    "gguf".to_string()
-}
-
 /// Returns the bundled catalog string for the given format.
 fn bundled_for_format(format: &str) -> &'static str {
     match format {
         "mlx" => crate::model::catalog::BUNDLED_MLX,
+        "safetensors" => crate::model::catalog::BUNDLED_SAFETENSORS,
         "gguf" => crate::model::catalog::BUNDLED_GGUF,
         _ => "{}",
     }

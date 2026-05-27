@@ -208,7 +208,7 @@ After `lmforge start`, run these smoke tests to confirm the daemon is healthy an
 ```bash
 # ── 1. Health / status ───────────────────────────────────────────────────────
 curl -s http://127.0.0.1:11430/health
-curl -s http://127.0.0.1:11430/lf/status | jq '{state, engine, loaded_models}'
+curl -s http://127.0.0.1:11430/lf/status | jq '{overall_status, engine, running_models}'
 
 # ── 2. Pull the recommended inference + embedding models ─────────────────────
 lmforge pull qwen3:8b:4bit           # chat / reasoning (~4.5 GB)

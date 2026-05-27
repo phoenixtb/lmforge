@@ -507,6 +507,33 @@ pub fn detect_capabilities(
     }
 
     // =========================================================================
+    // Signal E — GGUF chat fallback.
+    //
+    // GGUF model dirs typically contain just the `.gguf` weights file and no
+    // `config.json`, so the architecture-based chat detection above never
+    // fires. Without this fallback, every GGUF chat model would land here
+    // with `chat=false` and the OpenAI API would refuse chat completions
+    // ("Model 'foo' is an embedding model and cannot be used for chat
+    // completions.") — see src/server/openai.rs::check_model_role.
+    //
+    // Rule: a model directory containing one or more `.gguf` weight files
+    // (excluding `mmproj-*.gguf`) and no `config.json` is presumed to be a
+    // chat model UNLESS earlier signals already classified it as embed or
+    // rerank. This matches the curated catalog: gguf.json's `chat`,
+    // `embed`, and `rerank` namespaces are explicit, and Signal A/B already
+    // tagged non-chat shortcuts before we get here.
+    // =========================================================================
+    if !caps.chat
+        && !caps.embeddings
+        && !caps.reranking
+        && !config_path.exists()
+        && has_gguf_weights(model_dir)
+    {
+        caps.chat = true;
+        debug!("Signal E: GGUF-only dir with no embed/rerank markers — defaulting chat=true");
+    }
+
+    // =========================================================================
     // VLM mmproj sidecar lookup (llama.cpp-served VLMs only).
     // Convention: `mmproj-*.gguf` next to the main weights file. If we already
     // know vision=true we look unconditionally; if vision is unset but a
@@ -531,6 +558,25 @@ pub fn detect_capabilities(
     caps
 }
 
+/// True when `model_dir` contains at least one `.gguf` weights file that is
+/// *not* a multimodal projector sidecar. Used by the GGUF chat fallback in
+/// `detect_capabilities`.
+fn has_gguf_weights(model_dir: &std::path::Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(model_dir) else {
+        return false;
+    };
+    entries.filter_map(|e| e.ok()).any(|e| {
+        let path = e.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("gguf") {
+            return false;
+        }
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| !n.starts_with("mmproj-"))
+            .unwrap_or(false)
+    })
+}
+
 /// Find the multimodal projector sidecar (`mmproj-*.gguf`) in the given dir.
 /// Returns the first match (sorted lexicographically for deterministic results).
 fn find_mmproj_file(model_dir: &std::path::Path) -> Option<std::path::PathBuf> {
@@ -553,6 +599,105 @@ fn find_mmproj_file(model_dir: &std::path::Path) -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── GGUF chat fallback (Signal E) ────────────────────────────────────────
+    //
+    // Regression guard: every GGUF chat model in the curated catalog must be
+    // classified as chat=true even though it ships with no config.json. If
+    // this breaks, /v1/chat/completions starts 400ing with "is an embedding
+    // model and cannot be used for chat completions."
+
+    fn make_gguf_dir(name: &str, files: &[(&str, &[u8])]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("lmforge_test_caps_{}", name));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (fname, body) in files {
+            std::fs::write(dir.join(fname), body).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn gguf_only_dir_defaults_to_chat() {
+        let dir = make_gguf_dir(
+            "gguf_chat",
+            &[("Qwen3-1.7B-Q4_K_M.gguf", b"fake-weights")],
+        );
+        let caps = detect_capabilities(&dir, Some("qwen3:1.7b:4bit"), Some("unsloth/Qwen3-1.7B-GGUF"));
+        assert!(caps.chat, "GGUF model without embed/rerank markers must default chat=true");
+        assert!(!caps.embeddings);
+        assert!(!caps.reranking);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn gguf_embed_dir_stays_embed() {
+        let dir = make_gguf_dir(
+            "gguf_embed",
+            &[("Qwen3-Embedding-0.6B-Q8_0.gguf", b"fake-weights")],
+        );
+        let caps = detect_capabilities(
+            &dir,
+            Some("qwen3-embed:0.6b:8bit"),
+            Some("Qwen/Qwen3-Embedding-0.6B-GGUF"),
+        );
+        assert!(caps.embeddings, "Catalog 'embed' shortcut must keep embeddings=true");
+        assert!(!caps.chat, "Embedding model must not be flagged as chat");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn gguf_rerank_dir_stays_rerank() {
+        let dir = make_gguf_dir(
+            "gguf_rerank",
+            &[("Qwen3-Reranker-4B-Q4_K_M.gguf", b"fake-weights")],
+        );
+        let caps = detect_capabilities(
+            &dir,
+            Some("qwen3-rerank:4b:4bit"),
+            Some("Qwen/Qwen3-Reranker-4B-GGUF"),
+        );
+        assert!(caps.reranking);
+        assert!(!caps.chat, "Re-ranker must not be flagged as chat");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn safetensors_dir_with_no_config_does_not_get_chat_fallback() {
+        // The fallback is GGUF-only — a stray safetensors dir without
+        // config.json (broken state) must NOT get chat=true.
+        let dir = make_gguf_dir(
+            "safetensors_no_config",
+            &[("model.safetensors", b"fake-weights")],
+        );
+        let caps = detect_capabilities(&dir, Some("some-model:latest"), None);
+        assert!(!caps.chat, "Safetensors-only dir without config.json must not be flagged chat");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn has_gguf_weights_distinguishes_main_from_mmproj() {
+        let dir = make_gguf_dir(
+            "gguf_weights_probe",
+            &[
+                ("Qwen2.5-VL-7B-Q4_K_M.gguf", b"fake-weights"),
+                ("mmproj-Qwen2.5-VL-7B-f16.gguf", b"fake-proj"),
+            ],
+        );
+        assert!(has_gguf_weights(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let dir = make_gguf_dir("gguf_no_weights", &[]);
+        assert!(!has_gguf_weights(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let dir = make_gguf_dir(
+            "gguf_only_mmproj",
+            &[("mmproj-something-f16.gguf", b"fake-proj")],
+        );
+        assert!(!has_gguf_weights(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn test_index_crud() {

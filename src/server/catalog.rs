@@ -10,11 +10,11 @@ use crate::model::catalog::list_for_ui;
 
 #[derive(Deserialize)]
 pub struct CatalogQuery {
-    /// Optional format filter: `"mlx"` or `"gguf"`. Omit to get both.
+    /// Optional format filter: `"mlx"`, `"safetensors"`, or `"gguf"`. Omit to get all three.
     pub format: Option<String>,
 }
 
-/// `GET /lf/catalog[?format=mlx|gguf]`
+/// `GET /lf/catalog[?format=mlx|safetensors|gguf]`
 ///
 /// Returns all curated model shortcuts from the bundled catalog.
 /// Each entry includes the shortcut key, resolved HuggingFace repo, format,

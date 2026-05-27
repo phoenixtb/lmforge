@@ -50,6 +50,31 @@ pub struct ModelSlot {
     pub vram_est_gb: f32,
 }
 
+/// One recorded failure for a model load attempt, surfaced in `/lf/status`
+/// under `last_errors` so the UI / CLI can show *why* a `lmforge run`
+/// command failed without forcing the user to grep through log files.
+///
+/// Populated on:
+///   * `spawn_adapter_process` failure (binary missing, port conflict, etc.)
+///   * `wait_slot_health` timeout (engine started but never reached `/health`)
+///
+/// Cleared on the next successful load of the same `model_id`. Capped to
+/// the last `MAX_LAST_ERRORS` model ids globally to bound memory.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModelLoadError {
+    /// RFC3339 timestamp of when the failure was recorded.
+    pub at: String,
+    /// Last ~32 lines of the worker's stderr log, capped at 8 KiB.
+    /// `None` when no stderr file existed at the time of failure (worker
+    /// crashed before writing anything, or adapter never spawned).
+    pub stderr_tail: Option<String>,
+    /// One-line error message from the orchestrator side
+    /// (e.g. "Engine Adapter failed health verify on port 11521").
+    pub message: String,
+}
+
+const MAX_LAST_ERRORS: usize = 8;
+
 /// Shared engine state accessible from API handlers
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EngineState {
@@ -58,6 +83,11 @@ pub struct EngineState {
     pub engine_version: String,
     pub running_models: std::collections::HashMap<String, ModelSlot>,
     pub metrics: EngineMetrics,
+    /// Per-model failure context. Keyed by `model_id`. Survives the failed
+    /// slot's removal from `running_models` so users can debug the crash.
+    /// Cleared individually when a model loads successfully.
+    #[serde(default)]
+    pub last_errors: std::collections::HashMap<String, ModelLoadError>,
 }
 
 pub struct ActiveSlot {
@@ -117,6 +147,7 @@ impl EngineManager {
             engine_version: config.version.clone(),
             running_models: std::collections::HashMap::new(),
             metrics: EngineMetrics::default(),
+            last_errors: std::collections::HashMap::new(),
         }));
 
         Self {
@@ -141,6 +172,35 @@ impl EngineManager {
         let snapshot = self.state.read().await.clone();
         // Ignore send errors — no subscribers is fine, lagged is fine.
         let _ = self.status_tx.send(snapshot);
+    }
+
+    /// Read this model's stderr log, build a `ModelLoadError`, and insert it
+    /// into `EngineState.last_errors`. Caps the map at `MAX_LAST_ERRORS` by
+    /// evicting the oldest entries (FIFO on `at`).
+    ///
+    /// Intentionally swallows all I/O errors — surfacing diagnostics must
+    /// never fail the load path. Phase 2.3.
+    async fn record_load_failure(&self, model_id: &str, err: &anyhow::Error) {
+        let stderr_tail = crate::logging::rotation::read_stderr_tail(&self.logs_dir, model_id);
+        let entry = ModelLoadError {
+            at: chrono::Utc::now().to_rfc3339(),
+            stderr_tail,
+            message: format!("{err}"),
+        };
+
+        let mut state = self.state.write().await;
+        state.last_errors.insert(model_id.to_string(), entry);
+
+        // Cap at MAX_LAST_ERRORS — evict oldest by `at`.
+        if state.last_errors.len() > MAX_LAST_ERRORS
+            && let Some(oldest_key) = state
+                .last_errors
+                .iter()
+                .min_by(|a, b| a.1.at.cmp(&b.1.at))
+                .map(|(k, _)| k.clone())
+        {
+            state.last_errors.remove(&oldest_key);
+        }
     }
 
     pub fn state(&self) -> Arc<RwLock<EngineState>> {
@@ -176,19 +236,8 @@ impl EngineManager {
 
     /// Evict least recently used models until needed VRAM is free
     async fn evict_for_vram(&mut self, needed_vram_gb: f32) -> Result<()> {
-        let profile = crate::hardware::probe::detect_platform().unwrap_or_else(|_| {
-            crate::hardware::probe::HardwareProfile {
-                os: crate::hardware::probe::Os::Unknown,
-                arch: crate::hardware::probe::Arch::Unknown,
-                is_tegra: false,
-                gpu_vendor: crate::hardware::probe::GpuVendor::None,
-                vram_gb: 0.0,
-                unified_mem: false,
-                total_ram_gb: 0.0,
-                cpu_cores: 0,
-                cpu_model: String::new(),
-            }
-        });
+        let profile = crate::hardware::probe::detect_platform()
+            .unwrap_or_default();
 
         loop {
             let free_vram = crate::hardware::vram::get_free_vram(&profile);
@@ -279,16 +328,54 @@ impl EngineManager {
         Ok(active)
     }
 
-    /// Wait for health check of a dynamically assigned port
-    async fn wait_slot_health(&self, port: u16) -> Result<()> {
+    /// Wait for health check of a dynamically assigned port.
+    ///
+    /// Polls the engine's `/health` endpoint at 1s intervals AND polls the
+    /// child process for early exit. If the child exits before the endpoint
+    /// becomes healthy, bail immediately rather than burning the full
+    /// 120s budget — the previous behaviour buried CLI-arg errors (e.g.
+    /// vLLM 0.21 dropping `--disable-log-requests`) under a useless "health
+    /// check timed out" message that arrived two minutes late.
+    ///
+    /// The `child` is borrowed mutably because `try_wait` requires it; we
+    /// don't take ownership so the caller can still SIGTERM the process
+    /// on graceful shutdown paths.
+    async fn wait_slot_health(
+        &self,
+        port: u16,
+        child: &mut tokio::process::Child,
+    ) -> Result<()> {
         let health_url = format!("http://127.0.0.1:{}{}", port, self.config.health_endpoint);
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(3))
             .build()?;
         let start = std::time::Instant::now();
+        // Tunable: vLLM cold-start (CUDA graph capture + JIT) can hit 60-120s
+        // on a 7B model. The default keeps llama.cpp's old 120s budget and
+        // lets users bump it for vLLM via env without touching code.
+        let budget_secs: u64 = std::env::var("LMFORGE_HEALTH_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|n| (5..=900).contains(n))
+            .unwrap_or(180);
+        let budget = std::time::Duration::from_secs(budget_secs);
         loop {
-            if start.elapsed() > std::time::Duration::from_secs(120) {
-                bail!("Engine Adapter failed health verify on port {}", port);
+            // Fast-fail if the engine process has already died — the user
+            // gets the actual exit code instead of a wall-clock timeout.
+            if let Ok(Some(status)) = child.try_wait() {
+                bail!(
+                    "Engine process exited before health-check passed \
+                     (exit={:?}, port={}). Check stderr log.",
+                    status.code(),
+                    port
+                );
+            }
+            if start.elapsed() > budget {
+                bail!(
+                    "Engine Adapter failed health verify on port {} after {}s",
+                    port,
+                    budget_secs
+                );
             }
             if let Ok(resp) = client.get(&health_url).send().await
                 && resp.status().is_success()
@@ -445,33 +532,37 @@ impl EngineManager {
 
         // Spawn and wait for engine health. On any failure, clean up the dangling Starting slot
         // so the next EnsureModel call can retry a clean cold load.
-        let engine = match self
+        let mut engine = match self
             .spawn_adapter_process(model_id, &model_dir, port, role)
             .await
         {
             Ok(e) => e,
             Err(e) => {
+                self.record_load_failure(model_id, &e).await;
                 self.state.write().await.running_models.remove(model_id);
                 crate::server::metrics::observe_model_load(
                     model_id,
                     false,
                     load_started.elapsed().as_secs_f64(),
                 );
+                self.notify().await;
                 return Err(e);
             }
         };
 
-        if let Err(e) = self.wait_slot_health(port).await {
+        if let Err(e) = self.wait_slot_health(port, &mut engine.process).await {
             // Health timeout — kill the orphaned engine process and clean up state
             warn!(model_id, port, error = %e, "Engine health check timed out — killing spawned process");
             let mut orphan = engine;
             let _ = self.adapter.stop(&mut orphan).await;
+            self.record_load_failure(model_id, &e).await;
             self.state.write().await.running_models.remove(model_id);
             crate::server::metrics::observe_model_load(
                 model_id,
                 false,
                 load_started.elapsed().as_secs_f64(),
             );
+            self.notify().await;
             return Err(e);
         }
 
@@ -493,6 +584,8 @@ impl EngineManager {
             if let Some(slot) = state.running_models.get_mut(model_id) {
                 slot.status = EngineStatus::Ready;
             }
+            // The previous load attempt (if any) succeeded — drop its stderr tail.
+            state.last_errors.remove(model_id);
         }
 
         // Notify all status subscribers that a new model is ready.

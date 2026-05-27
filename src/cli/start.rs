@@ -4,6 +4,26 @@ use tracing::{info, warn};
 use crate::config::LmForgeConfig;
 use crate::engine;
 
+/// All knobs for `lmforge start`. Grouped into a struct so we don't have to
+/// thread eight positional arguments through `dispatch` → `start::run` →
+/// Tauri embed; new flags drop in without churning every call site.
+#[derive(Debug, Default, Clone)]
+pub struct StartOptions {
+    /// Model to load on startup (warm-pull).
+    pub model: Option<String>,
+    /// HTTP API port override.
+    pub port: Option<u16>,
+    /// Bind address override.
+    pub bind: Option<String>,
+    /// Run in foreground (default is daemon mode).
+    pub foreground: bool,
+    /// Force a specific engine id (`sglang`, `vllm`, …). When `None` the
+    /// registry's tier-aware auto-selection runs as usual.
+    pub engine: Option<String>,
+    /// Skip the interactive prompt when `engine` is in the experimental tier.
+    pub yes_experimental: bool,
+}
+
 /// `lmforge start` — Start the inference engine and API server
 ///
 /// `external_status_tx`: when running embedded inside Tauri, the caller provides
@@ -11,12 +31,17 @@ use crate::engine;
 /// When `None` (standalone CLI / daemon mode), an internal channel is created.
 pub async fn run(
     config: &LmForgeConfig,
-    model: Option<String>,
-    port: Option<u16>,
-    bind: Option<String>,
-    _foreground: bool,
+    opts: StartOptions,
     external_status_tx: Option<tokio::sync::broadcast::Sender<crate::engine::manager::EngineState>>,
 ) -> Result<()> {
+    let StartOptions {
+        model,
+        port,
+        bind,
+        foreground: _foreground,
+        engine: engine_override,
+        yes_experimental,
+    } = opts;
     // Precedence: CLI flag > LMFORGE_BIND env > config.bind_address.
     // Env override exists primarily for containerised deployments where the
     // image cannot ship a custom config.toml.
@@ -70,14 +95,27 @@ pub async fn run(
         profile
     };
 
-    // 4. Select engine
+    // 4. Select engine — either auto (tier-aware, hardware-gated) or forced
+    //    via `--engine <id>`. Forced selection still enforces hardware gates,
+    //    but bypasses the tier filter that normally hides experimental engines.
     let user_engines = data_dir.join("engines.toml");
     let registry = engine::EngineRegistry::load(if user_engines.exists() {
         Some(user_engines.as_path())
     } else {
         None
     })?;
-    let engine_config = registry.select(&profile)?.clone();
+    let engine_config = match engine_override.as_deref() {
+        Some(id) => {
+            let cfg = registry.select_explicit(id, &profile)?.clone();
+            confirm_experimental_engine(&cfg, yes_experimental)?;
+            // Soft caveats (single-GPU vLLM, NVFP4-on-sm120, etc.). These are
+            // printed once at start-time so users running `--engine vllm` see
+            // them even if they skipped `engine install` interactivity.
+            crate::cli::engine::print_soft_caveats(&cfg, &profile);
+            cfg
+        }
+        None => registry.select(&profile)?.clone(),
+    };
 
     // 5. Check engine is installed
     let engine_cmd = resolve_engine_cmd(&engine_config, &data_dir);
@@ -531,6 +569,78 @@ fn is_loopback_bind(bind: &str) -> bool {
             .unwrap_or(false)
 }
 
+/// Block forced selection of an `experimental` tier engine behind a prompt
+/// or env flag. Phase 5.1.
+///
+/// Decision matrix:
+///   * Engine is NOT experimental → no-op, returns Ok.
+///   * `--yes-experimental` was passed → warn-only, returns Ok.
+///   * `LMFORGE_YES_EXPERIMENTAL=1` is set → warn-only, returns Ok.
+///   * Non-interactive (no TTY) → bails. We never want a systemd unit to
+///     silently fall through to an unsupported engine.
+///   * Interactive TTY → reads y/N from stdin.
+fn confirm_experimental_engine(
+    cfg: &engine::EngineConfig,
+    yes_flag: bool,
+) -> anyhow::Result<()> {
+    use crate::engine::registry::EngineTier;
+
+    if cfg.tier != EngineTier::Experimental {
+        return Ok(());
+    }
+
+    let banner = format!(
+        "⚠ Engine `{}` is in the EXPERIMENTAL tier.\n  \
+         These engines are known to break on at least one supported \
+         hardware/OS combo. See `data/engines.toml` for the platform window \
+         and `docs/architecture/ADR-001-engine-tiers.md` for the policy.",
+        cfg.id
+    );
+
+    if yes_flag || std::env::var("LMFORGE_YES_EXPERIMENTAL").is_ok_and(|v| {
+        matches!(v.as_str(), "1" | "true" | "yes")
+    }) {
+        warn!(engine_id = %cfg.id, "Experimental engine forced via flag/env");
+        eprintln!("{banner}");
+        return Ok(());
+    }
+
+    if !is_stdin_tty() {
+        anyhow::bail!(
+            "{banner}\n  \
+             Refusing to start in non-interactive mode without explicit \
+             opt-in. Pass --yes-experimental or set LMFORGE_YES_EXPERIMENTAL=1."
+        );
+    }
+
+    eprintln!("{banner}");
+    eprint!("  Continue with `{}`? [y/N]: ", cfg.id);
+    use std::io::Write;
+    std::io::stderr().flush().ok();
+
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    if answer.trim().eq_ignore_ascii_case("y") {
+        Ok(())
+    } else {
+        anyhow::bail!("Aborted by user — experimental engine `{}` not started.", cfg.id);
+    }
+}
+
+#[cfg(unix)]
+fn is_stdin_tty() -> bool {
+    // SAFETY: isatty is a simple syscall on a stable fd number.
+    unsafe { libc::isatty(libc::STDIN_FILENO) == 1 }
+}
+
+#[cfg(windows)]
+fn is_stdin_tty() -> bool {
+    // The Windows equivalent (GetFileType + FILE_TYPE_CHAR) requires the
+    // winapi crate. For the CLI we just refuse non-interactive opt-in on
+    // Windows; cheap and safe.
+    true
+}
+
 /// Resolve the engine command path
 fn resolve_engine_cmd(engine: &engine::EngineConfig, data_dir: &std::path::Path) -> String {
     let cmd = &engine.start_cmd;
@@ -572,5 +682,52 @@ fn command_exists(cmd: &str) -> bool {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::registry::{EngineConfig, EngineTier};
+
+    fn experimental_cfg() -> EngineConfig {
+        EngineConfig {
+            id: "sglang".to_string(),
+            tier: EngineTier::Experimental,
+            ..Default::default()
+        }
+    }
+
+    fn default_cfg() -> EngineConfig {
+        EngineConfig {
+            id: "llamacpp".to_string(),
+            tier: EngineTier::Default,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn confirm_skips_for_non_experimental_engines() {
+        let cfg = default_cfg();
+        assert!(confirm_experimental_engine(&cfg, false).is_ok());
+        assert!(confirm_experimental_engine(&cfg, true).is_ok());
+    }
+
+    #[test]
+    fn confirm_allows_experimental_with_yes_flag() {
+        let cfg = experimental_cfg();
+        assert!(confirm_experimental_engine(&cfg, true).is_ok());
+    }
+
+    #[test]
+    fn confirm_allows_experimental_with_env() {
+        // The function reads LMFORGE_YES_EXPERIMENTAL — we set it, run, unset.
+        // SAFETY: process-global env access is sound on single-threaded test
+        // exec and our test runner doesn't fork between tests.
+        unsafe { std::env::set_var("LMFORGE_YES_EXPERIMENTAL", "1") };
+        let cfg = experimental_cfg();
+        let result = confirm_experimental_engine(&cfg, false);
+        unsafe { std::env::remove_var("LMFORGE_YES_EXPERIMENTAL") };
+        assert!(result.is_ok());
     }
 }

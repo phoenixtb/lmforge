@@ -11,6 +11,10 @@ pub struct CleanOptions {
     pub partial: bool,
     pub hf_cache: bool,
     pub all: bool,
+    /// Wipe `~/.lmforge/engines/` (every pip venv) and `~/.lmforge/bin/uv`.
+    /// Next `lmforge init` re-downloads uv and rebuilds the venv. Used to
+    /// recover from torch/CUDA mismatches without nuking models or logs.
+    pub engines: bool,
     /// When >0, prune oldest log files until total size ≤ `max_mb` MB.
     /// When 0 (default), truncate everything (legacy behaviour).
     pub max_mb: u64,
@@ -159,9 +163,58 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
         println!("  No confirmed duplicates with indexed models.");
     }
 
+    // 6. Engine installs (uv-managed venvs + bundled uv binary)
+    //    These live under `~/.lmforge/engines/` and `~/.lmforge/bin/`.
+    //    Sized + listed so the user knows what `--engines` would drop.
+    let engines_dir = data_dir.join("engines");
+    let bin_dir = data_dir.join("bin");
+    let mut engine_entries: Vec<(String, u64)> = Vec::new();
+    let mut engine_total: u64 = 0;
+    if engines_dir.exists() {
+        for entry in std::fs::read_dir(&engines_dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.to_string_lossy().to_string());
+                let size = dir_size(&path);
+                engine_total += size;
+                engine_entries.push((name, size));
+            }
+        }
+    }
+    let bin_size = if bin_dir.exists() { dir_size(&bin_dir) } else { 0 };
+    let engines_grand_total = engine_total + bin_size;
+
+    println!(
+        "\nEngine installs (~/.lmforge/engines/ + bin/): {}",
+        fmt_size(engines_grand_total)
+    );
+    if engine_entries.is_empty() && bin_size == 0 {
+        println!("  None.");
+    } else {
+        for (name, size) in &engine_entries {
+            println!("  {:40} {:>8}", name, fmt_size(*size));
+        }
+        if bin_size > 0 {
+            println!("  {:40} {:>8}", "bin/ (uv + helpers)", fmt_size(bin_size));
+        }
+        println!(
+            "  Wipe with: lmforge clean --engines  (next `init` rebuilds them, ~2 min)"
+        );
+    }
+
     // ── Summary ───────────────────────────────────────────────────────────────
 
-    let recoverable = orphan_total + log_size + hf_duplicates.iter().map(|(_, s)| s).sum::<u64>();
+    let recoverable = orphan_total
+        + log_size
+        + hf_duplicates.iter().map(|(_, s)| s).sum::<u64>()
+        + if opts.engines || do_all {
+            engines_grand_total
+        } else {
+            0
+        };
 
     println!("\n{}", "─".repeat(55));
     println!(
@@ -174,7 +227,7 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
     );
     println!("{}", "─".repeat(55));
 
-    if recoverable == 0 && stale.is_empty() {
+    if recoverable == 0 && stale.is_empty() && !opts.engines {
         println!("\nNothing to clean up.");
         return Ok(());
     }
@@ -213,6 +266,30 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
             println!("  ✓ Removed stale index entry '{}'", id);
         }
         idx2.save(&data_dir)?;
+    }
+
+    // Engine installs — opt-in via `--engines` (or implied by `--all`).
+    // Removing these forces the next `lmforge init` to re-download uv and
+    // rebuild every pip-managed engine venv. Safe to do — no model data lives
+    // here, only Python interpreters and engine code. Common reasons to run:
+    //   • torch/CUDA mismatch after a host driver upgrade
+    //   • flash-attn / triton build broke and reinstall didn't fix it
+    //   • want to switch torch backend (UV_TORCH_BACKEND=cu130 etc.)
+    if engines_grand_total > 0
+        && (do_all || opts.engines || confirm("Wipe engine installs (engines/ + bin/)?")?)
+    {
+        if engines_dir.exists() {
+            std::fs::remove_dir_all(&engines_dir)?;
+            println!(
+                "  ✓ Removed engines/ ({})",
+                fmt_size(engine_total)
+            );
+        }
+        if bin_dir.exists() {
+            std::fs::remove_dir_all(&bin_dir)?;
+            println!("  ✓ Removed bin/ ({})", fmt_size(bin_size));
+        }
+        println!("    Re-run `lmforge init` to rebuild.");
     }
 
     // Logs — two modes:
@@ -297,7 +374,7 @@ fn prune_logs_to_cap(logs_dir: &std::path::Path, cap_mb: u64) -> Result<u64> {
             .collect();
 
     // Newest first — we delete from the tail (oldest) until we fit.
-    files.sort_by(|a, b| b.2.cmp(&a.2));
+    files.sort_by_key(|f| std::cmp::Reverse(f.2));
 
     let mut total: u64 = files.iter().map(|(_, s, _)| s).sum();
     while total > cap_bytes {

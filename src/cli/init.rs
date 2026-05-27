@@ -30,6 +30,15 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     std::fs::write(catalogs_dir.join("mlx.json"), mlx_defaults)
         .with_context(|| format!("Cannot write mlx.json to {}", catalogs_dir.display()))?;
 
+    let safetensors_defaults = include_str!("../../data/catalogs/safetensors.json");
+    std::fs::write(catalogs_dir.join("safetensors.json"), safetensors_defaults)
+        .with_context(|| {
+            format!(
+                "Cannot write safetensors.json to {}",
+                catalogs_dir.display()
+            )
+        })?;
+
     let gguf_defaults = include_str!("../../data/catalogs/gguf.json");
     std::fs::write(catalogs_dir.join("gguf.json"), gguf_defaults)
         .with_context(|| format!("Cannot write gguf.json to {}", catalogs_dir.display()))?;
@@ -49,9 +58,28 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     info!(path = %profile_path.display(), "Hardware profile saved");
 
     // Print summary
-    println!("  OS:         {:?}", profile.os);
+    println!("  OS:         {:?}{}", profile.os, if profile.is_wsl { " (WSL2)" } else { "" });
     println!("  Arch:       {:?}", profile.arch);
-    println!("  GPU:        {:?}", profile.gpu_vendor);
+    println!(
+        "  GPU:        {:?}{}{}",
+        profile.gpu_vendor,
+        if profile.gpu_count > 1 {
+            format!(" x{}", profile.gpu_count)
+        } else {
+            String::new()
+        },
+        match profile.compute_cap {
+            Some((maj, min)) => format!(" (sm_{}{})", maj, min),
+            None => String::new(),
+        }
+    );
+    if let Some(ref runtime) = profile.cuda_runtime_version {
+        let driver = profile
+            .cuda_driver_version
+            .as_deref()
+            .unwrap_or("unknown");
+        println!("  CUDA:       runtime {} | driver {}", runtime, driver);
+    }
     println!(
         "  VRAM:       {:.1} GB{}",
         profile.vram_gb,

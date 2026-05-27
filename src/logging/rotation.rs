@@ -106,6 +106,74 @@ pub fn prepare_engine_log(
     fs::OpenOptions::new().create(true).append(true).open(path)
 }
 
+/// Default max lines for stderr tail propagation into `/lf/status`.
+/// Override with `LMFORGE_STDERR_TAIL_LINES`.
+pub const DEFAULT_STDERR_TAIL_LINES: usize = 32;
+
+/// Default max bytes for stderr tail. Caps memory in the EngineState
+/// snapshot regardless of how long each stderr line is.
+pub const DEFAULT_STDERR_TAIL_MAX_BYTES: usize = 8 * 1024;
+
+/// Read the last `max_lines` (capped at `max_bytes`) of a model's stderr log.
+///
+/// Why this exists: worker engines stream multi-MB of stderr but our
+/// `/lf/status` response should fit in a single HTTP page. Tailing on demand
+/// keeps the orchestrator's memory footprint flat — we only materialise the
+/// tail when surfacing an error, not on every heartbeat.
+///
+/// Returns `None` when:
+///   - the log file doesn't exist (worker never started, or stderr was swallowed)
+///   - the log is empty
+///   - any I/O error occurs (treated as "no useful context to surface")
+///
+/// The returned string preserves the original line ordering (oldest → newest).
+pub fn read_stderr_tail(logs_dir: &Path, model_id: &str) -> Option<String> {
+    let max_lines = std::env::var("LMFORGE_STDERR_TAIL_LINES")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_STDERR_TAIL_LINES);
+    read_stderr_tail_with_limits(logs_dir, model_id, max_lines, DEFAULT_STDERR_TAIL_MAX_BYTES)
+}
+
+/// Explicit-limits variant of [`read_stderr_tail`] — exposed for testability.
+pub fn read_stderr_tail_with_limits(
+    logs_dir: &Path,
+    model_id: &str,
+    max_lines: usize,
+    max_bytes: usize,
+) -> Option<String> {
+    let path = engine_log_path(logs_dir, model_id, "stderr");
+    let content = fs::read_to_string(&path).ok()?;
+    if content.is_empty() {
+        return None;
+    }
+    let tail = tail_lines(&content, max_lines, max_bytes);
+    if tail.trim().is_empty() {
+        None
+    } else {
+        Some(tail)
+    }
+}
+
+/// Return the last `max_lines` non-empty lines of `s`, capped at `max_bytes`
+/// (older lines drop first when the byte cap is hit). Pure function — exposed
+/// for unit tests.
+pub fn tail_lines(s: &str, max_lines: usize, max_bytes: usize) -> String {
+    if max_lines == 0 || max_bytes == 0 {
+        return String::new();
+    }
+    let lines: Vec<&str> = s.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    let mut selected: Vec<&str> = lines[start..].to_vec();
+
+    // Trim from the FRONT until we fit in max_bytes (accounting for newlines).
+    while selected.iter().map(|l| l.len() + 1).sum::<usize>() > max_bytes && !selected.is_empty() {
+        selected.remove(0);
+    }
+    selected.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +249,60 @@ mod tests {
         let f = prepare_engine_log(&dir, "qwen3:8b:4bit", "stdout");
         assert!(f.is_ok());
         assert!(dir.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ── Stderr tail propagation (Phase 2.3) ───────────────────────────────────
+
+    #[test]
+    fn tail_lines_returns_last_n() {
+        let body = "a\nb\nc\nd\ne";
+        assert_eq!(tail_lines(body, 3, 1024), "c\nd\ne");
+        assert_eq!(tail_lines(body, 100, 1024), "a\nb\nc\nd\ne");
+    }
+
+    #[test]
+    fn tail_lines_zero_limits_return_empty() {
+        assert_eq!(tail_lines("a\nb", 0, 1024), "");
+        assert_eq!(tail_lines("a\nb", 5, 0), "");
+    }
+
+    #[test]
+    fn tail_lines_drops_oldest_to_fit_max_bytes() {
+        // Each line is 9 bytes + newline; max_bytes=20 fits ~2 lines.
+        let body = "111111111\n222222222\n333333333\n444444444";
+        let out = tail_lines(body, 10, 20);
+        assert_eq!(out, "333333333\n444444444");
+    }
+
+    #[test]
+    fn read_stderr_tail_returns_none_when_missing() {
+        let dir = std::env::temp_dir().join("lmforge_stderr_tail_missing");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        assert!(read_stderr_tail(&dir, "no-such-model").is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_stderr_tail_returns_none_when_empty() {
+        let dir = std::env::temp_dir().join("lmforge_stderr_tail_empty");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(engine_log_path(&dir, "x", "stderr"), "").unwrap();
+        assert!(read_stderr_tail(&dir, "x").is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_stderr_tail_picks_last_lines() {
+        let dir = std::env::temp_dir().join("lmforge_stderr_tail_lastn");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let body = "INFO loading model\nERROR cuda kernel sm_120 missing\nFATAL aborting";
+        fs::write(engine_log_path(&dir, "qwen3:8b:4bit", "stderr"), body).unwrap();
+        let tail = read_stderr_tail_with_limits(&dir, "qwen3:8b:4bit", 2, 1024).unwrap();
+        assert_eq!(tail, "ERROR cuda kernel sm_120 missing\nFATAL aborting");
         let _ = fs::remove_dir_all(&dir);
     }
 }
