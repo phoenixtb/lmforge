@@ -25,6 +25,7 @@ const initial: LfStatus = {
     uptime_secs: 0,
     restart_count: 0,
   },
+  last_errors: {},
 };
 
 /** The primary status store. Written by the Tauri event listener in +layout.svelte */

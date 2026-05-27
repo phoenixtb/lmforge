@@ -123,11 +123,18 @@ fn venv_python_path(engine: &EngineConfig, data_dir: &std::path::Path) -> std::p
 /// for the import-name guess — not perfect for every package, but covers
 /// sglang, mlx-lm, vllm, and other engines we ship).
 fn derive_import_name(engine: &EngineConfig) -> Option<String> {
+    // Explicit override wins. Used by repo-based engines like TabbyAPI
+    // whose `pip_package` doesn't install any importable Python source.
+    if let Some(name) = engine.verify_import_name.as_deref()
+        && !name.is_empty()
+    {
+        return Some(name.to_string());
+    }
     let pkg = engine
         .pip_package
         .as_ref()
         .or(engine.pip_fallback.as_ref())?;
-    let stop_chars = ['[', '=', '>', '<', '~', '!', ' ', '\t'];
+    let stop_chars = ['[', '=', '>', '<', '~', '!', ' ', '\t', '@'];
     let raw = pkg
         .split(|c| stop_chars.contains(&c))
         .next()
@@ -405,16 +412,24 @@ async fn install_via_pip(
         .with_context(|| format!("Cannot create {}", venv_dir.display()))?;
 
     let venv_python = venv_python_path(engine, data_dir);
+    // Per-engine Python floor. Default 3.10 (works for vLLM 0.21, SGLang,
+    // oMLX). TabbyAPI's `[cu13]` extra needs 3.12+. uv will auto-download
+    // the interpreter if it's not already installed.
+    let python_pin: &str = engine
+        .min_python_version
+        .as_deref()
+        .unwrap_or("3.10");
     if !venv_python.is_file() {
-        // uv venv resolves Python 3.10+ in PATH; if absent it points the user
-        // at `uv python install 3.12`. We pass `--python 3.10` as a soft floor
-        // so the venv works for every supported engine on every host.
-        println!("  ⚙ Creating uv-managed venv at {}...", venv_dir.display());
+        println!(
+            "  ⚙ Creating uv-managed venv (Python {}) at {}...",
+            python_pin,
+            venv_dir.display()
+        );
         let status = tokio::process::Command::new(&uv_bin)
             .args([
                 "venv",
                 "--python",
-                "3.10",
+                python_pin,
                 venv_dir.to_string_lossy().as_ref(),
             ])
             .status()
@@ -423,12 +438,23 @@ async fn install_via_pip(
         if !status.success() {
             bail!(
                 "`uv venv` failed at {}.\n  \
-                 If the message above mentions a missing Python, run:\n    {} python install 3.12\n  \
+                 If the message above mentions a missing Python, run:\n    {} python install {}\n  \
                  then re-run `lmforge init`.",
                 venv_dir.display(),
-                uv_bin.display()
+                uv_bin.display(),
+                python_pin
             );
         }
+    }
+
+    // ── Optional: clone the engine's source repo (TabbyAPI etc.) ────────
+    // For engines that ship as a git tree rather than a real pip package,
+    // we clone alongside the venv. The adapter spawns Python with this
+    // path on sys.path / cwd.
+    if let Some(repo) = engine.source_repo.as_deref() {
+        let source_dir = data_dir.join("engines").join(&engine.id).join("source");
+        let revision = engine.source_revision.as_deref().unwrap_or("main");
+        ensure_source_repo(repo, revision, &source_dir).await?;
     }
 
     let pip_pkg = engine
@@ -510,6 +536,107 @@ async fn install_via_pip(
         install_path: path,
         method_used: "uv".to_string(),
     })
+}
+
+/// Clone (or `git fetch && checkout`) `repo @ revision` into `target_dir`.
+///
+/// Idempotent: if `target_dir/.git` exists we fetch + reset to the revision,
+/// so re-running `lmforge engine install` on a stale checkout converges to
+/// the pinned ref rather than refusing. Uses the system `git` binary; we
+/// don't bundle libgit2 to keep the binary small.
+async fn ensure_source_repo(
+    repo: &str,
+    revision: &str,
+    target_dir: &std::path::Path,
+) -> Result<()> {
+    let git_dir = target_dir.join(".git");
+    if git_dir.is_dir() {
+        println!(
+            "  ⚙ Updating engine source at {} ({})...",
+            target_dir.display(),
+            revision
+        );
+        let fetch = tokio::process::Command::new("git")
+            .args(["fetch", "--depth=1", "origin", revision])
+            .current_dir(target_dir)
+            .status()
+            .await
+            .context("Failed to run `git fetch` for engine source repo")?;
+        if !fetch.success() {
+            bail!(
+                "`git fetch origin {}` failed in {} — check network access",
+                revision,
+                target_dir.display()
+            );
+        }
+        let reset = tokio::process::Command::new("git")
+            .args(["reset", "--hard", "FETCH_HEAD"])
+            .current_dir(target_dir)
+            .status()
+            .await
+            .context("Failed to run `git reset --hard FETCH_HEAD`")?;
+        if !reset.success() {
+            bail!(
+                "`git reset --hard FETCH_HEAD` failed in {}",
+                target_dir.display()
+            );
+        }
+    } else {
+        std::fs::create_dir_all(target_dir.parent().unwrap_or(target_dir))
+            .with_context(|| format!("Cannot create {}", target_dir.display()))?;
+        println!(
+            "  ⚙ Cloning engine source from {} ({}) into {}...",
+            repo,
+            revision,
+            target_dir.display()
+        );
+        // Shallow clone of just the requested revision. Saves ~30 MB for
+        // TabbyAPI's git history we don't need at runtime.
+        let clone = tokio::process::Command::new("git")
+            .args([
+                "clone",
+                "--depth=1",
+                "--branch",
+                revision,
+                repo,
+                target_dir.to_string_lossy().as_ref(),
+            ])
+            .status()
+            .await
+            .context("Failed to run `git clone` — is git installed?")?;
+        if !clone.success() {
+            // `--branch` only accepts refs that exist on the remote; commit
+            // SHAs need a two-step (clone, fetch, checkout) dance. Retry
+            // without `--branch` if the first try failed.
+            let _ = std::fs::remove_dir_all(target_dir);
+            let clone2 = tokio::process::Command::new("git")
+                .args([
+                    "clone",
+                    repo,
+                    target_dir.to_string_lossy().as_ref(),
+                ])
+                .status()
+                .await
+                .context("Failed to run `git clone` (full-depth fallback)")?;
+            if !clone2.success() {
+                bail!("`git clone {}` failed", repo);
+            }
+            let checkout = tokio::process::Command::new("git")
+                .args(["checkout", revision])
+                .current_dir(target_dir)
+                .status()
+                .await
+                .context("Failed to run `git checkout`")?;
+            if !checkout.success() {
+                bail!(
+                    "`git checkout {}` failed in {}",
+                    revision,
+                    target_dir.display()
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Install via pre-built binary download (llama.cpp)

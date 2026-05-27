@@ -17,6 +17,11 @@ pub const BUNDLED_SAFETENSORS: &str = include_str!("../../../data/catalogs/safet
 /// suffix (see `gguf_patterns_for_quant` + `select_gguf_files` in resolver.rs).
 pub const BUNDLED_GGUF: &str = include_str!("../../../data/catalogs/gguf.json");
 
+/// The bundled default EXL3 catalog — used by TabbyAPI/ExLlamaV3 (opt-in).
+/// Currently a documentation-only stub; entries deferred to a follow-up that
+/// teaches the resolver to honour per-bpw branches.
+pub const BUNDLED_EXL3: &str = include_str!("../../../data/catalogs/exl3.json");
+
 // ── Public result type returned to the resolver ───────────────────────────────
 
 /// The result of resolving a catalog shortcut.

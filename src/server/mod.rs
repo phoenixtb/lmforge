@@ -160,6 +160,7 @@ pub fn build_router(
         .route("/lf/status", get(native::status))
         .route("/lf/status/stream", get(native::status_stream))
         .route("/lf/hardware", get(native::hardware))
+        .route("/lf/engines", get(native::engines))
         .route("/lf/sysinfo", get(sysinfo::sysinfo))
         .route("/lf/model/list", get(native::model_list))
         .route("/lf/model/switch", post(native::model_switch))

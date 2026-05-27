@@ -43,6 +43,13 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     std::fs::write(catalogs_dir.join("gguf.json"), gguf_defaults)
         .with_context(|| format!("Cannot write gguf.json to {}", catalogs_dir.display()))?;
 
+    // EXL3 catalog ships intentionally empty (see file header) — TabbyAPI
+    // is opt-in and EXL3 repos use per-bpw branches that the resolver
+    // doesn't yet read from catalog shortcuts.
+    let exl3_defaults = include_str!("../../data/catalogs/exl3.json");
+    std::fs::write(catalogs_dir.join("exl3.json"), exl3_defaults)
+        .with_context(|| format!("Cannot write exl3.json to {}", catalogs_dir.display()))?;
+
     // Hardware probe
     println!("⚙ Detecting hardware...");
     let profile = hardware::detect()?;

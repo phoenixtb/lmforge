@@ -404,7 +404,10 @@ fn status(
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-fn tier_label(t: EngineTier) -> &'static str {
+/// Human-readable tier label. Exposed `pub(crate)` so the HTTP `/lf/engines`
+/// endpoint and the CLI emit the exact same strings — UI badges should
+/// match `engine list` rows.
+pub(crate) fn tier_label(t: EngineTier) -> &'static str {
     match t {
         EngineTier::Default => "default",
         EngineTier::OptIn => "opt-in",
@@ -420,7 +423,11 @@ fn yes_no(b: bool) -> &'static str {
 /// True if THIS host has a usable install of `engine`. For pip engines that's
 /// "venv exists with the right python interpreter inside"; for binary engines
 /// it's "the staged binary exists at `<data_dir>/engines/<bin>`".
-fn install_state(engine: &EngineConfig, data_dir: &std::path::Path) -> bool {
+///
+/// Exposed `pub(crate)` so the HTTP `/lf/engines` endpoint surfaces the same
+/// verdict as the CLI — UI install/uninstall buttons must agree with what
+/// `lmforge engine status` says.
+pub(crate) fn install_state(engine: &EngineConfig, data_dir: &std::path::Path) -> bool {
     match engine.install_method.as_str() {
         "pip" => {
             let venv_python = if cfg!(windows) {
@@ -474,7 +481,11 @@ fn install_state(engine: &EngineConfig, data_dir: &std::path::Path) -> bool {
 /// Run the hardware gates without actually selecting the engine. Returns
 /// `(compatible, why)`. We re-use `select_explicit` so the verdict matches
 /// what `lmforge start --engine <id>` would produce.
-fn compatibility(engine: &EngineConfig, profile: &HardwareProfile) -> (bool, String) {
+///
+/// Exposed `pub(crate)` so the HTTP `/lf/engines` endpoint reports the same
+/// compatibility verdict the CLI does — otherwise the UI would claim an
+/// engine is installable while `start --engine <id>` would refuse it.
+pub(crate) fn compatibility(engine: &EngineConfig, profile: &HardwareProfile) -> (bool, String) {
     // Borrow-trick: construct a single-engine registry without copying state.
     // Cheaper to use a focused helper than to pull `select_explicit` apart.
     let temp = SingleEngineProbe::new(engine.clone());

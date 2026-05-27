@@ -83,11 +83,10 @@
     "qwen3-vl:32b:8bit":       "Qwen/Qwen3-VL-32B-Instruct-FP8",
     "qwen3-vl:30b-a3b:8bit":   "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8",
 
-    "_comment_embed": "--- Embedding models. Kept at native precision: every entry here is <2 GB at fp16/bf16, and 4-bit weight quantization measurably degrades retrieval recall@k. `qwen3-embed:8b` has a RedHatAI 8-bit mirror available as `:8bit`. ---",
+    "_comment_embed": "--- Embedding models. Kept at native precision: every entry here is <2 GB at fp16/bf16, and 4-bit weight quantization measurably degrades retrieval recall@k. No ungated quantized mirrors exist for these as of May 2026 — `RedHatAI/Qwen3-Embedding-8B` is a base bf16 re-host (no quantization_config), so we don't expose it. ---",
     "qwen3-embed:0.6b":            "Qwen/Qwen3-Embedding-0.6B",
     "qwen3-embed:4b":              "Qwen/Qwen3-Embedding-4B",
     "qwen3-embed:8b":              "Qwen/Qwen3-Embedding-8B",
-    "qwen3-embed:8b:8bit":         "RedHatAI/Qwen3-Embedding-8B",
     "qwen3-vl-embed:2b":           "Qwen/Qwen3-VL-Embedding-2B",
     "qwen3-vl-embed:8b":           "Qwen/Qwen3-VL-Embedding-8B",
     "nomic-embed-text:v1.5":       "nomic-ai/nomic-embed-text-v1.5",

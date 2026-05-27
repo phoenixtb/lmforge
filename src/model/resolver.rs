@@ -88,8 +88,24 @@ async fn resolve_hf_repo(
     _engine_format: &str,
     quant_hint: Option<&str>,
 ) -> Result<ResolvedModel> {
-    let api_url = format!("https://huggingface.co/api/models/{}", repo);
-    info!(repo, "Resolving HuggingFace repo");
+    // Support `repo@revision` syntax for engines whose ecosystems store
+    // model weights on non-`main` branches. Canonical use case: EXL3 repos
+    // (turboderp/*-exl3) publish each bits-per-weight on its own branch
+    // (`4.0bpw`, `6.0bpw`, `8.0bpw_H8`, ...) with the `main` branch
+    // containing only README.md.
+    //
+    // The revision is preserved through the pipeline by re-encoding it in
+    // the `hf_repo` field of `ResolvedModel`; adapters that need the
+    // revision (TabbyAPI) split it back out at `pull_model` time.
+    let (repo_base, revision) = split_revision(repo);
+    let api_url = match revision {
+        Some(rev) => format!(
+            "https://huggingface.co/api/models/{}/revision/{}",
+            repo_base, rev
+        ),
+        None => format!("https://huggingface.co/api/models/{}", repo_base),
+    };
+    info!(repo = %repo_base, revision = ?revision, "Resolving HuggingFace repo");
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -113,7 +129,7 @@ async fn resolve_hf_repo(
 
     // Detect format from library/tags
     let library = data["library_name"].as_str().unwrap_or("").to_lowercase();
-    let repo_lower = repo.to_lowercase();
+    let repo_lower = repo_base.to_lowercase();
 
     let is_mlx = library == "mlx"
         || library == "mlx-lm"
@@ -159,18 +175,58 @@ async fn resolve_hf_repo(
         all_format_files
     };
 
-    // Derive a friendly dir name
-    let dir_name = repo.split('/').next_back().unwrap_or(repo).to_lowercase();
+    // Derive a friendly dir name. Suffix the revision when set so
+    // `turboderp/Qwen3-8B-exl3@6.0bpw` lands at `qwen3-8b-exl3-6.0bpw`
+    // and two bpw variants of the same model don't collide on disk.
+    let base = repo_base.split('/').next_back().unwrap_or(repo_base).to_lowercase();
+    let dir_name = match revision {
+        Some(rev) => format!("{}-{}", base, sanitize_revision(rev)),
+        None => base,
+    };
 
-    debug!(repo, ?format, file_count = files.len(), "Resolved HF repo");
+    debug!(
+        repo = %repo_base,
+        revision = ?revision,
+        ?format,
+        file_count = files.len(),
+        "Resolved HF repo"
+    );
+
+    // Re-encode revision into hf_repo so downstream adapters can split it.
+    let hf_repo = match revision {
+        Some(rev) => format!("{}@{}", repo_base, rev),
+        None => repo_base.to_string(),
+    };
 
     Ok(ResolvedModel {
-        id: repo.to_string(),
+        id: hf_repo.clone(),
         dir_name,
-        hf_repo: repo.to_string(),
+        hf_repo,
         format,
         files,
     })
+}
+
+/// Split `"repo@revision"` into `("repo", Some("revision"))`. Plain
+/// `"org/repo"` returns `("org/repo", None)`. The `@` separator was chosen
+/// because HF repo IDs already disallow it in the path component.
+pub(crate) fn split_revision(input: &str) -> (&str, Option<&str>) {
+    match input.split_once('@') {
+        Some((repo, rev)) if !rev.is_empty() => (repo, Some(rev)),
+        _ => (input, None),
+    }
+}
+
+/// Make a revision string filesystem-safe — branch names like
+/// `8.0bpw_H8` are already clean, but a future user-typed `@feat/foo`
+/// would break dir names without this.
+fn sanitize_revision(rev: &str) -> String {
+    rev.chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | ' ' => '_',
+            c => c,
+        })
+        .collect()
 }
 
 async fn resolve_logical_name(
@@ -332,6 +388,44 @@ fn should_download_file(filename: &str, format: ModelFormat) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── split_revision ────────────────────────────────────────────────────────
+
+    #[test]
+    fn split_revision_plain_repo() {
+        assert_eq!(split_revision("org/repo"), ("org/repo", None));
+    }
+
+    #[test]
+    fn split_revision_with_branch() {
+        assert_eq!(
+            split_revision("turboderp/Qwen3-8B-exl3@6.0bpw"),
+            ("turboderp/Qwen3-8B-exl3", Some("6.0bpw"))
+        );
+    }
+
+    #[test]
+    fn split_revision_with_h8_suffix() {
+        assert_eq!(
+            split_revision("turboderp/Qwen3-8B-exl3@8.0bpw_H8"),
+            ("turboderp/Qwen3-8B-exl3", Some("8.0bpw_H8"))
+        );
+    }
+
+    #[test]
+    fn split_revision_empty_after_at_falls_back() {
+        // A trailing `@` with no revision is treated as "no revision"
+        // rather than `Some("")` so an accidental typo doesn't crash the
+        // HF API call with /revision/ (empty path component → 404).
+        assert_eq!(split_revision("org/repo@"), ("org/repo@", None));
+    }
+
+    #[test]
+    fn sanitize_revision_replaces_filesystem_specials() {
+        assert_eq!(sanitize_revision("6.0bpw"), "6.0bpw");
+        assert_eq!(sanitize_revision("feat/foo"), "feat_foo");
+        assert_eq!(sanitize_revision("8.0bpw_H8"), "8.0bpw_H8");
+    }
 
     // ── should_download_file ──────────────────────────────────────────────────
 

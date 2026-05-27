@@ -192,25 +192,67 @@ supports_reranking  = false
 priority        = 25
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Opt-in tier stub (Phase 4 will populate)
+# Opt-in tier: TabbyAPI + ExLlamaV3 (Phase 4)
 # ──────────────────────────────────────────────────────────────────────────────
+# Why opt-in:
+#   * Best speed-per-VRAM on consumer NVIDIA; EXL3 quant beats AWQ/GPTQ at
+#     identical bits. Niche-but-strong user base (turboderp ecosystem).
+#   * Install is more involved: TabbyAPI is a "clone-and-run" application
+#     (its pyproject sets `py-modules = []`), not a real pip package, so the
+#     installer clones the source tree AND creates a venv with the cu13 extra.
+#   * Cu13 extra requires Python 3.12+ — uv auto-installs the interpreter.
 #
-# [[engine]]
-# id              = "exl3"
-# name            = "ExLlamaV3 + TabbyAPI"
-# version         = "x.y"               # pinned in Phase 4
-# tier            = "opt-in"
-# supported_os_families = ["linux", "windows-native", "windows-wsl2"]
-# matches_gpu     = "nvidia"
-# min_compute_cap = "7.5"               # Turing+
-# install_method  = "pip"
-# pip_package     = "tabbyapi"          # plus pinned exllamav3 wheel from data/engines/exl3/
-# preflight       = ["nvidia-smi"]
-# model_format    = "exl3"              # new catalogs/exl3.json
-# hf_org          = "turboderp"
-# start_cmd       = "python"
-# start_args      = ["-m", "tabby.server", "--config", "{data_dir}/engines/exl3/config.yaml"]
-# health_endpoint = "/health"
-# supports_embeddings = false           # embeddings stay on the llama.cpp sidecar
-# supports_reranking  = false
-# priority        = 30
+# Why not Windows-native: ExLlamaV3 cu13 wheels are built for win_amd64 and
+# Linux x86_64 only; both work. WSL2 falls under "linux" here.
+#
+# Compute-cap window: sm_75 → sm_120. ExLlamaV3 v0.0.37 ships cu132 wheels
+# (built against torch 2.11.0+cu130) that include sm_120 cubins — Blackwell
+# works out of the box, no JIT compile.
+#
+# Embeddings/reranking: NOT supported by this adapter. Embeddings stay on
+# the llama.cpp sidecar (same policy as vLLM / SGLang).
+[[engine]]
+id              = "tabbyapi"
+name            = "TabbyAPI (ExLlamaV3)"
+# Tracks exllamav3's pinned version since that's the actual inference lib;
+# TabbyAPI itself is rolling-release (no semver) and pinned by git revision.
+# RE-EVALUATE WHEN: turboderp ships an exllamav3 release with sm_103
+# (datacenter Blackwell) cubins, or TabbyAPI cuts a tagged release.
+version         = "0.0.37"
+tier            = "opt-in"
+supported_os_families = ["linux", "windows-wsl2"]
+matches_gpu     = "nvidia"
+min_compute_cap = "7.5"
+# EXL3 quant is the most VRAM-efficient of the four formats we support
+# (~30% smaller than AWQ at matched perplexity per turboderp's benchmarks).
+# 6 GB floor lets a 4-bit 7B fit on the smallest Ampere consumer cards.
+min_vram_gb     = 6.0
+
+install_method  = "pip"
+# `cu13` extra pulls torch 2.11.0+cu130, exllamav3 0.0.37+cu132.torch2.11.0,
+# triton, flash-attn 2.8.3+cu130torch2.11 — the full Blackwell-ready stack.
+# Pinned by branch; bump source_revision to a SHA in production releases
+# for reproducibility.
+pip_package        = "tabbyAPI[cu13] @ git+https://github.com/theroyallab/tabbyAPI.git"
+source_repo        = "https://github.com/theroyallab/tabbyAPI.git"
+source_revision    = "main"
+min_python_version = "3.12"
+# TabbyAPI's `py-modules = []` means `import tabbyAPI` fails post-install.
+# Probe `exllamav3` instead — that's the package whose presence actually
+# proves the install worked.
+verify_import_name = "exllamav3"
+
+# CUDA toolkit isn't required at install time (everything is wheels). But
+# `nvidia-smi` is needed at runtime so we still preflight it.
+preflight       = ["nvidia-smi"]
+min_disk_gb     = 8
+model_format    = "exl3"
+hf_org          = "{original}"
+# Adapter spawns `<venv>/bin/python <source_dir>/main.py` — start_cmd /
+# start_args are unused for this engine; the adapter knows the layout.
+start_cmd       = "python"
+start_args      = []
+health_endpoint = "/health"
+supports_embeddings = false
+supports_reranking  = false
+priority        = 30

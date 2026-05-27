@@ -105,6 +105,102 @@ pub async fn hardware(State(state): State<AppState>) -> impl IntoResponse {
         .unwrap()
 }
 
+/// `GET /lf/engines` — Engine registry view for the UI.
+///
+/// Returns the full engine roster (default + opt-in + experimental) annotated
+/// with this host's compatibility verdict and install state. The shape and
+/// strings match `lmforge engine list` — the UI's tier badges and Install
+/// buttons must agree with the CLI verdict, otherwise users would see two
+/// different stories for the same engine.
+///
+/// Why a dedicated endpoint instead of expanding `/lf/status`:
+///   * `/lf/status` is per-request hot path (Tauri polls it; SSE clients
+///     get a copy on every model load). The engine registry is static for
+///     the daemon's lifetime — no reason to ship it on every tick.
+///   * Settings → Engine page wants the full roster, not just the active
+///     engine. The shapes diverge naturally.
+pub async fn engines(State(state): State<AppState>) -> impl IntoResponse {
+    use crate::engine::registry::EngineRegistry;
+
+    // Same registry-load pattern as `cli::engine::run`: prefer the user
+    // override at `~/.lmforge/engines.toml` if present, else the bundled
+    // default. Keeps the UI and CLI in sync when users tweak the registry.
+    let user_engines_toml = state.data_dir.join("engines.toml");
+    let registry = match EngineRegistry::load(if user_engines_toml.exists() {
+        Some(user_engines_toml.as_path())
+    } else {
+        None
+    }) {
+        Ok(r) => r,
+        Err(e) => {
+            error!("Failed to load engine registry: {e}");
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"error":"engine registry load failed: {}"}}"#,
+                    e.to_string().replace('"', "'")
+                )))
+                .unwrap();
+        }
+    };
+
+    // Hardware profile is required for the compatibility verdict. If the
+    // user hasn't run `init` yet, fall back to reporting "compatible: null"
+    // rather than guessing — the UI then suppresses the Install button.
+    let hw_path = state.data_dir.join("hardware.json");
+    let profile_opt: Option<crate::hardware::probe::HardwareProfile> =
+        std::fs::read_to_string(&hw_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok());
+
+    let active_engine_id = state.engine_state.read().await.engine_id.clone();
+
+    let mut rows: Vec<serde_json::Value> = Vec::with_capacity(registry.all().len());
+    for engine in registry.all() {
+        let installed = crate::cli::engine::install_state(engine, &state.data_dir);
+        let (compatible, note) = match profile_opt.as_ref() {
+            Some(p) => {
+                let (ok, why) = crate::cli::engine::compatibility(engine, p);
+                (Some(ok), why)
+            }
+            None => (None, String::new()),
+        };
+
+        rows.push(serde_json::json!({
+            "id": engine.id,
+            "name": engine.name,
+            "version": engine.version,
+            "tier": crate::cli::engine::tier_label(engine.tier),
+            "install_method": engine.install_method,
+            "model_format": engine.model_format,
+            "matches_gpu": engine.matches_gpu,
+            "min_compute_cap": engine.min_compute_cap,
+            "max_compute_cap": engine.max_compute_cap,
+            "min_vram_gb": engine.min_vram_gb,
+            "supported_os_families": engine.supported_os_families,
+            "supports_embeddings": engine.supports_embeddings,
+            "supports_reranking": engine.supports_reranking,
+            "installed": installed,
+            "compatible": compatible,
+            "incompatible_reason": if note.is_empty() { None } else { Some(note) },
+            "active": engine.id == active_engine_id,
+        }));
+    }
+
+    let resp = serde_json::json!({
+        "engines": rows,
+        "active_engine_id": active_engine_id,
+        "has_hardware_profile": profile_opt.is_some(),
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_string(&resp).unwrap()))
+        .unwrap()
+}
+
 /// `GET /lf/model/list` — List installed models
 pub async fn model_list(State(state): State<AppState>) -> impl IntoResponse {
     let models_file = state.data_dir.join("models.json");
@@ -512,6 +608,13 @@ pub async fn config_update(
             let _ = std::fs::write(
                 &gguf_path,
                 include_str!("../../data/catalogs/gguf.json"),
+            );
+        }
+        let exl3_path = new_catalogs_dir.join("exl3.json");
+        if !exl3_path.exists() {
+            let _ = std::fs::write(
+                &exl3_path,
+                include_str!("../../data/catalogs/exl3.json"),
             );
         }
     }

@@ -79,6 +79,45 @@ pub struct EngineConfig {
     /// first model load — see vllm-project/vllm#XXXXX). Empty by default.
     #[serde(default)]
     pub pip_extras: Vec<String>,
+
+    /// Override for the post-install `python -c "import <name>"` probe.
+    ///
+    /// `install_via_pip` defaults to deriving the import name from
+    /// `pip_package` (e.g. `vllm==0.21.0` → `import vllm`). That breaks
+    /// for engines like TabbyAPI whose `pip_package` is just a metadata
+    /// shell (`py-modules = []`) — `import tabbyAPI` returns ModuleNotFound
+    /// even on a perfectly-installed venv. Set this to the import name of
+    /// a *core dependency* (TabbyAPI ⇒ `exllamav3`) to prove the install.
+    #[serde(default)]
+    pub verify_import_name: Option<String>,
+
+    // ── Repo-based engines (Phase 4 — TabbyAPI/ExLlamaV3) ─────────────────
+    /// HTTPS URL of a git repo to clone alongside the venv.
+    ///
+    /// Some engines ship as a "clone-and-run" application rather than a
+    /// proper pip package — TabbyAPI is the canonical example: its
+    /// `pyproject.toml` sets `py-modules = []`, meaning `pip install`
+    /// only pulls dependencies (torch, exllamav3, fastapi). The actual
+    /// `main.py` server lives only in the git tree.
+    ///
+    /// When set, the installer clones to `<data_dir>/engines/<id>/source/`
+    /// and the adapter spawns Python with that path on `sys.path`.
+    #[serde(default)]
+    pub source_repo: Option<String>,
+    /// Pinned git ref (commit SHA, tag, or branch). Defaults to `main` when
+    /// `source_repo` is set and this is `None`. For reproducibility we
+    /// recommend pinning a SHA in production `engines.toml`.
+    #[serde(default)]
+    pub source_revision: Option<String>,
+    /// Minimum Python version for the venv, e.g. `"3.12"`. `None` keeps
+    /// the system default that `uv` picks.
+    ///
+    /// TabbyAPI's `[cu13]` extra requires 3.12+ (uses `python_version >=
+    /// '3.12'` markers). vLLM and SGLang work on 3.10. Specifying a
+    /// minimum lets each engine demand its own toolchain without forcing
+    /// every other engine to bump.
+    #[serde(default)]
+    pub min_python_version: Option<String>,
     #[serde(default)]
     pub preflight: Vec<String>,
     #[serde(default)]
@@ -264,6 +303,9 @@ impl EngineRegistry {
             )),
             "vllm" => Ok(crate::engine::adapter::EngineAdapterInstance::Vllm(
                 crate::engine::adapters::vllm::VllmAdapter::default(),
+            )),
+            "tabbyapi" => Ok(crate::engine::adapter::EngineAdapterInstance::TabbyApi(
+                crate::engine::adapters::tabbyapi::TabbyApiAdapter,
             )),
             _ => bail!("Unrecognized engine adapter ID mapping: {}", config.id),
         }
@@ -507,11 +549,65 @@ mod tests {
     #[test]
     fn test_parse_default_registry() {
         let registry = EngineRegistry::load(None).unwrap();
-        assert_eq!(registry.all().len(), 4);
+        assert_eq!(registry.all().len(), 5);
         assert!(registry.get("omlx").is_some());
         assert!(registry.get("sglang").is_some());
         assert!(registry.get("llamacpp").is_some());
         assert!(registry.get("vllm").is_some());
+        assert!(registry.get("tabbyapi").is_some());
+    }
+
+    #[test]
+    fn test_tabbyapi_is_opt_in_with_correct_gates() {
+        let registry = EngineRegistry::load(None).unwrap();
+        let tabby = registry.get("tabbyapi").expect("tabbyapi must be registered");
+        assert_eq!(tabby.tier, EngineTier::OptIn);
+        assert_eq!(tabby.install_method, "pip");
+        assert_eq!(tabby.matches_gpu.as_deref(), Some("nvidia"));
+        assert_eq!(tabby.min_compute_cap.as_deref(), Some("7.5"));
+        assert_eq!(tabby.min_python_version.as_deref(), Some("3.12"));
+        assert_eq!(tabby.verify_import_name.as_deref(), Some("exllamav3"));
+        assert!(tabby.source_repo.is_some(), "tabbyapi must have source_repo");
+        assert_eq!(tabby.model_format, "exl3");
+        // Native Windows is excluded — same triton/uvloop reasons as vLLM.
+        assert!(
+            !tabby
+                .supported_os_families
+                .iter()
+                .any(|f| f == "windows-native")
+        );
+        assert!(tabby.supported_os_families.iter().any(|f| f == "linux"));
+    }
+
+    #[test]
+    fn test_tabbyapi_never_auto_selected_on_compatible_hw() {
+        // sm_120 + Linux is fully compatible with TabbyAPI, but it must
+        // stay opt-in — never auto-selected over llama.cpp.
+        let registry = EngineRegistry::load(None).unwrap();
+        let mut profile = make_blackwell_profile();
+        profile.gpu_vendor = GpuVendor::Nvidia;
+        let auto = registry.select(&profile).unwrap();
+        assert_ne!(
+            auto.id, "tabbyapi",
+            "tabbyapi must never be auto-selected; got {}",
+            auto.id
+        );
+    }
+
+    fn make_blackwell_profile() -> HardwareProfile {
+        HardwareProfile {
+            os: Os::Linux,
+            arch: Arch::X86_64,
+            gpu_vendor: GpuVendor::Nvidia,
+            total_ram_gb: 32.0,
+            cpu_cores: 8,
+            cpu_model: "test".to_string(),
+            vram_gb: 16.0,
+            compute_cap: Some((12, 0)),
+            cuda_runtime_version: Some("13.0".to_string()),
+            gpu_count: 1,
+            ..Default::default()
+        }
     }
 
     #[test]

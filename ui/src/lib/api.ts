@@ -28,6 +28,17 @@ export interface EngineMetrics {
 }
 
 /**
+ * Last failed-load context for a model. Mirrors ModelLoadError in
+ * src/engine/manager.rs. Surfaced on Overview when present so users don't
+ * have to grep ~/.lmforge/logs/ for a failed `lmforge pull` or cold load.
+ */
+export interface ModelLoadError {
+  at: string;                     // ISO timestamp
+  message: string;                // short human-readable failure
+  stderr_tail?: string | null;    // last N lines of engine stderr (may be null)
+}
+
+/**
  * Normalised frontend status — always use this shape in stores/components.
  * The daemon returns a slightly different JSON shape; normalizeStatus() maps it.
  */
@@ -37,6 +48,8 @@ export interface LfStatus {
   engine_version: string;
   running_models: Record<string, ModelSlot>;
   metrics: EngineMetrics;
+  /** model_id → last failure context. Empty when every recent load succeeded. */
+  last_errors: Record<string, ModelLoadError>;
 }
 
 /** Raw shape from GET /lf/status and the SSE stream */
@@ -47,6 +60,7 @@ interface RawStatus {
   engine_version?: string;
   running_models: ModelSlot[] | Record<string, ModelSlot>;
   metrics: EngineMetrics;
+  last_errors?: Record<string, ModelLoadError> | null;
 }
 
 /** Normalise the raw daemon response to a stable LfStatus shape */
@@ -66,7 +80,14 @@ export function normalizeStatus(raw: RawStatus): LfStatus {
     running_models = raw.running_models as Record<string, ModelSlot>;
   }
 
-  return { overall_status: raw.overall_status, engine_id, engine_version, running_models, metrics: raw.metrics };
+  return {
+    overall_status: raw.overall_status,
+    engine_id,
+    engine_version,
+    running_models,
+    metrics: raw.metrics,
+    last_errors: raw.last_errors ?? {},
+  };
 }
 
 export interface HardwareProfile {
@@ -206,6 +227,48 @@ export interface CatalogResponse {
 /** GET /lf/catalog[?format=mlx|gguf] — curated model shortcuts */
 export const getCatalog = (format?: string): Promise<CatalogResponse> =>
   get(`/lf/catalog${format ? `?format=${encodeURIComponent(format)}` : ''}`);
+
+// ─── Engine registry (Settings → Engine) ──────────────────────────────────────
+
+/** Tier strings match `lmforge engine list` exactly. Wire badges off this string. */
+export type EngineTier = 'default' | 'opt-in' | 'experimental' | 'default*';
+
+/**
+ * One engine row from GET /lf/engines. Shape mirrors `cli::engine::list`
+ * augmented with the daemon's compatibility verdict for THIS host.
+ *
+ * - `compatible: null` means the hardware profile is missing (user hasn't run
+ *   `lmforge init` yet). UI should suppress install actions in that case.
+ * - `active: true` for the engine currently selected by the running daemon.
+ */
+export interface EngineInfo {
+  id: string;
+  name: string;
+  version: string;
+  tier: EngineTier;
+  install_method: 'binary' | 'pip' | 'brew' | string;
+  model_format: string;
+  matches_gpu: string;
+  min_compute_cap: string | null;
+  max_compute_cap: string | null;
+  min_vram_gb: number | null;
+  supported_os_families: string[];
+  supports_embeddings: boolean;
+  supports_reranking: boolean;
+  installed: boolean;
+  compatible: boolean | null;
+  incompatible_reason: string | null;
+  active: boolean;
+}
+
+export interface EnginesResponse {
+  engines: EngineInfo[];
+  active_engine_id: string;
+  has_hardware_profile: boolean;
+}
+
+/** GET /lf/engines — full engine roster + per-host compatibility verdict. */
+export const getEngines = (): Promise<EnginesResponse> => get('/lf/engines');
 
 // ─── SSE: model pull progress ─────────────────────────────────────────────────
 

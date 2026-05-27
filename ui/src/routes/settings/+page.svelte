@@ -5,10 +5,48 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import { dragOnEmpty } from '$lib/drag';
   import { toast } from '$lib/stores/toasts';
+  import { getEngines, type EngineInfo } from '$lib/api';
 
   // ── Catalog directory ───────────────────────────────────────────────────────
   let catalogDir  = $state('');
   let savingCatalog = $state(false);
+
+  // ── Engine roster (Settings → Engine) ───────────────────────────────────────
+  //
+  // Read-only on purpose. Engine installs are 5+ GB / 5+ min ops driven by
+  // pip/uv; trying to host that progress in the GUI would either freeze the
+  // window for minutes or require a streaming subsystem we'll add in Phase 7.
+  // For now we show the verdict matrix and expose copy-able CLI commands so
+  // users know exactly what to run in their terminal.
+  let engines = $state<EngineInfo[]>([]);
+  let activeEngineId = $state('');
+  let hasHardware = $state(true);
+  let engineLoading = $state(false);
+  let engineError = $state<string | null>(null);
+
+  async function loadEngines() {
+    engineLoading = true;
+    engineError = null;
+    try {
+      const r = await getEngines();
+      engines = r.engines;
+      activeEngineId = r.active_engine_id;
+      hasHardware = r.has_hardware_profile;
+    } catch (e) {
+      engineError = String(e);
+    } finally {
+      engineLoading = false;
+    }
+  }
+
+  async function copyCmd(cmd: string) {
+    try {
+      await navigator.clipboard.writeText(cmd);
+      toast.success('Copied');
+    } catch {
+      toast.error('Copy failed — select and copy manually');
+    }
+  }
 
   async function browseCatalogDir() {
     try {
@@ -37,6 +75,21 @@
       const cur: string = await invoke('get_catalog_dir');
       if (cur) catalogDir = cur;
     } catch { /* best-effort */ }
+    await loadEngines();
+  });
+
+  // Re-fetch when the user switches INTO the Engine section. Cheap (<5 ms)
+  // and catches installs that completed in another terminal since page load.
+  // Guarded against the effect's re-run cascade by tracking the last section
+  // we fetched for — only refetch on the section-edge transition.
+  let lastFetchedFor = $state<string | null>(null);
+  $effect(() => {
+    if (activeSection === 'engine' && lastFetchedFor !== 'engine') {
+      lastFetchedFor = 'engine';
+      void loadEngines();
+    } else if (activeSection !== 'engine') {
+      lastFetchedFor = null;
+    }
   });
 
   // ── Section helper ──────────────────────────────────────────────────────────
@@ -140,16 +193,122 @@
       {:else if activeSection === 'engine'}
         <!-- ── Engine ── -->
         <section class="settings-section">
-          <h2 class="section-title">Engine</h2>
-          <p class="section-desc">Engine configuration is managed in <code>~/.lmforge/config.toml</code>.</p>
-
-          <div class="coming-soon">
-            <span class="cs-icon">⚙</span>
-            <div>
-              <div class="cs-title">Engine settings UI coming soon</div>
-              <div class="cs-body">You can manually edit <code>~/.lmforge/config.toml</code> to configure the engine port, VRAM limits, and model paths.</div>
-            </div>
+          <div class="row-spread">
+            <h2 class="section-title">Inference Engines</h2>
+            <button class="btn btn--ghost btn--sm" onclick={loadEngines} disabled={engineLoading}>
+              {engineLoading ? 'Refreshing…' : 'Refresh'}
+            </button>
           </div>
+          <p class="section-desc">
+            LMForge ships with a tiered engine roster. <strong>Default</strong> engines are auto-installed by
+            <code>lmforge init</code>. <strong>Opt-in</strong> engines (vLLM, ExLlamaV3) cost 5+ GB of disk and a
+            <code>uv</code>-managed Python venv — install only what you need.
+            <strong>Experimental</strong> engines are never auto-selected.
+          </p>
+
+          {#if !hasHardware}
+            <div class="alert alert--warn">
+              No hardware profile found. Run <code>lmforge init</code> to populate it; compatibility verdicts will appear afterwards.
+            </div>
+          {/if}
+
+          {#if engineError}
+            <div class="alert alert--error">Failed to load engines: {engineError}</div>
+          {/if}
+
+          {#if engines.length > 0}
+            <div class="engine-grid">
+              {#each engines as e (e.id)}
+                <article class="engine-card" class:engine-card--active={e.active}>
+                  <header class="ec-head">
+                    <div class="ec-id">
+                      <span class="ec-name">{e.name}</span>
+                      <code class="ec-key">{e.id}</code>
+                    </div>
+                    <div class="ec-tags">
+                      <span class="tier-badge tier-badge--{e.tier.replace('*','star').replace('-','')}">
+                        {e.tier}
+                      </span>
+                      {#if e.active}
+                        <span class="badge badge--active">active</span>
+                      {/if}
+                    </div>
+                  </header>
+
+                  <dl class="ec-grid">
+                    <dt>Version</dt>      <dd>{e.version}</dd>
+                    <dt>Format</dt>       <dd>{e.model_format}</dd>
+                    <dt>Install</dt>      <dd>{e.install_method}</dd>
+                    <dt>GPU</dt>          <dd>{e.matches_gpu}</dd>
+                    {#if e.min_compute_cap}
+                      <dt>Compute cap</dt>
+                      <dd>
+                        ≥ {e.min_compute_cap}{#if e.max_compute_cap} &nbsp;·&nbsp; ≤ {e.max_compute_cap}{/if}
+                      </dd>
+                    {/if}
+                    {#if e.min_vram_gb && e.min_vram_gb > 0}
+                      <dt>Min VRAM</dt>   <dd>{e.min_vram_gb} GB</dd>
+                    {/if}
+                    {#if e.supported_os_families && e.supported_os_families.length}
+                      <dt>OS</dt>         <dd>{e.supported_os_families.join(', ')}</dd>
+                    {/if}
+                    <dt>Capabilities</dt>
+                    <dd>
+                      <span class="cap" class:cap--on={true}>chat</span>
+                      <span class="cap" class:cap--on={e.supports_embeddings}>embed</span>
+                      <span class="cap" class:cap--on={e.supports_reranking}>rerank</span>
+                    </dd>
+                  </dl>
+
+                  <div class="ec-state">
+                    <div class="state-pair">
+                      <span class="state-key">Installed</span>
+                      <span class="state-val">
+                        {#if e.installed}<span class="dot dot--ok"></span>yes
+                        {:else}<span class="dot dot--off"></span>no{/if}
+                      </span>
+                    </div>
+                    <div class="state-pair">
+                      <span class="state-key">Compatible</span>
+                      <span class="state-val">
+                        {#if e.compatible === null}<span class="dot dot--off"></span>unknown
+                        {:else if e.compatible}<span class="dot dot--ok"></span>yes
+                        {:else}<span class="dot dot--err"></span>no{/if}
+                      </span>
+                    </div>
+                  </div>
+
+                  {#if e.incompatible_reason}
+                    <div class="ec-note ec-note--err">{e.incompatible_reason}</div>
+                  {/if}
+
+                  {#if !e.installed && e.compatible && e.tier === 'opt-in'}
+                    {@const cmd = `lmforge engine install ${e.id}`}
+                    <div class="ec-cmd">
+                      <code class="ec-cmd-text">{cmd}</code>
+                      <button class="btn btn--ghost btn--xs" onclick={() => copyCmd(cmd)}>Copy</button>
+                    </div>
+                    <div class="ec-hint">Run in your terminal — installs ~5 GB venv + wheels.</div>
+                  {:else if !e.installed && e.compatible && e.tier === 'experimental'}
+                    {@const cmd = `lmforge engine install ${e.id} --yes-experimental`}
+                    <div class="ec-cmd">
+                      <code class="ec-cmd-text">{cmd}</code>
+                      <button class="btn btn--ghost btn--xs" onclick={() => copyCmd(cmd)}>Copy</button>
+                    </div>
+                    <div class="ec-hint">Experimental — may fail at runtime on this hardware.</div>
+                  {:else if e.installed && !e.active}
+                    {@const cmd = `lmforge start --engine ${e.id}`}
+                    <div class="ec-cmd">
+                      <code class="ec-cmd-text">{cmd}</code>
+                      <button class="btn btn--ghost btn--xs" onclick={() => copyCmd(cmd)}>Copy</button>
+                    </div>
+                  {/if}
+                </article>
+              {/each}
+            </div>
+          {:else if !engineLoading && !engineError}
+            <div class="empty">No engines registered.</div>
+          {/if}
         </section>
 
       {:else if activeSection === 'about'}
@@ -288,21 +447,138 @@
     white-space: pre;
   }
 
-  /* Coming soon */
-  .coming-soon {
-    display: flex; align-items: flex-start; gap: 14px;
-    padding: 16px;
+  /* Engine roster */
+  .row-spread {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .engine-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 14px;
+  }
+  .engine-card {
     background: var(--surface-2);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    color: var(--text-2);
+    padding: 14px 16px 12px;
+    display: flex; flex-direction: column; gap: 10px;
+    transition: border-color 120ms ease;
   }
-  .cs-icon  { font-size: 24px; flex-shrink: 0; margin-top: 2px; }
-  .cs-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
-  .cs-body  { font-size: 12px; line-height: 1.6; }
-  .cs-body code {
+  .engine-card--active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent-dim) inset;
+  }
+  .ec-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+  }
+  .ec-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .ec-name {
+    font-size: 13px; font-weight: 600; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ec-key {
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-3);
+  }
+  .ec-tags { display: flex; gap: 6px; flex-shrink: 0; }
+
+  .tier-badge {
+    font-size: 10.5px; font-weight: 600; line-height: 1;
+    padding: 3px 7px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  .tier-badge--default { background: rgba(70, 200, 120, 0.16); color: #6ee7a4; }
+  .tier-badge--optin   { background: rgba(100, 170, 255, 0.18); color: #8ab8ff; }
+  .tier-badge--experimental { background: rgba(240, 175, 80, 0.18); color: #f4c071; }
+  .tier-badge--defaultstar  { background: rgba(150, 150, 150, 0.18); color: var(--text-2); }
+
+  .badge--active {
+    font-size: 10px; font-weight: 600;
+    padding: 3px 7px; border-radius: 999px;
+    background: var(--accent-dim); color: var(--accent-2);
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+
+  .ec-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 12px;
+    font-size: 11.5px;
+    margin: 0;
+  }
+  .ec-grid dt { color: var(--text-3); font-weight: 500; }
+  .ec-grid dd { color: var(--text); margin: 0; font-family: var(--font-mono); word-break: break-all; }
+
+  .cap {
+    display: inline-block;
+    font-family: var(--font-mono); font-size: 10.5px;
+    padding: 2px 6px; margin-right: 4px;
+    border-radius: 4px;
+    background: var(--surface-3); color: var(--text-3);
+    border: 1px solid var(--border);
+  }
+  .cap--on { color: #6ee7a4; border-color: rgba(70, 200, 120, 0.4); }
+
+  .ec-state {
+    display: flex; gap: 18px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--border);
+  }
+  .state-pair { display: flex; align-items: center; gap: 6px; }
+  .state-key  { font-size: 11px; color: var(--text-3); }
+  .state-val  { font-size: 11.5px; color: var(--text); display: inline-flex; align-items: center; gap: 5px; }
+
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+  .dot--ok  { background: #4ade80; box-shadow: 0 0 4px rgba(74, 222, 128, 0.6); }
+  .dot--off { background: var(--text-3); }
+  .dot--err { background: #f87171; box-shadow: 0 0 4px rgba(248, 113, 113, 0.6); }
+
+  .ec-note {
+    font-size: 11px; line-height: 1.5;
+    padding: 7px 10px;
+    border-radius: var(--radius-sm);
+  }
+  .ec-note--err {
+    background: rgba(248, 113, 113, 0.08);
+    border: 1px solid rgba(248, 113, 113, 0.25);
+    color: #fcaaaa;
+  }
+
+  .ec-cmd {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px 6px 10px;
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .ec-cmd-text {
+    flex: 1; min-width: 0;
+    font-family: var(--font-mono); font-size: 11.5px; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    user-select: text;
+  }
+  .ec-hint { font-size: 10.5px; color: var(--text-3); margin-top: -4px; }
+
+  .alert {
+    padding: 10px 12px; border-radius: var(--radius-sm);
+    font-size: 12px; line-height: 1.55;
+  }
+  .alert code {
     font-family: var(--font-mono); font-size: 11px;
-    background: var(--surface-3); padding: 1px 4px; border-radius: 3px;
+    padding: 1px 5px; border-radius: 3px;
+    background: rgba(255,255,255,0.05);
+  }
+  .alert--warn  { background: rgba(240, 175, 80, 0.10); border: 1px solid rgba(240, 175, 80, 0.30); color: #f4c071; }
+  .alert--error { background: rgba(248, 113, 113, 0.10); border: 1px solid rgba(248, 113, 113, 0.30); color: #fcaaaa; }
+  .empty {
+    padding: 24px; text-align: center; color: var(--text-3); font-size: 12.5px;
+    background: var(--surface-2); border: 1px dashed var(--border); border-radius: var(--radius-lg);
+  }
+
+  /* btn--xs for inline copy buttons */
+  :global(.btn--xs) {
+    font-size: 10.5px !important;
+    padding: 3px 8px !important;
+    line-height: 1.2 !important;
   }
 
   /* About */

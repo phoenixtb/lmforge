@@ -120,10 +120,20 @@ if (( DO_INTEGRATION )); then
         if echo "$OUT" | grep -q '^omlx ' \
             && echo "$OUT" | grep -q '^sglang ' \
             && echo "$OUT" | grep -q '^llamacpp ' \
-            && echo "$OUT" | grep -q '^vllm '; then
+            && echo "$OUT" | grep -q '^vllm ' \
+            && echo "$OUT" | grep -q '^tabbyapi '; then
             pass "lmforge engine list"      "$(( $(date +%s) - t0 ))"
         else
-            fail "lmforge engine list"      "$(( $(date +%s) - t0 ))" "missing one of omlx/sglang/llamacpp/vllm"
+            fail "lmforge engine list"      "$(( $(date +%s) - t0 ))" "missing one of omlx/sglang/llamacpp/vllm/tabbyapi"
+        fi
+
+        # engine status tabbyapi — must report opt-in tier verdict.
+        t0=$(date +%s)
+        OUT=$("$BIN" engine status tabbyapi 2>&1 || true)
+        if echo "$OUT" | grep -qi 'opt-in' && echo "$OUT" | grep -qi 'tabbyapi'; then
+            pass "lmforge engine status tabbyapi" "$(( $(date +%s) - t0 ))"
+        else
+            fail "lmforge engine status tabbyapi" "$(( $(date +%s) - t0 ))" "missing opt-in verdict"
         fi
 
         # engine status vllm — must report the opt-in tier verdict.
@@ -210,13 +220,29 @@ if (( DO_E2E )); then
         fail "GET /health"                      "$(( $(date +%s) - t0 ))" "$RESP"
     fi
 
-    # 2. /lf/status returns expected schema
+    # 2. /lf/status returns expected schema. `last_errors` MUST be present
+    #    (added in Phase 2.3, consumed by the UI Overview's Engine Load
+    #    Errors panel in Phase 6). It's allowed to be empty `{}` but the
+    #    key itself must not disappear.
     t0=$(date +%s)
     RESP=$(curl -sf --max-time 5 "$BASE/lf/status")
-    if echo "$RESP" | jq -e '.overall_status and .engine.id and (.running_models | type == "array")' >/dev/null 2>&1; then
-        pass "GET /lf/status schema (overall_status/engine/running_models)" "$(( $(date +%s) - t0 ))"
+    if echo "$RESP" | jq -e '.overall_status and .engine.id and (.running_models | type == "array") and (.last_errors | type == "object")' >/dev/null 2>&1; then
+        pass "GET /lf/status schema (overall_status/engine/running_models/last_errors)" "$(( $(date +%s) - t0 ))"
     else
         fail "GET /lf/status schema"            "$(( $(date +%s) - t0 ))" "$RESP"
+    fi
+
+    # 2b. /lf/engines — Phase 6 endpoint that drives the Settings → Engine UI.
+    #     Shape guard: must return an array of engine rows with at least
+    #     `id`, `tier`, `installed`, `compatible` fields. Any one of those
+    #     missing breaks the tier-switcher renderer.
+    t0=$(date +%s)
+    RESP=$(curl -sf --max-time 5 "$BASE/lf/engines")
+    if echo "$RESP" | jq -e '(.engines | type == "array") and (.engines | length > 0) and (.engines[0] | (.id and .tier and (.installed | type == "boolean")))' >/dev/null 2>&1; then
+        ECOUNT=$(echo "$RESP" | jq '.engines | length')
+        pass "GET /lf/engines ($ECOUNT engines, tier+installed fields present)" "$(( $(date +%s) - t0 ))"
+    else
+        fail "GET /lf/engines schema"           "$(( $(date +%s) - t0 ))" "$RESP"
     fi
 
     # 3. catalog has expected count (current quantized-only safetensors.json = 80).

@@ -98,7 +98,8 @@ async fn status_bridge(app: tauri::AppHandle) {
                         "ttft_avg_ms": 0.0,
                         "uptime_secs": 0,
                         "restart_count": 0
-                    }
+                    },
+                    "last_errors": {}
                 }),
             );
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;

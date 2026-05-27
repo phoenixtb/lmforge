@@ -85,8 +85,17 @@ pub async fn download_model(
     }
 
     // Download each file from HF sequentially
+    // `hf_repo` may be `org/name` OR `org/name@revision`. The latter is
+    // used by EXL3 repos (turboderp's convention puts each bits-per-weight
+    // on its own git branch with `main` holding only README.md).
+    let (repo_id, revision) = crate::model::resolver::split_revision(hf_repo);
+    let resolve_ref = revision.unwrap_or("main");
+
     for file in files {
-        let url = format!("https://huggingface.co/{}/resolve/main/{}", hf_repo, file);
+        let url = format!(
+            "https://huggingface.co/{}/resolve/{}/{}",
+            repo_id, resolve_ref, file
+        );
 
         let dest = dest_dir.join(file);
         if let Some(parent) = dest.parent() {

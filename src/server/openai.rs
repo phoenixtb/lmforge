@@ -258,12 +258,13 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     };
 
     // Rewrite model_id to the exact filesystem directory name so engines
-    // that key on the path basename (SGLang / llama.cpp / oMLX) don't 404.
+    // that key on the path basename (SGLang / llama.cpp / oMLX / TabbyAPI)
+    // don't 404.
     //
-    // vLLM is the exception: at spawn time we pass `--served-model-name
-    // <model_id>` so vLLM advertises the model under our canonical id.
-    // Rewriting here would defeat that and cause the 404 we explicitly
-    // engineered against. Keep the rewrite engine-aware.
+    // vLLM is the only exception: at spawn time we pass
+    // `--served-model-name <model_id>` so vLLM advertises the model under
+    // our canonical id. TabbyAPI's `model_name` field is the basename of
+    // the model directory, so it shares the SGLang flow.
     let needs_basename_rewrite = state.engine_config.id != "vllm";
     if needs_basename_rewrite
         && let Some(entry) = index.get(&model_id)

@@ -38,7 +38,7 @@ pub async fn run(
     println!("  Files:  {}", resolved.files.len());
     println!();
 
-    if resolved.format.to_string() != engine_format {
+    if !formats_compatible(&resolved.format.to_string(), &engine_format) {
         anyhow::bail!(
             "❌ INCOMPATIBLE MODEL FORMAT: You are attempting to pull a '{}' model, \
              but the engine selected for your hardware requires '{}'.\n  \
@@ -178,6 +178,25 @@ pub async fn run(
 /// driver missing"). At pull-time the user only cares about format. We honour
 /// hardware gates implicitly because the user must `engine install <id>`
 /// first — which DOES enforce the gates.
+/// Whether a detected on-disk format is loadable by an engine that
+/// advertises `engine_format`. Strict equality used to be the rule, but
+/// EXL3 broke that: EXL3 model dirs are physically `safetensors` files
+/// (`model.safetensors` + `config.json` + `quantization_config.json`),
+/// the "exl3" label is a quantization-method tag, not a file-layout tag.
+///
+/// Keep this allowlist explicit so future format aliases (e.g. "gptq" or
+/// "awq" living inside safetensors) need a conscious decision to add.
+fn formats_compatible(detected: &str, engine: &str) -> bool {
+    if detected == engine {
+        return true;
+    }
+    // TabbyAPI / ExLlamaV3.
+    if engine == "exl3" && detected == "safetensors" {
+        return true;
+    }
+    false
+}
+
 fn resolve_format_for_engine(id: &str, data_dir: &std::path::Path) -> Result<String> {
     let user_engines = data_dir.join("engines.toml");
     let registry = EngineRegistry::load(if user_engines.exists() {
@@ -190,4 +209,34 @@ fn resolve_format_for_engine(id: &str, data_dir: &std::path::Path) -> Result<Str
         .get(id)
         .with_context(|| format!("Unknown engine id: {}", id))?;
     Ok(engine.model_format.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::formats_compatible;
+
+    #[test]
+    fn formats_compatible_strict_equality() {
+        assert!(formats_compatible("safetensors", "safetensors"));
+        assert!(formats_compatible("gguf", "gguf"));
+        assert!(formats_compatible("mlx", "mlx"));
+    }
+
+    #[test]
+    fn formats_compatible_exl3_accepts_safetensors() {
+        // EXL3 repos store weights as safetensors on disk.
+        assert!(formats_compatible("safetensors", "exl3"));
+    }
+
+    #[test]
+    fn formats_compatible_no_other_aliases() {
+        // Don't silently accept other cross-format pulls.
+        assert!(!formats_compatible("gguf", "safetensors"));
+        assert!(!formats_compatible("safetensors", "gguf"));
+        assert!(!formats_compatible("mlx", "safetensors"));
+        assert!(!formats_compatible("safetensors", "mlx"));
+        // Reverse direction is not allowed — safetensors engine must not
+        // accept an exl3 label without explicit thought.
+        assert!(!formats_compatible("exl3", "safetensors"));
+    }
 }
