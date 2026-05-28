@@ -1,0 +1,192 @@
+name: Build llama.cpp CUDA variants
+
+# Manual-dispatch build pipeline that produces self-contained Linux CUDA
+# tarballs of `llama.cpp` (server/cli/bench/quantize) bundled with the
+# matching CUDA runtime + cuBLAS so that:
+#   * binaries run on glibc ≥ 2.28 (AlmaLinux 8 / RHEL 8 / Ubuntu 22.04+),
+#   * users only need an NVIDIA driver ≥ floor — no system CUDA install,
+#   * RPATH `$ORIGIN/lib` makes the tarball relocatable.
+#
+# Output: `lmforge-llamacpp-<tag>-{cuda12,cuda13}-linux-x64.tar.gz`
+# + matching `.sha256` companion, published to release tag `llamacpp-<tag>`.
+#
+# CUDA 13.2 / 13.3 are FORBIDDEN at this layer (GGUF corruption seen in
+# Unsloth quants — see docs/engineering/PLAN-v0.2.0-cuda-mtp.md §0).
+
+on:
+  workflow_dispatch:
+    inputs:
+      llamacpp_tag:
+        description: "Upstream llama.cpp tag to build (e.g. b9351)"
+        required: true
+        default: "b9351"
+      release_tag:
+        description: "GitHub release tag to publish tarballs under"
+        required: true
+        default: "llamacpp-b9351"
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    name: ${{ matrix.variant }} (${{ matrix.cuda }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: cuda12
+            cuda: "12.8.1"
+            image: "nvidia/cuda:12.8.1-devel-rockylinux8"
+            archs: "75-real;80-real;86-real;89-real;90-real;120-real;120-virtual"
+            cudart_so: "libcudart.so.12"
+            cublas_so: "libcublas.so.12"
+            cublaslt_so: "libcublasLt.so.12"
+            driver_min: "570.26"
+          - variant: cuda13
+            cuda: "13.1.0"
+            image: "nvidia/cuda:13.1.0-devel-rockylinux8"
+            archs: "75-real;80-real;86-real;89-real;90-real;100-real;120-real;120-virtual"
+            cudart_so: "libcudart.so.13"
+            cublas_so: "libcublas.so.13"
+            cublaslt_so: "libcublasLt.so.13"
+            driver_min: "590.44.01"
+
+    container:
+      image: ${{ matrix.image }}
+
+    steps:
+      - name: HARD GUARD — refuse CUDA 13.2 / 13.3
+        # Defense-in-depth: even if someone tweaks the matrix, a 13.2*/13.3*
+        # build is rejected here. Catches manual matrix edits + accidental
+        # rebases. Matches the runtime refusal in src/engine/installer.rs.
+        run: |
+          case "${{ matrix.cuda }}" in
+            13.2*|13.3*)
+              echo "::error::CUDA ${{ matrix.cuda }} is forbidden (Unsloth GGUF corruption)."
+              exit 1
+              ;;
+          esac
+
+      - name: Install build deps (rockylinux 8 base)
+        run: |
+          dnf -y install \
+            git cmake ninja-build gcc-toolset-12 \
+            libcurl-devel patchelf tar gzip findutils
+
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ inputs.llamacpp_tag }}
+          path: llama.cpp
+
+      - name: Configure + build (CUDA, archs=${{ matrix.archs }})
+        working-directory: llama.cpp
+        run: |
+          source /opt/rh/gcc-toolset-12/enable
+          cmake -S . -B build -G Ninja \
+            -DGGML_CUDA=ON \
+            -DGGML_NATIVE=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DLLAMA_CURL=ON \
+            -DGGML_CUDA_FA_ALL_QUANTS=ON \
+            -DCMAKE_CUDA_ARCHITECTURES="${{ matrix.archs }}" \
+            -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath,'\$ORIGIN/lib'"
+          cmake --build build -j"$(nproc)" \
+            --target llama-server llama-cli llama-bench llama-quantize gguf-dump
+
+      - name: Stage tarball (bundle CUDA libs + RPATH)
+        working-directory: llama.cpp
+        id: stage
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.llamacpp_tag }}"
+          variant="${{ matrix.variant }}"
+          name="lmforge-llamacpp-${tag}-${variant}-linux-x64"
+          out="$GITHUB_WORKSPACE/${name}"
+          mkdir -p "$out/lib"
+
+          # Copy binaries
+          for bin in llama-server llama-cli llama-bench llama-quantize gguf-dump; do
+            cp "build/bin/${bin}" "$out/${bin}"
+          done
+
+          # Strip BEFORE patchelf — strip can wipe RPATH on some toolchains.
+          strip "$out"/llama-* "$out"/gguf-dump
+
+          # Bundle CUDA runtime libs (real file, not symlink).
+          for so in "${{ matrix.cudart_so }}" "${{ matrix.cublas_so }}" "${{ matrix.cublaslt_so }}"; do
+            src="$(find /usr/local/cuda*/lib64 -name "${so}*" -type f | head -n 1 || true)"
+            if [ -z "$src" ]; then
+              echo "::error::missing ${so} in /usr/local/cuda*/lib64"
+              exit 1
+            fi
+            cp -L "$src" "$out/lib/$(basename "$src")"
+            # If the file we copied was a symlink target like libcudart.so.12.8.1,
+            # also create the SONAME-level symlink so RPATH lookup succeeds.
+            base="$(basename "$src")"
+            short="${so}"
+            if [ "$base" != "$short" ] && [ ! -e "$out/lib/$short" ]; then
+              ln -s "$base" "$out/lib/$short"
+            fi
+          done
+
+          # Set RPATH so binaries find $ORIGIN/lib/libcudart.so.* at runtime.
+          for bin in llama-server llama-cli llama-bench llama-quantize; do
+            patchelf --set-rpath '$ORIGIN/lib' "$out/$bin"
+          done
+
+          # VERSION manifest for runtime + lmforge doctor.
+          cat > "$out/VERSION" <<EOF
+          llamacpp_tag=${tag}
+          cuda=${{ matrix.cuda }}
+          archs=${{ matrix.archs }}
+          driver_min=${{ matrix.driver_min }}
+          variant=${variant}
+          EOF
+
+          # Audit: ensure libcuda.so.1 is the ONLY external CUDA dep.
+          if ldd "$out/llama-server" | grep -E 'libcublas|libcudart' >/dev/null; then
+            echo "::error::llama-server still has external libcudart/libcublas deps"
+            ldd "$out/llama-server"
+            exit 1
+          fi
+
+          tar -czf "${out}.tar.gz" -C "$GITHUB_WORKSPACE" "${name}"
+          sha256sum "${out}.tar.gz" | tee "${out}.tar.gz.sha256"
+          echo "tarball=${out}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "sha256_file=${out}.tar.gz.sha256" >> "$GITHUB_OUTPUT"
+          echo "size_mb=$(du -m "${out}.tar.gz" | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Tarball size guard (< 500 MB)
+        run: |
+          size="${{ steps.stage.outputs.size_mb }}"
+          echo "tarball size = ${size} MB"
+          if [ "$size" -ge 500 ]; then
+            echo "::error::tarball exceeds 500 MB budget"
+            exit 1
+          fi
+
+      - name: Upload as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lmforge-llamacpp-${{ inputs.llamacpp_tag }}-${{ matrix.variant }}-linux-x64
+          path: |
+            ${{ steps.stage.outputs.tarball }}
+            ${{ steps.stage.outputs.sha256_file }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          files: |
+            ${{ steps.stage.outputs.tarball }}
+            ${{ steps.stage.outputs.sha256_file }}
