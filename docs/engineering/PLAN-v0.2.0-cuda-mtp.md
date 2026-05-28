@@ -1,17 +1,17 @@
-# LMForge v0.4 — CUDA Variant + Speculative Decoding (MTP) — Execution Plan
+# LMForge v0.2.0 — CUDA Variant + Speculative Decoding (MTP) — Execution Plan
 
 > **Status:** Planning complete; ready to execute.
-> **Branch:** `v0.4-cuda-mtp` (to be created from current `streamlin-installation`).
+> **Branch:** `v0.2.0-cuda-mtp` (cut from `main` after the plan was merged in).
 > **Owner:** Cursor agent + reviewer.
 > **Last updated:** 2026-05-28.
 
-This is the working tracker for v0.4. Check items off as they complete. Update **Progress dashboard** when a phase flips state. Don't rewrite the design contract section without a commit message that explains why.
+This is the working tracker for v0.2.0. Check items off as they complete. Update **Progress dashboard** when a phase flips state. Don't rewrite the design contract section without a commit message that explains why.
 
 ## How to use this doc
 
 - `- [ ]` items are tracked work; tick them as they ship.
 - Each phase has an **Acceptance criteria** subsection — these are the gates that move a phase from `in-progress` to `done`.
-- **Out of scope** lists items deliberately deferred to v0.5+. Adding scope here requires a corresponding update to the Risk register.
+- **Out of scope** lists items deliberately deferred to v0.3+. Adding scope here requires a corresponding update to the Risk register.
 - Open questions go in §6 with a target resolution phase; close them by editing the doc inline + linking the PR/commit.
 
 ## Status legend
@@ -75,11 +75,11 @@ Total estimated effort: **~3.5 weeks focused** (CUDA pipeline + spec-dec, separa
 
 ```
 C-1 (CUDA pipeline)  ─┐
-                      ├─► C-3 (variant-aware launch) ─► v0.4 release
+                      ├─► C-3 (variant-aware launch) ─► v0.2.0 release
 C-2 (variant infra)  ─┘
 
 S-1 (MTP detection)  ─┐
-                      ├─► S-2 (launch + telemetry) ─► S-3 (draft pairs) ─► v0.4 release
+                      ├─► S-2 (launch + telemetry) ─► S-3 (draft pairs) ─► v0.2.0 release
                       ─┘
 ```
 
@@ -533,9 +533,9 @@ note          = "Same Qwen2.5 tokenizer family."
 
 ---
 
-## 3. Out of scope for v0.4 (tracked elsewhere or deferred)
+## 3. Out of scope for v0.2.0 (tracked elsewhere or deferred)
 
-- **N-gram speculative decoding** (`--spec-ngram-*`). Third spec-dec path; lossless; no draft model. Defer to v0.5.
+- **N-gram speculative decoding** (`--spec-ngram-*`). Third spec-dec path; lossless; no draft model. Defer to v0.3.
 - **`GGML_BACKEND_DL=ON` split layout.** Trigger condition: when we add a third backend (HIP/AMD or Linux-Vulkan-as-separate-variant), not before.
 - **Windows CUDA via our own build.** Upstream Windows CUDA prebuilts work fine.
 - **macOS anything.** oMLX is the contract.
@@ -554,11 +554,11 @@ note          = "Same Qwen2.5 tokenizer family."
 | C-3 (variant launch) | 3 | S-2 | Yes |
 | S-1 (MTP detection) | 3 | C-1 | Yes (blocks S-2) |
 | S-2 (spec launch) | 3 | C-3 | Yes |
-| S-3 (draft pairs) | 2 | Polish | No (ships in v0.4.1 if delayed) |
+| S-3 (draft pairs) | 2 | Polish | No (ships in v0.2.1 if delayed) |
 | Polish (docs+UI+ADR) | 2 | S-3 | No |
 
 **Critical path (CUDA-only):** C-1 → C-2 → C-3 → release. ~11 days.
-**Full v0.4 (CUDA + spec-dec):** C-1+S-1 parallel → C-2+S-2 parallel → C-3+S-3 → Polish. **~14–16 working days.**
+**Full v0.2.0 (CUDA + spec-dec):** C-1+S-1 parallel → C-2+S-2 parallel → C-3+S-3 → Polish. **~14–16 working days.**
 
 ---
 
