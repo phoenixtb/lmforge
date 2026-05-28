@@ -107,6 +107,15 @@ pub struct HardwareProfile {
     #[serde(default)]
     pub cuda_driver_version: Option<String>,
 
+    /// Parsed form of [`cuda_driver_version`] as `(major, minor, patch)` —
+    /// e.g. `Some((595, 71, 5))` for `"595.71.05"`. Computed once at probe
+    /// time so the variant selector can do ordinal compares against the
+    /// CUDA12 / CUDA13 driver-floor constants without re-parsing on every
+    /// `lmforge start`. `None` on non-NVIDIA systems or when the version
+    /// string couldn't be parsed.
+    #[serde(default)]
+    pub driver_tuple: Option<(u32, u32, u32)>,
+
     /// OS family for tier gating. See [`OsFamily`].
     #[serde(default = "default_os_family")]
     pub os_family: OsFamily,
@@ -188,6 +197,7 @@ pub fn detect_platform() -> Result<HardwareProfile> {
     } else {
         None
     };
+    let driver_tuple = cuda_driver_version.as_deref().and_then(parse_driver_tuple);
 
     debug!(
         ?os,
@@ -218,10 +228,32 @@ pub fn detect_platform() -> Result<HardwareProfile> {
         compute_cap,
         cuda_runtime_version,
         cuda_driver_version,
+        driver_tuple,
         os_family,
         is_wsl,
         gpu_count,
     })
+}
+
+/// Parse an `nvidia-smi`-style driver version string into a `(major, minor, patch)`
+/// tuple. Accepts:
+///   * `"595.71.05"`  → `Some((595, 71, 5))`
+///   * `"570.26"`     → `Some((570, 26, 0))`
+///   * `"570"`        → `Some((570, 0, 0))`
+///   * `""` / garbage → `None`
+///
+/// The patch field accepts leading zeros (`05`) because the driver tooling
+/// emits zero-padded patches.
+pub fn parse_driver_tuple(s: &str) -> Option<(u32, u32, u32)> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut parts = trimmed.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    let patch: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    Some((major, minor, patch))
 }
 
 fn detect_os() -> Os {
@@ -539,6 +571,36 @@ fn detect_cuda_driver_version() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_driver_tuple_three_segment() {
+        assert_eq!(parse_driver_tuple("595.71.05"), Some((595, 71, 5)));
+        assert_eq!(parse_driver_tuple("580.95.05"), Some((580, 95, 5)));
+        assert_eq!(parse_driver_tuple("570.26.00"), Some((570, 26, 0)));
+    }
+
+    #[test]
+    fn parse_driver_tuple_two_segment_pads_zero_patch() {
+        assert_eq!(parse_driver_tuple("570.26"), Some((570, 26, 0)));
+        assert_eq!(parse_driver_tuple("590.44"), Some((590, 44, 0)));
+    }
+
+    #[test]
+    fn parse_driver_tuple_single_segment_pads_zeros() {
+        assert_eq!(parse_driver_tuple("570"), Some((570, 0, 0)));
+    }
+
+    #[test]
+    fn parse_driver_tuple_rejects_garbage() {
+        assert_eq!(parse_driver_tuple(""), None);
+        assert_eq!(parse_driver_tuple("not-a-version"), None);
+        assert_eq!(parse_driver_tuple("abc.def.ghi"), None);
+    }
+
+    #[test]
+    fn parse_driver_tuple_tolerates_whitespace() {
+        assert_eq!(parse_driver_tuple("  595.71.05  "), Some((595, 71, 5)));
+    }
 
     #[test]
     fn test_detect_os_is_known() {

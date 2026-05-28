@@ -36,7 +36,18 @@ pub async fn run(config: &LmForgeConfig, action: EngineAction) -> Result<()> {
         EngineAction::Install {
             id,
             yes_experimental,
-        } => install(&registry, &profile, &data_dir, &id, yes_experimental).await,
+            variant,
+        } => {
+            install(
+                &registry,
+                &profile,
+                &data_dir,
+                &id,
+                yes_experimental,
+                variant.as_deref(),
+            )
+            .await
+        }
         EngineAction::Uninstall { id, yes } => uninstall(&registry, &data_dir, &id, yes),
         EngineAction::Status { id } => status(&registry, &profile, &data_dir, &id),
     }
@@ -59,6 +70,8 @@ fn load_or_probe_profile(data_dir: &std::path::Path) -> Result<HardwareProfile> 
 // ── list ───────────────────────────────────────────────────────────────────
 
 fn list(registry: &EngineRegistry, profile: &HardwareProfile) -> Result<()> {
+    let data_dir = data_dir_from(profile);
+
     println!(
         "{:<10} {:<14} {:<13} {:<10} {:<12} NOTE",
         "ID", "TIER", "VERSION", "INSTALLED", "COMPATIBLE"
@@ -66,7 +79,7 @@ fn list(registry: &EngineRegistry, profile: &HardwareProfile) -> Result<()> {
     println!("{}", "─".repeat(78));
 
     for engine in registry.all() {
-        let installed = install_state(engine, &data_dir_from(profile));
+        let installed = install_state(engine, &data_dir);
         let (compat, note) = compatibility(engine, profile);
         println!(
             "{:<10} {:<14} {:<13} {:<10} {:<12} {}",
@@ -77,6 +90,18 @@ fn list(registry: &EngineRegistry, profile: &HardwareProfile) -> Result<()> {
             if compat { "yes" } else { "no" },
             note,
         );
+
+        // llama.cpp: expose installed variant set so the user can tell which
+        // build (cuda12 / cuda13 / vulkan / cpu) is actually staged.
+        // The legacy flat install at `<data_dir>/engines/llama-server` and
+        // the new variant tree at `<data_dir>/engines/llamacpp/variants/`
+        // are independent — both layouts are listed.
+        if engine.id == "llamacpp" {
+            let variants = llamacpp_variant_summary(&data_dir, profile);
+            if !variants.is_empty() {
+                println!("           variants: {variants}");
+            }
+        }
     }
     println!();
     println!(
@@ -88,7 +113,57 @@ fn list(registry: &EngineRegistry, profile: &HardwareProfile) -> Result<()> {
     println!(
         "  • `experimental` engines are never auto-selected; use `--engine <id>`."
     );
+    println!(
+        "  • `lmforge engine install llamacpp --variant <cuda12|cuda13|vulkan|cpu>` \
+         pulls a specific build."
+    );
     Ok(())
+}
+
+/// One-line summary of which `llama.cpp` variants are present on disk.
+/// Returns an empty string when no variant directory exists, so callers
+/// can suppress the row entirely. Active variant (per
+/// `variant::select`) is marked with `*`.
+fn llamacpp_variant_summary(
+    data_dir: &std::path::Path,
+    profile: &HardwareProfile,
+) -> String {
+    use crate::engine::variant::{LlamaVariant, VariantState, select};
+
+    let cuda12 =
+        crate::engine::installer::variant_installed(data_dir, LlamaVariant::Cuda12, profile);
+    let cuda13 =
+        crate::engine::installer::variant_installed(data_dir, LlamaVariant::Cuda13, profile);
+    let vulkan =
+        crate::engine::installer::variant_installed(data_dir, LlamaVariant::Vulkan, profile);
+    let cpu = crate::engine::installer::variant_installed(data_dir, LlamaVariant::Cpu, profile);
+
+    let prefer_cuda13 = std::env::var("LMFORGE_LLAMACPP_VARIANT")
+        .map(|s| s.eq_ignore_ascii_case("cuda13"))
+        .unwrap_or(false);
+
+    let state = VariantState {
+        cuda12_installed: cuda12,
+        cuda13_installed: cuda13,
+        vulkan_installed: vulkan,
+        cpu_installed: cpu,
+        prefer_cuda13,
+    };
+    let active = select(profile, &state);
+
+    let mut parts: Vec<String> = Vec::new();
+    for (label, installed) in [
+        (LlamaVariant::Cuda12, cuda12),
+        (LlamaVariant::Cuda13, cuda13),
+        (LlamaVariant::Vulkan, vulkan),
+        (LlamaVariant::Cpu, cpu),
+    ] {
+        if installed {
+            let marker = if label == active { "*" } else { "" };
+            parts.push(format!("{label}{marker}"));
+        }
+    }
+    parts.join(", ")
 }
 
 /// Locate `~/.lmforge/` from a probe — the registry-list view doesn't have a
@@ -109,7 +184,25 @@ async fn install(
     data_dir: &std::path::Path,
     id: &str,
     yes_experimental: bool,
+    variant: Option<&str>,
 ) -> Result<()> {
+    // Variant flag is llamacpp-only — refuse early if applied elsewhere
+    // (otherwise the user thinks it took effect on, say, `vllm`).
+    if variant.is_some() && id != "llamacpp" {
+        bail!(
+            "`--variant` is only valid for the `llamacpp` engine (got engine `{id}`). \
+             Remove `--variant` or pass `--engine llamacpp`."
+        );
+    }
+
+    // Llamacpp + variant: bypass the legacy `install_via_binary` flow
+    // entirely and use the new manifest-driven variant installer.
+    if id == "llamacpp"
+        && let Some(variant_str) = variant
+    {
+        return install_llamacpp_variant(profile, data_dir, variant_str).await;
+    }
+
     // `select_explicit` enforces v1 + v2 hardware gates and returns a clear
     // error like "Engine `vllm` does not support this hardware: Os=Windows ...".
     // That's exactly the message we want surfaced to the user — no need to
@@ -157,6 +250,49 @@ async fn install(
     println!(
         "    Use it:  lmforge start --engine {}  (or --model <id> --engine {})",
         engine.id, engine.id
+    );
+    Ok(())
+}
+
+/// `lmforge engine install llamacpp --variant <id>` — manifest-driven
+/// install of a specific `llama.cpp` build flavour. Wraps
+/// `installer::install_variant` with hardware-gate refusal messages that
+/// match the rest of `lmforge engine`'s output.
+async fn install_llamacpp_variant(
+    profile: &HardwareProfile,
+    data_dir: &std::path::Path,
+    variant_str: &str,
+) -> Result<()> {
+    use std::str::FromStr;
+
+    let variant = crate::engine::variant::LlamaVariant::from_str(variant_str)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    // Pre-flight gate check — gives a CUDA-aware error before we even
+    // touch the network. Mirrors the refusal in `installer::install_variant`
+    // but presents it as a CLI message rather than a generic bail.
+    if let Err(reason) = crate::engine::variant::refuse_reason(variant, profile) {
+        bail!("Cannot install llamacpp variant `{variant}`: {reason}");
+    }
+
+    println!(
+        "  ⚙ Installing llama.cpp variant `{}` (tier=default, install_method=binary-variant)...",
+        variant
+    );
+
+    let result = crate::engine::installer::install_variant(profile, variant, data_dir).await?;
+
+    println!();
+    println!(
+        "  ✓ Installed: llamacpp ({}, tag={})",
+        result.variant, result.llamacpp_tag
+    );
+    println!("    Path:    {}", result.binary_path.display());
+    println!("    Size:    {} MB", result.size_bytes / (1024 * 1024));
+    println!(
+        "    Activate: this variant will be picked automatically by `lmforge start` \
+         when hardware allows. Override with `LMFORGE_LLAMACPP_VARIANT={}`.",
+        result.variant
     );
     Ok(())
 }

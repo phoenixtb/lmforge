@@ -5,6 +5,10 @@ use tokio::sync::mpsc::Sender;
 use tracing::{debug, info, warn};
 
 use crate::engine::adapter::{ActiveEngine, EngineAdapter, ModelRole};
+use crate::engine::speculative::{
+    ModelSpecInputs, SpecMode, SpecResolved, SpeculativeConfig, VramBudget, detect_moe_by_name,
+    resolve as resolve_spec,
+};
 use crate::hardware::probe::{GpuVendor, HardwareProfile};
 use crate::model::downloader::DownloadProgress;
 
@@ -160,6 +164,36 @@ impl EngineAdapter for LlamacppAdapter {
             args.push(mmproj_path.to_string_lossy().to_string());
             args.push("--ctx-size".to_string());
             args.push(plan.ctx_size.to_string());
+        }
+
+        // ── Speculative decoding (S-2) ────────────────────────────────────────
+        // Only chat workloads benefit from spec-dec — embed/rerank are
+        // single-pass scoring with no draft head. Reading the spec config
+        // happens here (rather than at adapter construction) so a hot
+        // config reload picks it up on next model load.
+        if matches!(role, ModelRole::Chat) {
+            let spec_inputs = ModelSpecInputs {
+                mtp: load_model_mtp(data_dir, model_id),
+                is_moe: detect_moe_by_name(model_id),
+            };
+            let budget = VramBudget {
+                gpu_vendor: profile.gpu_vendor,
+                free_vram_gb,
+                model_size_gb,
+                mmproj_size_gb,
+            };
+            let spec_cfg = load_speculative_config(data_dir);
+            let spec = resolve_spec(spec_inputs, &spec_cfg, budget);
+            append_spec_args(&mut args, &spec);
+            info!(
+                model_id = %model_id,
+                spec_mode = ?spec.mode,
+                draft_max = spec.draft_max,
+                draft_min = spec.draft_min,
+                draft_p_min = spec.draft_p_min,
+                reason = %spec.reason,
+                "Speculative-decoding plan"
+            );
         }
 
         info!(
@@ -435,6 +469,71 @@ pub(crate) fn resolve_cache_ram_mib(total_ram_gb: f32) -> u32 {
     quarter_mib.min(4096)
 }
 
+/// Look up the model's `capabilities.mtp` flag from the on-disk index.
+/// Returns `None` when the index is missing, unreadable, or the entry
+/// lacks an MTP capability (e.g. pulled with a pre-v0.2.0 binary). The
+/// resolver treats `None` as "unknown" and falls back to spec-dec OFF.
+fn load_model_mtp(data_dir: &Path, model_id: &str) -> Option<bool> {
+    let index = crate::model::index::ModelIndex::load(data_dir).ok()?;
+    let entry = index.get(model_id)?;
+    entry.capabilities.mtp
+}
+
+/// Load the `[speculative]` block from `<data_dir>/config.toml`. Falls
+/// back to defaults when the file is missing or unparseable — startup
+/// must not abort over a config typo. The full config is *not* cached
+/// because launches are infrequent and the cost is negligible.
+fn load_speculative_config(data_dir: &Path) -> SpeculativeConfig {
+    let path = data_dir.join("config.toml");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return SpeculativeConfig::default();
+    };
+    // Parse into the partial-permissive shape used by `LmForgeConfig` —
+    // a missing `[speculative]` table falls back to defaults via serde.
+    #[derive(serde::Deserialize, Default)]
+    struct PartialConfig {
+        #[serde(default)]
+        speculative: SpeculativeConfig,
+    }
+    toml::from_str::<PartialConfig>(&content)
+        .map(|p| p.speculative)
+        .unwrap_or_default()
+}
+
+/// Translate a resolved spec-dec plan into `llama-server` flags. The
+/// flag names match the b9351 release; if upstream renames them we'll
+/// see test failures on the first dispatch and bump the names here.
+pub(crate) fn append_spec_args(args: &mut Vec<String>, spec: &SpecResolved) {
+    match spec.mode {
+        SpecMode::Off => {}
+        SpecMode::Mtp => {
+            args.push("--spec-draft-n-max".to_string());
+            args.push(spec.draft_max.to_string());
+            args.push("--spec-draft-n-min".to_string());
+            args.push(spec.draft_min.to_string());
+            args.push("--spec-draft-p-min".to_string());
+            args.push(format!("{:.3}", spec.draft_p_min));
+        }
+        SpecMode::DraftModel => {
+            if let Some(path) = spec.draft_model_path.as_deref() {
+                args.push("--spec-draft-model".to_string());
+                args.push(path.to_string());
+            }
+            args.push("--spec-draft-n-max".to_string());
+            args.push(spec.draft_max.to_string());
+            args.push("--spec-draft-n-min".to_string());
+            args.push(spec.draft_min.to_string());
+            args.push("--spec-draft-p-min".to_string());
+            args.push(format!("{:.3}", spec.draft_p_min));
+            args.push("--spec-draft-ngl".to_string());
+            args.push(spec.draft_gpu_layers.to_string());
+        }
+        SpecMode::Auto => unreachable!(
+            "SpecResolved::mode is never Auto post-resolve — resolver normalises to Off/Mtp/DraftModel"
+        ),
+    }
+}
+
 /// Find the multimodal projector sidecar (`mmproj-*.gguf`) in the model dir.
 /// llama.cpp loads this via `--mmproj` to enable image input on VLMs.
 fn find_mmproj_file(model_dir: &Path) -> Option<std::path::PathBuf> {
@@ -457,6 +556,82 @@ fn find_mmproj_file(model_dir: &Path) -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Spec-dec args ────────────────────────────────────────────────────
+
+    #[test]
+    fn append_spec_args_off_emits_nothing() {
+        let mut args: Vec<String> = vec!["--model".into(), "/m".into()];
+        append_spec_args(&mut args, &SpecResolved::off("test"));
+        assert_eq!(args, vec!["--model".to_string(), "/m".to_string()]);
+    }
+
+    #[test]
+    fn append_spec_args_mtp_emits_three_flags_no_draft_model() {
+        let mut args: Vec<String> = Vec::new();
+        let spec = SpecResolved {
+            mode: SpecMode::Mtp,
+            draft_max: 16,
+            draft_min: 0,
+            draft_p_min: 0.75,
+            draft_model_path: None,
+            draft_gpu_layers: -1,
+            reason: "auto → MTP".into(),
+        };
+        append_spec_args(&mut args, &spec);
+        assert_eq!(
+            args,
+            vec![
+                "--spec-draft-n-max".to_string(),
+                "16".to_string(),
+                "--spec-draft-n-min".to_string(),
+                "0".to_string(),
+                "--spec-draft-p-min".to_string(),
+                "0.750".to_string(),
+            ]
+        );
+        assert!(
+            !args.iter().any(|a| a == "--spec-draft-model"),
+            "MTP must not emit --spec-draft-model"
+        );
+    }
+
+    #[test]
+    fn append_spec_args_draft_model_emits_path_and_ngl() {
+        let mut args: Vec<String> = Vec::new();
+        let spec = SpecResolved {
+            mode: SpecMode::DraftModel,
+            draft_max: 8,
+            draft_min: 0,
+            draft_p_min: 0.6,
+            draft_model_path: Some("/m/draft.gguf".into()),
+            draft_gpu_layers: 99,
+            reason: "draft-model".into(),
+        };
+        append_spec_args(&mut args, &spec);
+        assert!(args.iter().any(|a| a == "--spec-draft-model"));
+        assert!(args.iter().any(|a| a == "/m/draft.gguf"));
+        assert!(args.iter().any(|a| a == "--spec-draft-ngl"));
+        assert!(args.iter().any(|a| a == "99"));
+    }
+
+    #[test]
+    fn append_spec_args_moe_mtp_clamped_draft_max() {
+        // SpecResolved is already post-clamp; verify the value is emitted as-is.
+        let mut args: Vec<String> = Vec::new();
+        let spec = SpecResolved {
+            mode: SpecMode::Mtp,
+            draft_max: 4,
+            draft_min: 0,
+            draft_p_min: 0.75,
+            draft_model_path: None,
+            draft_gpu_layers: -1,
+            reason: "MoE-conservative".into(),
+        };
+        append_spec_args(&mut args, &spec);
+        let max_idx = args.iter().position(|a| a == "--spec-draft-n-max").unwrap();
+        assert_eq!(args[max_idx + 1], "4");
+    }
 
     #[test]
     fn test_find_gguf_no_files() {

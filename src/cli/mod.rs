@@ -1,5 +1,6 @@
 pub mod catalog;
 pub mod clean;
+pub mod doctor;
 pub mod engine;
 pub mod init;
 pub mod logs;
@@ -168,6 +169,12 @@ pub enum Command {
         engines: bool,
     },
 
+    /// Diagnose hardware + engine state (driver, compute_cap, glibc,
+    /// Vulkan loader, active `llama.cpp` variant, speculative-decoding
+    /// status). Mirrors what's surfaced in `/lf/status` so the same
+    /// information is reachable without the daemon running.
+    Doctor,
+
     /// View logs
     Logs {
         /// Tail the log continuously
@@ -238,6 +245,15 @@ pub enum EngineAction {
         /// Skip the experimental-tier confirmation prompt.
         #[arg(long)]
         yes_experimental: bool,
+
+        /// For `llamacpp` only — install a specific build variant under
+        /// `~/.lmforge/engines/llamacpp/variants/<id>/`. Accepted values:
+        /// `cuda12` (default for Linux NVIDIA, sm_75..sm_120, driver≥570.26),
+        /// `cuda13` (opt-in, driver≥590.44.01, adds sm_100 B200),
+        /// `vulkan` (universal fallback, Linux/Windows AMD/Intel), `cpu`.
+        /// Ignored for non-`llamacpp` engines.
+        #[arg(long)]
+        variant: Option<String>,
     },
 
     /// Remove an engine install (venv + cached wheels for pip engines,
@@ -318,6 +334,7 @@ pub async fn dispatch(cli: Cli, config: LmForgeConfig) -> Result<()> {
         }
         Command::Run { model } => run::run(&config, &model).await,
         Command::Engine { action } => engine::run(&config, action).await,
+        Command::Doctor => doctor::run(&config).await,
         Command::Service { action } => match action {
             ServiceAction::Install => service::install(),
             ServiceAction::Uninstall => service::uninstall(),

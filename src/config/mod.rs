@@ -54,6 +54,11 @@ pub struct LmForgeConfig {
     #[serde(default)]
     pub orchestrator: OrchestratorConfig,
 
+    /// Speculative-decoding defaults. The adapter resolves per-launch
+    /// overrides on top of this — see `engine::speculative::resolve`.
+    #[serde(default)]
+    pub speculative: crate::engine::speculative::SpeculativeConfig,
+
     /// Resolved data directory path (not serialized to file)
     #[serde(skip)]
     data_dir_path: Option<PathBuf>,
@@ -201,6 +206,7 @@ impl Default for LmForgeConfig {
             unsafe_disable_auth: false,
             resources: ResourceConfig::default(),
             orchestrator: OrchestratorConfig::default(),
+            speculative: crate::engine::speculative::SpeculativeConfig::default(),
             data_dir_path: None,
         }
     }
@@ -338,6 +344,7 @@ fn merge_config(base: LmForgeConfig, overlay: LmForgeConfig) -> LmForgeConfig {
                 overlay.orchestrator.auto_load
             },
         },
+        speculative: overlay.speculative,
         data_dir_path: overlay.data_dir_path.or(base.data_dir_path),
     }
 }

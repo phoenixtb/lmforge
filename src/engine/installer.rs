@@ -1204,6 +1204,336 @@ fn run_preflight_checks(engine: &EngineConfig) -> Result<()> {
     Ok(())
 }
 
+// ── llama.cpp variant installer (C-2.4 / C-2.5) ────────────────────────────────
+//
+// Installs ONE `llama.cpp` variant tarball from the embedded manifest into
+// `<data_dir>/engines/llamacpp/variants/<id>/`. Independent of the legacy
+// `install_via_binary` flow (which stages a single binary at
+// `<data_dir>/engines/llama-server`) — both layouts coexist until C-3
+// consolidates them. Today's call sites:
+//   * `lmforge engine install llamacpp --variant cuda12` (CLI / interactive)
+//   * `lmforge init` auto-install on Linux NVIDIA (planned in C-3)
+
+/// Result of a variant install. Like [`InstallResult`] but specific to
+/// the variant-aware layout — callers can render either a friendly path
+/// or a path under the `variants/<id>/` namespace.
+#[derive(Debug)]
+pub struct VariantInstallResult {
+    pub engine_id: String,
+    pub variant: crate::engine::variant::LlamaVariant,
+    pub install_dir: std::path::PathBuf,
+    pub binary_path: std::path::PathBuf,
+    pub llamacpp_tag: String,
+    pub size_bytes: u64,
+}
+
+/// Install one `llama.cpp` variant into the variant-aware layout.
+///
+/// Idempotency: if `<install_dir>/VERSION` already records the requested
+/// `llamacpp_tag`, the function short-circuits and returns Ok with
+/// `method_used = "existing"` — safe to call from `lmforge init` on every
+/// boot.
+pub async fn install_variant(
+    profile: &HardwareProfile,
+    variant: crate::engine::variant::LlamaVariant,
+    data_dir: &std::path::Path,
+) -> Result<VariantInstallResult> {
+    use crate::engine::variant::Manifest;
+
+    // Hardware gates first — refuse early before touching the network.
+    if let Err(reason) = crate::engine::variant::refuse_reason(variant, profile) {
+        bail!("Cannot install variant `{variant}`: {reason}");
+    }
+
+    let manifest = Manifest::embedded()
+        .context("Bundled variants-manifest.json failed to parse — this is a build defect")?;
+
+    let entry = manifest.find(variant.as_str()).with_context(|| {
+        format!(
+            "Variant `{variant}` is not listed in the bundled variants manifest. \
+             Known entries: {}",
+            manifest
+                .variants
+                .iter()
+                .map(|v| v.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })?;
+
+    if !manifest.is_ready() {
+        bail!(
+            "Bundled variants-manifest.json still has `<populated-by-ci>` sha256 placeholders. \
+             The CUDA build workflow (`.github/workflows/build-llamacpp-cuda.yml`) has not yet been \
+             dispatched, or the manifest has not been updated with the published shas. \
+             Refusing to download an unverified tarball.\n  \
+             Maintainer: dispatch the workflow, then paste each `<tarball>.sha256` value into \
+             `data/engines/llamacpp/variants-manifest.json` and rebuild."
+        );
+    }
+
+    let install_dir = variant_install_dir(data_dir, variant);
+    if let Some(installed_tag) = read_installed_tag(&install_dir)
+        && installed_tag == manifest.llamacpp_tag
+    {
+        let binary_path = install_dir.join(variant_binary_name(profile));
+        info!(
+            engine = "llamacpp",
+            variant = %variant,
+            tag = %installed_tag,
+            path = %install_dir.display(),
+            "Variant already installed at requested tag — skipping download"
+        );
+        return Ok(VariantInstallResult {
+            engine_id: "llamacpp".to_string(),
+            variant,
+            install_dir: install_dir.clone(),
+            binary_path,
+            llamacpp_tag: installed_tag,
+            size_bytes: dir_size(&install_dir),
+        });
+    }
+
+    info!(
+        engine = "llamacpp",
+        variant = %variant,
+        tag = %manifest.llamacpp_tag,
+        url = %entry.url,
+        "Downloading llama.cpp variant"
+    );
+    println!(
+        "  ⚙ Downloading llama.cpp {} ({})",
+        variant, manifest.llamacpp_tag
+    );
+    println!("    {}", entry.url);
+
+    // Stage download in a tmp dir, hash on the fly, then atomically move
+    // the extracted payload into place. Failure leaves the existing
+    // install (if any) untouched.
+    let staging_root = data_dir.join("engines").join("llamacpp").join("staging");
+    std::fs::create_dir_all(&staging_root)
+        .context("Failed to create variant staging directory")?;
+    let archive_path = staging_root.join(format!("{}.tar.gz", variant.as_str()));
+
+    download_with_sha256(&entry.url, &archive_path, &entry.sha256).await?;
+
+    let extract_root = staging_root.join(format!("{}-extract", variant.as_str()));
+    let _ = std::fs::remove_dir_all(&extract_root);
+    std::fs::create_dir_all(&extract_root)?;
+    extract_archive(&archive_path, &extract_root, profile).await?;
+
+    // The tarball wraps a single top-level dir
+    // (`lmforge-llamacpp-<tag>-<variant>-linux-x64/`). Find it.
+    let inner = find_single_subdir(&extract_root)
+        .context("Tarball layout unexpected — no single top-level directory found")?;
+
+    // Replace any existing install atomically-ish: remove + rename.
+    let _ = std::fs::remove_dir_all(&install_dir);
+    if let Some(parent) = install_dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::rename(&inner, &install_dir).with_context(|| {
+        format!(
+            "Failed to move extracted variant into place: {} → {}",
+            inner.display(),
+            install_dir.display()
+        )
+    })?;
+
+    // Make every binary executable (the tarball preserves mode but
+    // belt-and-suspenders for ZIP / extracted-via-PowerShell paths).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for name in ["llama-server", "llama-cli", "llama-bench", "llama-quantize"] {
+            let p = install_dir.join(name);
+            if let Ok(meta) = std::fs::metadata(&p) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o755);
+                let _ = std::fs::set_permissions(&p, perms);
+            }
+        }
+    }
+
+    // Cleanup staging.
+    let _ = std::fs::remove_file(&archive_path);
+    let _ = std::fs::remove_dir_all(&extract_root);
+
+    let binary_path = install_dir.join(variant_binary_name(profile));
+    let size_bytes = dir_size(&install_dir);
+
+    println!(
+        "  ✓ llama.cpp {} installed at {} ({} MB)",
+        variant,
+        install_dir.display(),
+        size_bytes / (1024 * 1024)
+    );
+
+    Ok(VariantInstallResult {
+        engine_id: "llamacpp".to_string(),
+        variant,
+        install_dir,
+        binary_path,
+        llamacpp_tag: manifest.llamacpp_tag,
+        size_bytes,
+    })
+}
+
+/// Where a specific variant lives on disk:
+/// `<data_dir>/engines/llamacpp/variants/<id>/`.
+pub fn variant_install_dir(
+    data_dir: &std::path::Path,
+    variant: crate::engine::variant::LlamaVariant,
+) -> std::path::PathBuf {
+    data_dir
+        .join("engines")
+        .join("llamacpp")
+        .join("variants")
+        .join(variant.as_str())
+}
+
+/// True when a complete variant install exists at `variant_install_dir` —
+/// i.e. the marker `llama-server` binary is present. Used by
+/// `lmforge engine list` and the variant selector to fill `VariantState`.
+pub fn variant_installed(
+    data_dir: &std::path::Path,
+    variant: crate::engine::variant::LlamaVariant,
+    profile: &HardwareProfile,
+) -> bool {
+    variant_install_dir(data_dir, variant)
+        .join(variant_binary_name(profile))
+        .is_file()
+}
+
+fn variant_binary_name(profile: &HardwareProfile) -> &'static str {
+    if profile.os == Os::Windows {
+        "llama-server.exe"
+    } else {
+        "llama-server"
+    }
+}
+
+/// Read `VERSION` from a variant install, returning the `llamacpp_tag`
+/// line value when present. Used for idempotency in `install_variant`.
+fn read_installed_tag(install_dir: &std::path::Path) -> Option<String> {
+    let content = std::fs::read_to_string(install_dir.join("VERSION")).ok()?;
+    for line in content.lines() {
+        if let Some(v) = line.strip_prefix("llamacpp_tag=") {
+            return Some(v.trim().to_string());
+        }
+    }
+    None
+}
+
+/// Recursive size of a directory, in bytes. Returns 0 on read errors so
+/// the caller can still print a result.
+fn dir_size(dir: &std::path::Path) -> u64 {
+    let mut total: u64 = 0;
+    let walker = match std::fs::read_dir(dir) {
+        Ok(w) => w,
+        Err(_) => return 0,
+    };
+    for entry in walker.flatten() {
+        if let Ok(meta) = entry.metadata() {
+            if meta.is_file() {
+                total += meta.len();
+            } else if meta.is_dir() {
+                total += dir_size(&entry.path());
+            }
+        }
+    }
+    total
+}
+
+/// Find the single subdirectory of `parent` (the tarball convention is
+/// one top-level directory). Returns its full path. Errors when there's
+/// not exactly one subdirectory — that means the tarball layout changed
+/// or the extraction failed.
+fn find_single_subdir(parent: &std::path::Path) -> Result<std::path::PathBuf> {
+    let mut dirs: Vec<std::path::PathBuf> = std::fs::read_dir(parent)
+        .with_context(|| format!("Cannot read extracted tarball at {}", parent.display()))?
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            if p.is_dir() { Some(p) } else { None }
+        })
+        .collect();
+    match dirs.len() {
+        1 => Ok(dirs.pop().unwrap()),
+        n => bail!(
+            "Expected 1 top-level directory in tarball, found {} at {}",
+            n,
+            parent.display()
+        ),
+    }
+}
+
+/// Streaming download + on-the-fly sha256 verification. Mirrors the
+/// pattern in `crate::engine::uv::download_with_sha256` but lives here so
+/// the variant installer doesn't pull in the uv module's other helpers.
+async fn download_with_sha256(
+    url: &str,
+    dest: &std::path::Path,
+    expected_hex: &str,
+) -> Result<()> {
+    use futures::StreamExt;
+    use indicatif::{ProgressBar, ProgressStyle};
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(1800))
+        .build()?;
+
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("Failed to start download: {url}"))?;
+
+    if !resp.status().is_success() {
+        bail!(
+            "Variant download failed: HTTP {} at {}",
+            resp.status(),
+            url
+        );
+    }
+
+    let total_size = resp.content_length().unwrap_or(0);
+    let pb = ProgressBar::new(total_size);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("    [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+            .unwrap()
+            .progress_chars("█▓░"),
+    );
+
+    let mut file = std::fs::File::create(dest)
+        .with_context(|| format!("Cannot create {}", dest.display()))?;
+    let mut stream = resp.bytes_stream();
+    let mut hasher = Sha256::new();
+    let mut got: u64 = 0;
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.context("Network error mid-download")?;
+        hasher.update(&bytes);
+        file.write_all(&bytes)?;
+        got += bytes.len() as u64;
+        pb.set_position(got);
+    }
+    pb.finish_and_clear();
+
+    let actual_hex = format!("{:x}", hasher.finalize());
+    if !actual_hex.eq_ignore_ascii_case(expected_hex) {
+        let _ = std::fs::remove_file(dest);
+        bail!(
+            "Checksum mismatch for {url}\n  expected: {expected_hex}\n  actual:   {actual_hex}\n\
+             The release tarball may have been re-published — open an issue at \
+             https://github.com/phoenixtb/lmforge/issues."
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
