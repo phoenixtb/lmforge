@@ -112,7 +112,7 @@ jobs:
             -DCMAKE_CUDA_ARCHITECTURES="${{ matrix.archs }}" \
             -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath,'\$ORIGIN/lib'"
           cmake --build build -j"$(nproc)" \
-            --target llama-server llama-cli llama-bench llama-quantize gguf-dump
+            --target llama-server llama-cli llama-bench llama-quantize
 
       - name: Stage tarball (bundle CUDA libs + RPATH)
         working-directory: llama.cpp
@@ -126,12 +126,12 @@ jobs:
           mkdir -p "$out/lib"
 
           # Copy binaries
-          for bin in llama-server llama-cli llama-bench llama-quantize gguf-dump; do
+          for bin in llama-server llama-cli llama-bench llama-quantize; do
             cp "build/bin/${bin}" "$out/${bin}"
           done
 
           # Strip BEFORE patchelf — strip can wipe RPATH on some toolchains.
-          strip "$out"/llama-* "$out"/gguf-dump
+          strip "$out"/llama-*
 
           # Bundle CUDA runtime libs (real file, not symlink).
           for so in "${{ matrix.cudart_so }}" "${{ matrix.cublas_so }}" "${{ matrix.cublaslt_so }}"; do
