@@ -74,9 +74,12 @@ jobs:
 
       - name: Install build deps (rockylinux 8 base)
         run: |
+          # EPEL ships `ninja-build` and `patchelf` — neither are in the
+          # default Rocky 8 repos. Install EPEL first, then the toolchain.
+          dnf -y install epel-release
           dnf -y install \
             git cmake ninja-build gcc-toolset-12 \
-            libcurl-devel patchelf tar gzip findutils
+            libcurl-devel patchelf tar gzip findutils which
 
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
