@@ -1,23 +1,38 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
 #  bundle-llamacpp.sh — Stage llama.cpp prebuilt binaries for the LMForge
-#                      release tarball.
+#                      release tarballs.
 #
 #  Pulls platform-specific archives from the upstream ggml-org/llama.cpp
 #  release page, SHA256-verifies each against `data/engines/llamacpp/SHA256SUMS`,
-#  extracts the `llama-server` binary (+ on Windows CUDA, the `cudart` DLLs),
-#  and stages them under `dist/bundled/llamacpp/<platform>/`.
+#  extracts the `llama-server` binary, and stages it under
+#  `dist/bundled/llamacpp/<platform>/`.
 #
-#  Release CI runs this once per LMForge release. The staged tree is folded
-#  into the GitHub release tarball alongside the `lmforge` binary, so end
-#  users get a working chat-tier engine without a network fetch at install
-#  time.
+#  Release CI calls this once per build-core matrix entry. The staged tree is
+#  folded into the final release archive (alongside the `lmforge` binary) so
+#  end users get a working default-tier engine without a network fetch at
+#  install time.
+#
+#  PLATFORMS (4)
+#    linux-x64-gpu      Vulkan build — works on NVIDIA + AMD + Intel iGPU
+#    linux-x64-cpu      CPU-only, smaller
+#    windows-x64-gpu    Vulkan build — works on NVIDIA + AMD + Intel iGPU
+#    windows-x64-cpu    CPU-only
+#
+#  NOT BUNDLED (intentional)
+#    macos-arm64        Apple Silicon uses MLX (omlx) as the default engine,
+#                       not llama.cpp. No bundle needed.
+#    linux-arm64        Upstream ships this; could be added later if demand
+#                       arises. Out of scope for v0.3.
+#    windows-cuda       Vulkan covers NVIDIA on Windows without the ~400 MB
+#                       cudart DLL payload. NVIDIA-specific CUDA path can
+#                       become an opt-in tier if peak perf is ever needed.
 #
 #  USAGE
-#    scripts/bundle-llamacpp.sh                     # all platforms, version pinned in engines.toml
-#    scripts/bundle-llamacpp.sh --version b9351     # override version
-#    scripts/bundle-llamacpp.sh --platform linux-x64-cuda   # one platform only
-#    scripts/bundle-llamacpp.sh --refresh-sums      # recompute SHA256SUMS (use sparingly)
+#    scripts/bundle-llamacpp.sh                            # all 4 platforms
+#    scripts/bundle-llamacpp.sh --version b9351            # override version
+#    scripts/bundle-llamacpp.sh --platform linux-x64-gpu   # one platform only
+#    scripts/bundle-llamacpp.sh --refresh-sums             # recompute SHA256SUMS
 #
 #  EXIT CODES
 #    0    everything staged + verified
@@ -33,39 +48,25 @@ ENGINES_TOML="${ROOT}/data/engines.toml"
 SUMS_FILE="${ROOT}/data/engines/llamacpp/SHA256SUMS"
 DIST_DIR="${ROOT}/dist/bundled/llamacpp"
 
-VERSION=""             # resolved below
+VERSION=""             # resolved from engines.toml if not given
 PLATFORM_FILTER=""     # empty = all
 REFRESH_SUMS=0
 
 ALL_PLATFORMS=(
-    "linux-x64-cuda"
+    "linux-x64-gpu"
     "linux-x64-cpu"
-    "windows-x64-cuda"
+    "windows-x64-gpu"
     "windows-x64-cpu"
-    "macos-arm64-metal"
 )
 
-# Map our platform tag → upstream asset name (without extension).
+# Map our platform tag → upstream asset filename.
 asset_for_platform() {
-    local p="$1"
-    case "$p" in
-        # Linux upstream releases no longer ship CUDA prebuilts (dropped around
-        # b8370). Vulkan is the GPU path on Linux; covers NVIDIA + AMD + Intel.
-        linux-x64-cuda)     echo "llama-${VERSION}-bin-ubuntu-vulkan-x64.tar.gz" ;;
-        linux-x64-cpu)      echo "llama-${VERSION}-bin-ubuntu-x64.tar.gz" ;;
-        # Windows CUDA: upstream ships a 12.4 and a 13.1 variant.
-        # We bundle BOTH so the installer can pick at runtime (per driver).
-        windows-x64-cuda)   echo "llama-${VERSION}-bin-win-cuda-12.4-x64.zip" ;;  # paired w/ 13.1 below
-        windows-x64-cpu)    echo "llama-${VERSION}-bin-win-cpu-x64.zip" ;;
-        macos-arm64-metal)  echo "llama-${VERSION}-bin-macos-arm64.tar.gz" ;;
-        *) return 1 ;;
-    esac
-}
-
-cudart_for_platform() {
     case "$1" in
-        windows-x64-cuda) echo "cudart-llama-bin-win-cuda-12.4-x64.zip" ;;
-        *) echo "" ;;
+        linux-x64-gpu)     echo "llama-${VERSION}-bin-ubuntu-vulkan-x64.tar.gz" ;;
+        linux-x64-cpu)     echo "llama-${VERSION}-bin-ubuntu-x64.tar.gz" ;;
+        windows-x64-gpu)   echo "llama-${VERSION}-bin-win-vulkan-x64.zip" ;;
+        windows-x64-cpu)   echo "llama-${VERSION}-bin-win-cpu-x64.zip" ;;
+        *) return 1 ;;
     esac
 }
 
@@ -92,14 +93,19 @@ done
 
 # ── Resolve version from engines.toml if not given ───────────────────────────
 if [[ -z "$VERSION" ]]; then
-    # Reads the first `version = "..."` line inside the llamacpp [[engine]] block.
+    # Reads the `version = "..."` line inside the llamacpp [[engine]] block.
+    # The awk state machine: every [[engine]] header resets the in-block flag;
+    # an `id = "llamacpp"` line latches it on; the next matching `version = "..."`
+    # gets captured. `match` + `substr` avoid the greedy gsub trap of stripping
+    # both quoted segments from the line.
     VERSION=$(awk '
-        /^\[\[engine\]\]/        { in_block = 0 }
-        /id[[:space:]]*=[[:space:]]*"llamacpp"/ { in_block = 1 }
-        in_block && /^version[[:space:]]*=/ {
-            gsub(/[^"]*"|"[[:space:]]*$/, "", $0)
-            print $0
-            exit
+        /^\[\[engine\]\]/                         { in_block = 0 }
+        /^id[[:space:]]*=[[:space:]]*"llamacpp"/  { in_block = 1 }
+        in_block && /^version[[:space:]]*=[[:space:]]*"/ {
+            if (match($0, /"[^"]+"/)) {
+                print substr($0, RSTART + 1, RLENGTH - 2)
+                exit
+            }
         }
     ' "$ENGINES_TOML")
     [[ -n "$VERSION" ]] || error "Could not infer version from engines.toml; pass --version explicitly" 4
@@ -147,7 +153,7 @@ verify_sha() {
     fi
 }
 
-# Build a temp manifest in refresh mode and overwrite SUMS at the end.
+# Accumulate sums in refresh mode; commit atomically at the end.
 TMP_NEW_SUMS="$(mktemp)"
 trap 'rm -f "$TMP_NEW_SUMS"' EXIT
 
@@ -179,27 +185,7 @@ for platform in "${PLATFORMS[@]}"; do
     fi
     info "Hash OK"
 
-    # Windows CUDA: also pull the cudart DLL companion archive.
-    cudart=$(cudart_for_platform "$platform")
-    if [[ -n "$cudart" ]]; then
-        cudart_url="https://github.com/ggml-org/llama.cpp/releases/download/${VERSION}/${cudart}"
-        cudart_path="${work}/${cudart}"
-        echo "  cudart: ${cudart}"
-        if ! curl -fSL --progress-bar "$cudart_url" -o "$cudart_path"; then
-            error "Download failed: $cudart_url" 3
-        fi
-        cudart_expected=""
-        if [[ -f "$SUMS_FILE" && "$REFRESH_SUMS" != "1" ]]; then
-            cudart_expected=$(awk -v want="$cudart" '$2 == want {print $1; exit}' "$SUMS_FILE")
-        fi
-        new_cudart_sum=$(verify_sha "$cudart_path" "$cudart_expected")
-        if [[ "$REFRESH_SUMS" == "1" || -z "$cudart_expected" ]]; then
-            echo "$new_cudart_sum" >> "$TMP_NEW_SUMS"
-        fi
-        info "cudart hash OK"
-    fi
-
-    # Extract and stage. Only the `llama-server` binary (plus DLLs on Win-CUDA).
+    # Extract and stage. Only the `llama-server` binary.
     extract_dir="${work}/extract"
     mkdir -p "$extract_dir"
     case "$archive" in
@@ -207,29 +193,52 @@ for platform in "${PLATFORMS[@]}"; do
         *.zip)    unzip -q "$archive" -d "$extract_dir" ;;
         *) error "Unknown archive type: $archive" 3 ;;
     esac
-    if [[ -n "$cudart" ]]; then
-        unzip -qo "${work}/${cudart}" -d "$extract_dir"
-    fi
 
     binary_name="llama-server"
     case "$platform" in *windows*) binary_name="llama-server.exe" ;; esac
 
     found=$(find "$extract_dir" -type f -name "$binary_name" | head -n 1 || true)
     [[ -n "$found" ]] || error "$binary_name not found inside $asset" 3
+    upstream_root="$(dirname "$found")"
 
     stage_dir="${DIST_DIR}/${platform}"
     rm -rf "$stage_dir"
     mkdir -p "$stage_dir"
-    cp "$found" "$stage_dir/"
-    chmod +x "$stage_dir/$binary_name" || true
 
-    # On Windows CUDA, ship all DLLs alongside the binary so the runtime works
-    # without requiring a separately-installed CUDA toolkit.
-    if [[ -n "$cudart" ]]; then
-        find "$extract_dir" -type f -iname '*.dll' -exec cp -n {} "$stage_dir/" \;
-    fi
+    # Starting around b8800+, upstream split `llama-server` into a ~20 KB
+    # wrapper that dlopens `libllama-server-impl.{so,dll}` plus ~40 sibling
+    # shared libs (libggml, libggml-cpu-*, libggml-vulkan, libllama, libmtmd,
+    # libllama-common). All of them MUST be staged next to `llama-server` or
+    # it dies on startup with "cannot open shared object file".
+    #
+    # We copy the whole upstream layout, then prune CLI tooling we don't ship
+    # (llama-bench, llama-cli, llama-imatrix, etc.) to keep the bundle lean.
+    # The system Vulkan loader (libvulkan.so.1 / vulkan-1.dll) still has to
+    # come from the user's GPU driver install — that's by design.
+    cp -P "$upstream_root"/* "$stage_dir/" 2>/dev/null || true
 
-    info "Staged → ${stage_dir}/${binary_name}"
+    # Prune CLI binaries we never invoke from lmforge. Leaves llama-server
+    # and the libs it dlopens.
+    case "$platform" in
+        *windows*)
+            find "$stage_dir" -maxdepth 1 -type f \
+                \( -iname 'llama-*.exe' ! -iname 'llama-server.exe' \) -delete
+            ;;
+        *)
+            find "$stage_dir" -maxdepth 1 -type f -executable \
+                \( -name 'llama-*' ! -name 'llama-server' ! -name 'lib*' \) -delete
+            # Also remove standalone helper binaries that aren't llama-*-named.
+            for extra in rpc-server llama; do
+                [[ -f "$stage_dir/$extra" ]] && rm -f "$stage_dir/$extra"
+            done
+            ;;
+    esac
+
+    chmod +x "$stage_dir/$binary_name" 2>/dev/null || true
+
+    size=$(du -sh "$stage_dir" | awk '{print $1}')
+    file_count=$(find "$stage_dir" -maxdepth 1 -type f | wc -l)
+    info "Staged → ${stage_dir} (${size}, ${file_count} files)"
 done
 
 # Promote refreshed sums atomically.

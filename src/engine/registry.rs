@@ -128,10 +128,6 @@ pub struct EngineConfig {
     pub release_url: Option<String>,
     #[serde(default)]
     pub asset_pattern: Option<String>,
-    /// Windows only: pattern for the CUDA runtime DLL zip (e.g. "cudart-llama-bin-win-{cuda_variant}")
-    /// Must be downloaded alongside the main binary zip and extracted to the same directory.
-    #[serde(default)]
-    pub cudart_pattern: Option<String>,
 
     // ── Runtime ───────────────────────────────────────────────────────────
     pub model_format: String,

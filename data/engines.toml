@@ -99,16 +99,16 @@ name            = "llama.cpp"
 #   scripts/bundle-llamacpp.sh --refresh-sums
 version         = "b9351"
 tier            = "default"
-supported_os_families = ["linux", "windows-native", "windows-wsl2", "darwin"]
+# macOS intentionally omitted — Apple Silicon uses omlx (MLX) as default.
+# Bundled GPU variants use upstream's Vulkan build (covers NVIDIA + AMD + Intel
+# on both Linux and Windows in a single binary; no cudart dependency).
+supported_os_families = ["linux", "windows-native", "windows-wsl2"]
 matches_fallback = true
 install_method  = "binary"
 binary          = "llama-server"
 release_url     = "https://github.com/ggml-org/llama.cpp/releases/download/b9351"
 # {platform} is resolved by the installer; extension (.tar.gz or .zip) is appended by OS
 asset_pattern   = "llama-b9351-bin-{platform}"
-# Windows CUDA builds also require the CUDA runtime DLL package (downloaded separately).
-# Upstream filename pattern: cudart-llama-bin-win-cuda-<variant>-x64.zip
-cudart_pattern  = "cudart-llama-bin-win-cuda-{cuda_variant}-x64"
 model_format    = "gguf"
 hf_org          = "bartowski"
 start_cmd       = "llama-server"

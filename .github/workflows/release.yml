@@ -21,31 +21,68 @@ env:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
-  #  Core binary — one job per platform/arch
+  #  Core bundles — one job per (platform × gpu/cpu variant).
+  #
+  #  Each job:
+  #    1. Builds the `lmforge` Rust binary for its target.
+  #    2. Stages a matching `llama-server` from upstream llama.cpp into the
+  #       same directory (via scripts/bundle-llamacpp.sh).
+  #    3. Tarballs (Linux/macOS) or zips (Windows) the staged tree.
+  #
+  #  macOS does NOT bundle llama.cpp — Apple Silicon's default engine is omlx
+  #  (MLX). The macOS bundle ships `lmforge` alone; `lmforge init` pulls MLX
+  #  at first run via uv.
+  #
+  #  Linux ARM64 is intentionally out of scope for the bundled-5 release.
+  #  Upstream ships ARM64 builds (Vulkan + CPU), so we can add it later if
+  #  there's demand — kept as a future expansion path.
   # ─────────────────────────────────────────────────────────────────────────────
   build-core:
-    name: Core — ${{ matrix.asset_name }}
+    name: Core — ${{ matrix.asset_basename }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14           # Apple Silicon runner
-            target: aarch64-apple-darwin
-            asset_name: lmforge-macos-arm64
-
+          # Linux x86_64 — GPU (Vulkan: NVIDIA + AMD + Intel iGPU)
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            asset_name: lmforge-linux-x86_64
+            asset_basename: lmforge-linux-x64
+            archive_format: tar.gz
+            bundle_platform: linux-x64-gpu
+            binary_ext: ""
 
+          # Linux x86_64 — CPU only
           - os: ubuntu-22.04
-            target: aarch64-unknown-linux-gnu
-            asset_name: lmforge-linux-arm64
-            cross: true
+            target: x86_64-unknown-linux-gnu
+            asset_basename: lmforge-linux-x64-cpu
+            archive_format: tar.gz
+            bundle_platform: linux-x64-cpu
+            binary_ext: ""
 
+          # Windows x86_64 — GPU (Vulkan: NVIDIA + AMD + Intel iGPU)
           - os: windows-2022
             target: x86_64-pc-windows-msvc
-            asset_name: lmforge-windows-x86_64.exe
+            asset_basename: lmforge-windows-x64
+            archive_format: zip
+            bundle_platform: windows-x64-gpu
+            binary_ext: ".exe"
+
+          # Windows x86_64 — CPU only
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            asset_basename: lmforge-windows-x64-cpu
+            archive_format: zip
+            bundle_platform: windows-x64-cpu
+            binary_ext: ".exe"
+
+          # macOS Apple Silicon — no llama.cpp bundle (uses MLX/omlx instead)
+          - os: macos-14
+            target: aarch64-apple-darwin
+            asset_basename: lmforge-macos-arm64
+            archive_format: tar.gz
+            bundle_platform: ""        # empty → skip bundle-llamacpp.sh
+            binary_ext: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -67,37 +104,87 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y pkg-config libssl-dev
 
-      - name: Install cross (for Linux ARM64)
-        if: matrix.cross == true
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Build (native)
-        if: matrix.cross != true
+      - name: Build lmforge
         run: cargo build --release --bin lmforge --target ${{ matrix.target }}
 
-      - name: Build (cross)
-        if: matrix.cross == true
-        run: cross build --release --bin lmforge --target ${{ matrix.target }}
-
-      - name: Rename artifact (Unix)
+      # ─────────────────────────────────────────────────────────────────────
+      #  Stage `lmforge` + (optionally) `llama-server` into dist/<name>/
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Stage bundle (Unix)
         if: runner.os != 'Windows'
+        shell: bash
         run: |
-          cp target/${{ matrix.target }}/release/lmforge ${{ matrix.asset_name }}
-          chmod +x ${{ matrix.asset_name }}
+          STAGE="dist/${{ matrix.asset_basename }}"
+          mkdir -p "$STAGE"
+          cp "target/${{ matrix.target }}/release/lmforge" "$STAGE/lmforge"
+          chmod +x "$STAGE/lmforge"
 
-      - name: Rename artifact (Windows)
+          # macOS skips llama.cpp bundling (omlx is the default engine on Apple Silicon).
+          if [ -n "${{ matrix.bundle_platform }}" ]; then
+            scripts/bundle-llamacpp.sh --platform "${{ matrix.bundle_platform }}"
+            # Copy llama-server + its ~40 sibling shared libs (libllama-server-impl,
+            # libggml-*, libllama, libmtmd, libllama-common, etc.) — required since
+            # b8800+ split llama-server into a thin wrapper + dlopen'd impl libs.
+            cp -P "dist/bundled/llamacpp/${{ matrix.bundle_platform }}"/* "$STAGE/"
+            chmod +x "$STAGE/llama-server"
+          fi
+
+          echo "--- staged tree ---"
+          ls -lah "$STAGE" | head -20
+          echo "  ... ($(find "$STAGE" -maxdepth 1 -type f | wc -l) files total)"
+
+      - name: Stage bundle (Windows)
         if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          STAGE="dist/${{ matrix.asset_basename }}"
+          mkdir -p "$STAGE"
+          cp "target/${{ matrix.target }}/release/lmforge.exe" "$STAGE/lmforge.exe"
+
+          if [ -n "${{ matrix.bundle_platform }}" ]; then
+            scripts/bundle-llamacpp.sh --platform "${{ matrix.bundle_platform }}"
+            # Copy llama-server.exe + its .dll companions (ggml-*.dll, llama.dll,
+            # llama-server-impl.dll, etc.). Same dlopen-split situation as Linux.
+            cp -P "dist/bundled/llamacpp/${{ matrix.bundle_platform }}"/* "$STAGE/"
+          fi
+
+          echo "--- staged tree ---"
+          ls -lah "$STAGE" | head -20
+          echo "  ... ($(find "$STAGE" -maxdepth 1 -type f | wc -l) files total)"
+
+      # ─────────────────────────────────────────────────────────────────────
+      #  Archive the staged tree.
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Archive (tar.gz)
+        if: matrix.archive_format == 'tar.gz'
+        shell: bash
+        run: |
+          cd dist
+          tar -czf "${{ matrix.asset_basename }}.tar.gz" "${{ matrix.asset_basename }}"
+          ls -lah "${{ matrix.asset_basename }}.tar.gz"
+
+      - name: Archive (zip)
+        if: matrix.archive_format == 'zip'
         shell: pwsh
-        run: Copy-Item "target/${{ matrix.target }}/release/lmforge.exe" "${{ matrix.asset_name }}"
+        run: |
+          Compress-Archive `
+            -Path "dist/${{ matrix.asset_basename }}/*" `
+            -DestinationPath "dist/${{ matrix.asset_basename }}.zip"
+          Get-Item "dist/${{ matrix.asset_basename }}.zip" | Format-List Name,Length
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset_name }}
-          path: ${{ matrix.asset_name }}
+          name: ${{ matrix.asset_basename }}.${{ matrix.archive_format }}
+          path: dist/${{ matrix.asset_basename }}.${{ matrix.archive_format }}
+          if-no-files-found: error
           retention-days: 1
 
   # ─────────────────────────────────────────────────────────────────────────────
-  #  Tauri UI — macOS DMG + Linux AppImage
+  #  Tauri UI — macOS DMG + Linux AppImage + Windows NSIS .exe (UNCHANGED)
+  #
+  #  The UI is shipped as a separate, optional install. It does NOT bundle
+  #  `lmforge` or `llama-server` — install-ui.sh assumes Core has been
+  #  installed first via install-core.sh.
   # ─────────────────────────────────────────────────────────────────────────────
   build-ui:
     name: UI — ${{ matrix.platform }}
@@ -214,7 +301,7 @@ jobs:
           retention-days: 1
 
   # ─────────────────────────────────────────────────────────────────────────────
-  #  Create GitHub Release with all artifacts + install scripts
+  #  Publish GitHub Release with all artifacts + install scripts.
   # ─────────────────────────────────────────────────────────────────────────────
   release:
     name: Publish Release
@@ -243,10 +330,14 @@ jobs:
           body: |
             ## Install
 
-            ### Core (daemon + CLI)
+            ### Core (daemon + CLI + bundled llama.cpp)
             ```bash
             curl -fsSL https://github.com/${{ env.REPO }}/releases/latest/download/install-core.sh | bash
             ```
+
+            The installer auto-detects your platform and GPU, pulls the right
+            bundle (GPU/CPU × Linux/Windows/macOS), extracts it to
+            `~/.local/share/lmforge/bin/`, and symlinks `lmforge` onto your PATH.
 
             ### UI (desktop app) — install Core first
             ```bash
@@ -261,8 +352,15 @@ jobs:
             # Remove Core (stops daemon; keeps models)
             curl -fsSL https://github.com/${{ env.REPO }}/releases/latest/download/uninstall-core.sh | bash
 
-            # Remove everything including models
+            # Remove everything including models + opt-in engines
             curl -fsSL https://github.com/${{ env.REPO }}/releases/latest/download/uninstall-core.sh | bash -s -- --purge
+            ```
+
+            ### Opt-in engines (after install)
+            ```bash
+            lmforge engine list                  # see what's available + tier
+            lmforge engine install vllm          # NVIDIA, opt-in (~5 GB venv)
+            lmforge engine install tabbyapi      # NVIDIA, EXL3, opt-in (~3 GB venv)
             ```
           files: |
             artifacts/*
