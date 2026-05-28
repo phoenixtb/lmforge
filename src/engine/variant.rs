@@ -41,7 +41,8 @@ pub const CUDA13_DRIVER_MIN: (u32, u32, u32) = (590, 44, 1);
 pub enum LlamaVariant {
     /// Custom-built CUDA 12.8.1 tarball with bundled cudart / cuBLAS.
     /// Default on Linux NVIDIA when driver ≥ r570.26 and compute_cap is
-    /// in `{sm_75…sm_120}`.
+    /// in `{sm_86…sm_120}`. Pre-Ampere users (sm_75 Turing, sm_80 A100)
+    /// are routed to Vulkan.
     Cuda12,
     /// CUDA 13.1.x opt-in variant. Adds `sm_100` (B200) to the arch matrix
     /// but requires driver ≥ r590.44.01.
@@ -210,7 +211,7 @@ impl std::fmt::Display for RefuseReason {
                 Some((maj, min)) => write!(
                     f,
                     "GPU compute capability sm_{maj}{min} is outside the supported set for our CUDA builds \
-                     (sm_75..sm_120). Stay on Vulkan, or open an issue if you want sm_{maj}{min} support."
+                     (sm_86..sm_120). Stay on Vulkan, or open an issue if you want sm_{maj}{min} support."
                 ),
                 None => write!(
                     f,
