@@ -128,6 +128,13 @@ pub struct EngineConfig {
     pub release_url: Option<String>,
     #[serde(default)]
     pub asset_pattern: Option<String>,
+    /// Windows + NVIDIA only: pattern for the CUDA-runtime DLL companion zip
+    /// (upstream ships `cudart-llama-bin-win-cuda-<variant>-x64.zip`). Must be
+    /// downloaded alongside the main `win-cuda-*` zip and extracted into the
+    /// same directory or `llama-server.exe` fails with "cudart64_*.dll missing".
+    /// `{cuda_variant}` is resolved at install time from `nvidia-smi`.
+    #[serde(default)]
+    pub cudart_pattern: Option<String>,
 
     // ── Runtime ───────────────────────────────────────────────────────────
     pub model_format: String,
@@ -384,6 +391,7 @@ pub(crate) fn v1_matches(engine: &EngineConfig, profile: &HardwareProfile) -> bo
             GpuVendor::Apple => "apple",
             GpuVendor::Nvidia => "nvidia",
             GpuVendor::Amd => "amd",
+            GpuVendor::Intel => "intel",
             GpuVendor::None => "none",
         };
         if profile_gpu != required_gpu {
@@ -768,10 +776,11 @@ mod tests {
             ("omlx",     "linux-blackwell",  &linux_blackwell,  false),
             ("omlx",     "windows-native",   &windows_native,   false),
             ("omlx",     "cpu-only",         &cpu_only,         false),
-            // llamacpp — universal fallback; matches everywhere there's
-            // a workable CPU/GPU. matches_fallback=true means it's NEVER
-            // refused on hardware grounds.
-            ("llamacpp", "apple",            &apple,            true),
+            // llamacpp — universal fallback on Linux + Windows; macOS is
+            // explicitly excluded because oMLX is the default there (better
+            // perf, native Metal). matches_fallback=true within its supported
+            // OS families means it's never refused on hardware grounds.
+            ("llamacpp", "apple",            &apple,            false),
             ("llamacpp", "linux-blackwell",  &linux_blackwell,  true),
             ("llamacpp", "linux-hopper",     &linux_hopper,     true),
             ("llamacpp", "windows-native",   &windows_native,   true),
@@ -1000,9 +1009,10 @@ mod tests {
 
         let llama = registry.get("llamacpp").unwrap();
         assert_eq!(llama.tier, EngineTier::Default);
+        // darwin intentionally absent — macOS defaults to oMLX, not llama.cpp.
         assert_eq!(
             llama.supported_os_families,
-            vec!["linux", "windows-native", "windows-wsl2", "darwin"]
+            vec!["linux", "windows-native", "windows-wsl2"]
         );
     }
 

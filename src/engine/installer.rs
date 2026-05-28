@@ -678,12 +678,48 @@ async fn install_via_binary(
     // Download the main binary archive
     download_file(&download_url, &archive_path).await?;
 
+    // On Windows + NVIDIA: also pull the matching CUDA-runtime DLL companion
+    // archive. Without it, llama-server.exe fails with "cudart64_*.dll not
+    // found" at first chat. Only NVIDIA needs this — AMD and Intel iGPUs on
+    // Windows route to the Vulkan build via `resolve_platform()`.
+    let cudart_archive_path = if profile.os == Os::Windows
+        && profile.gpu_vendor == crate::hardware::probe::GpuVendor::Nvidia
+    {
+        if let Some(ref cudart_pattern) = engine.cudart_pattern {
+            let cuda_variant = detect_windows_cuda_variant();
+            let cudart_name = format!(
+                "{}.zip",
+                cudart_pattern.replace("{cuda_variant}", &cuda_variant)
+            );
+            let cudart_url = format!("{}/{}", release_url, cudart_name);
+            let cudart_path = engines_dir.join(&cudart_name);
+            println!("  ⚙ Downloading CUDA runtime DLLs ({}):", cuda_variant);
+            println!("    {}", cudart_url);
+            download_file(&cudart_url, &cudart_path).await?;
+            Some(cudart_path)
+        } else {
+            warn!(
+                "engines.toml is missing cudart_pattern for llamacpp — GPU may fail to initialize on Windows NVIDIA"
+            );
+            None
+        }
+    } else {
+        None
+    };
+
     // Extract the archive
     println!("  ⚙ Extracting...");
     let extract_dir = engines_dir.join(format!("{}-extract", engine.id));
     std::fs::create_dir_all(&extract_dir)?;
 
     extract_archive(&archive_path, &extract_dir, profile).await?;
+
+    // On Windows NVIDIA: extract cudart DLLs into the same temp extract dir
+    // so the generic copy_shared_libs_to_dir() step below picks them up
+    // alongside the upstream .dll companions.
+    if let Some(ref cudart_path) = cudart_archive_path {
+        extract_archive(cudart_path, &extract_dir, profile).await?;
+    }
 
     // Resolve the binary name (add .exe on Windows)
     let resolved_binary = if profile.os == Os::Windows {
@@ -722,6 +758,9 @@ async fn install_via_binary(
 
     // Cleanup archives and temp extract dir
     let _ = std::fs::remove_file(&archive_path);
+    if let Some(cudart_path) = cudart_archive_path {
+        let _ = std::fs::remove_file(cudart_path);
+    }
     let _ = std::fs::remove_dir_all(&extract_dir);
 
     let path = dest_path.to_string_lossy().to_string();
@@ -783,36 +822,100 @@ async fn download_file(url: &str, dest: &std::path::Path) -> Result<()> {
 
 /// Resolve the platform identifier string and file extension for a given hardware profile.
 /// Returns (platform_string, extension) e.g. ("ubuntu-vulkan-x64", "tar.gz").
-fn resolve_platform(profile: &HardwareProfile) -> Result<(String, &'static str)> {
+///
+/// Honours `LMFORGE_LLAMACPP_VARIANT` env override before consulting the
+/// hardware profile:
+///   - unset / "auto" → probe-based selection (the matrix below)
+///   - "gpu"          → force the Vulkan/CUDA build for this OS+arch
+///   - "cpu"          → force the CPU-only build
+///
+/// On Linux/Windows GPU paths, emits a soft warning when the Vulkan loader
+/// (`libvulkan.so.1` / `vulkan-1.dll`) is missing — that's a strong signal
+/// the user has a GPU but no working driver, which would crash `llama-server`
+/// on first chat with a confusing message.
+///
+/// Exposed `pub(crate)` so `cli::init` can preview the selection (and any
+/// preflight warnings) before the download starts.
+pub(crate) fn resolve_platform(profile: &HardwareProfile) -> Result<(String, &'static str)> {
+    let override_val = std::env::var("LMFORGE_LLAMACPP_VARIANT").ok();
+    resolve_platform_with_override(profile, override_val.as_deref())
+}
+
+/// Pure version of `resolve_platform` that takes the variant override
+/// explicitly. Used by tests so we don't have to mutate `LMFORGE_LLAMACPP_VARIANT`
+/// at process scope (which races with other parallel-running tests).
+fn resolve_platform_with_override(
+    profile: &HardwareProfile,
+    variant_override: Option<&str>,
+) -> Result<(String, &'static str)> {
+    let forced_gpu = variant_override
+        .is_some_and(|s| matches!(s.to_ascii_lowercase().as_str(), "gpu" | "vulkan" | "cuda"));
+    let forced_cpu = variant_override.is_some_and(|s| s.eq_ignore_ascii_case("cpu"));
+
+    // Synthesize a profile that respects the override. We only flip GPU vendor —
+    // os/arch always come from the real probe.
+    let effective_gpu = if forced_cpu {
+        crate::hardware::probe::GpuVendor::None
+    } else if forced_gpu && profile.gpu_vendor == crate::hardware::probe::GpuVendor::None {
+        // User asserts they have a GPU we didn't detect — assume Vulkan-capable.
+        // Treating it as AMD routes Windows users to Vulkan (not the cudart-needing
+        // CUDA path that would fail without nvidia-smi), which is the safer default.
+        crate::hardware::probe::GpuVendor::Amd
+    } else {
+        profile.gpu_vendor
+    };
+
     let (platform, ext) = match (profile.os, profile.arch) {
         (Os::Darwin, Arch::Aarch64) => ("macos-arm64".to_string(), "tar.gz"),
         (Os::Darwin, Arch::X86_64) => ("macos-x64".to_string(), "tar.gz"),
         (Os::Linux, Arch::X86_64) => {
-            // llama.cpp dropped the Linux CUDA pre-built binary starting ~b8370.
-            // The Vulkan binary is the GPU-accelerated option for Linux (NVIDIA/AMD/Intel).
-            // CPU-only fallback for non-GPU systems.
-            let p = if profile.gpu_vendor == crate::hardware::probe::GpuVendor::Nvidia
-                || profile.gpu_vendor == crate::hardware::probe::GpuVendor::Amd
-            {
-                "ubuntu-vulkan-x64"
-            } else {
-                "ubuntu-x64"
-            };
+            // Upstream dropped Linux CUDA prebuilts around b8370. Vulkan is the
+            // GPU-accelerated path on Linux — one binary covers NVIDIA + AMD +
+            // Intel iGPU through the system's installed Vulkan loader.
+            let p = matches!(
+                effective_gpu,
+                crate::hardware::probe::GpuVendor::Nvidia
+                    | crate::hardware::probe::GpuVendor::Amd
+                    | crate::hardware::probe::GpuVendor::Intel
+            )
+            .then_some("ubuntu-vulkan-x64")
+            .unwrap_or("ubuntu-x64");
             (p.to_string(), "tar.gz")
         }
-        (Os::Linux, Arch::Aarch64) => ("ubuntu-arm64".to_string(), "tar.gz"),
+        (Os::Linux, Arch::Aarch64) => {
+            // Mirror of x86_64: Vulkan if any GPU vendor detected, CPU otherwise.
+            // Covers AGX Orin / Jetson Nano (NVIDIA), Rockchip RK3588 with Mali
+            // (Vulkan-capable via panfrost), and AWS Graviton CPU-only boxes.
+            let p = matches!(
+                effective_gpu,
+                crate::hardware::probe::GpuVendor::Nvidia
+                    | crate::hardware::probe::GpuVendor::Amd
+                    | crate::hardware::probe::GpuVendor::Intel
+            )
+            .then_some("ubuntu-vulkan-arm64")
+            .unwrap_or("ubuntu-arm64");
+            (p.to_string(), "tar.gz")
+        }
         (Os::Windows, Arch::X86_64) => {
-            // Windows GPU = Vulkan (covers NVIDIA + AMD + Intel iGPU in one binary,
-            // no cudart DLL payload required). CPU-only fallback when no GPU is
-            // detected at probe time.
-            let p = if profile.gpu_vendor == crate::hardware::probe::GpuVendor::Nvidia
-                || profile.gpu_vendor == crate::hardware::probe::GpuVendor::Amd
-            {
-                "win-vulkan-x64"
-            } else {
-                "win-cpu-x64"
+            // Windows variant matrix:
+            //   NVIDIA  → CUDA build (peak perf; needs cudart-* DLL companion)
+            //   AMD     → Vulkan (HIP exists but is heavy + opt-in territory)
+            //   Intel   → Vulkan (covers Iris/UHD iGPUs and discrete Arc)
+            //   None    → CPU build
+            //
+            // Vulkan-on-Windows is one binary that runs on AMD + Intel + (older)
+            // NVIDIA — we route NVIDIA users to CUDA explicitly because the
+            // throughput delta is meaningful (~15–25% on consumer Ada/Blackwell).
+            let p = match effective_gpu {
+                crate::hardware::probe::GpuVendor::Nvidia => {
+                    let cuda_variant = detect_windows_cuda_variant();
+                    format!("win-cuda-{}-x64", cuda_variant)
+                }
+                crate::hardware::probe::GpuVendor::Amd
+                | crate::hardware::probe::GpuVendor::Intel => "win-vulkan-x64".to_string(),
+                _ => "win-cpu-x64".to_string(),
             };
-            (p.to_string(), "zip")
+            (p, "zip")
         }
         (Os::Windows, Arch::Aarch64) => ("win-cpu-arm64".to_string(), "zip"),
         _ => bail!(
@@ -821,7 +924,99 @@ fn resolve_platform(profile: &HardwareProfile) -> Result<(String, &'static str)>
             profile.arch
         ),
     };
+
+    // Soft preflight: if we picked a Vulkan-based GPU variant but the system
+    // Vulkan loader isn't installed, warn loudly. llama-server will otherwise
+    // crash on its first chat with "cannot find libvulkan.so.1" / "vulkan-1.dll
+    // not found", which is a far worse UX than telling the user up-front.
+    // Skip the check when the user explicitly forced GPU via env override —
+    // they presumably know what they're doing.
+    let is_vulkan_variant = platform.contains("vulkan");
+    if is_vulkan_variant && !forced_gpu && !vulkan_loader_available(profile.os) {
+        warn!(
+            "Selected GPU variant ({}) but no Vulkan loader detected on system. \
+             llama-server will fail to initialize at first chat. Install your GPU's \
+             vendor driver (NVIDIA proprietary / AMD Mesa / Intel Mesa) before using \
+             GPU mode, or set LMFORGE_LLAMACPP_VARIANT=cpu to opt out.",
+            platform
+        );
+    }
+
     Ok((platform, ext))
+}
+
+/// Probe the system for a usable Vulkan loader. Returns false when we're
+/// confident there's no Vulkan ICD available; returns true on macOS (which
+/// doesn't use the Vulkan path) and on unknown OSes (to avoid false alarms).
+fn vulkan_loader_available(os: Os) -> bool {
+    match os {
+        Os::Linux => {
+            // libvulkan.so.1 is the SONAME shipped by every loader (NVIDIA's
+            // proprietary, Mesa Vulkan, Intel Mesa-Iris, AMD AMDVLK/RADV).
+            // Check the dynamic linker cache via ldconfig; fall back to a
+            // couple of common file-system paths if ldconfig isn't available.
+            if let Ok(output) = std::process::Command::new("ldconfig").arg("-p").output()
+                && let Ok(stdout) = String::from_utf8(output.stdout)
+                && stdout.contains("libvulkan.so.1")
+            {
+                return true;
+            }
+            for p in &[
+                "/usr/lib/x86_64-linux-gnu/libvulkan.so.1",
+                "/usr/lib64/libvulkan.so.1",
+                "/usr/lib/libvulkan.so.1",
+                "/usr/lib/aarch64-linux-gnu/libvulkan.so.1",
+            ] {
+                if std::path::Path::new(p).exists() {
+                    return true;
+                }
+            }
+            false
+        }
+        Os::Windows => {
+            // vulkan-1.dll lives in System32 when any vendor driver is installed.
+            // SystemRoot is set to C:\Windows on every supported Windows release.
+            let system_root =
+                std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+            std::path::Path::new(&format!("{}\\System32\\vulkan-1.dll", system_root)).exists()
+        }
+        // Darwin uses Metal via omlx, not Vulkan; never warn for it.
+        Os::Darwin | Os::Unknown => true,
+    }
+}
+
+/// Detect the CUDA runtime version reported by the NVIDIA driver and map it
+/// to one of upstream llama.cpp's Windows CUDA variants. Upstream ships two
+/// variants at b9351:
+///   - `win-cuda-12.4-x64` (CUDA 12.x systems)
+///   - `win-cuda-13.1-x64` (CUDA 13.x systems)
+///
+/// We pick by the driver-reported runtime version. Default = 12.4 (safer
+/// floor — older driver releases are far more common on consumer cards).
+fn detect_windows_cuda_variant() -> String {
+    if let Ok(output) = std::process::Command::new("nvidia-smi").output()
+        && let Ok(stdout) = String::from_utf8(output.stdout)
+    {
+        for line in stdout.lines() {
+            if let Some(idx) = line.find("CUDA Version:") {
+                let ver_str = line[idx + 13..].trim();
+                let major: u32 = ver_str
+                    .split('.')
+                    .next()
+                    .unwrap_or("12")
+                    .parse()
+                    .unwrap_or(12);
+                let variant = if major >= 13 { "13.1" } else { "12.4" };
+                debug!(
+                    cuda_version = ver_str,
+                    variant, "Detected Windows CUDA variant"
+                );
+                return variant.to_string();
+            }
+        }
+    }
+    warn!("Could not detect CUDA version via nvidia-smi; defaulting to CUDA 12.4 variant");
+    "12.4".to_string()
 }
 
 /// Extract an archive (.tar.gz or .zip) into the target directory.
@@ -1234,56 +1429,263 @@ mod tests {
         assert!(!is_shared_lib("libllama.dylib", Os::Unknown));
     }
 
-    #[test]
-    fn test_resolve_platform_windows_nvidia_uses_vulkan_zip() {
-        // Windows GPU path now uses upstream's Vulkan build (one binary covers
-        // NVIDIA + AMD + Intel; no cudart DLL payload required).
-        let profile = HardwareProfile {
-            os: Os::Windows,
-            arch: Arch::X86_64,
-            gpu_vendor: crate::hardware::probe::GpuVendor::Nvidia,
-            vram_gb: 3.5,
-            total_ram_gb: 24.0,
-            cpu_cores: 20,
-            cpu_model: "12th Gen Intel Core i7-12700H".to_string(),
-            ..Default::default()
-        };
-        let (platform, ext) = resolve_platform(&profile).unwrap();
-        assert_eq!(platform, "win-vulkan-x64");
-        assert_eq!(ext, "zip");
-    }
+    // ── resolve_platform: full variant matrix ────────────────────────────
+    //
+    // Each (OS, arch, gpu) combination has exactly one expected upstream
+    // asset; these tests are the executable spec of that mapping. If we ever
+    // re-tier the engines or upstream drops/adds a variant, edit BOTH the
+    // matrix in resolve_platform and the corresponding test below.
 
-    #[test]
-    fn test_resolve_platform_windows_amd_uses_vulkan_zip() {
-        let profile = HardwareProfile {
-            os: Os::Windows,
-            arch: Arch::X86_64,
-            gpu_vendor: crate::hardware::probe::GpuVendor::Amd,
-            vram_gb: 16.0,
-            total_ram_gb: 32.0,
-            cpu_cores: 16,
-            cpu_model: "AMD Ryzen 9 7900X".to_string(),
-            ..Default::default()
-        };
-        let (platform, ext) = resolve_platform(&profile).unwrap();
-        assert_eq!(platform, "win-vulkan-x64");
-        assert_eq!(ext, "zip");
-    }
-
-    #[test]
-    fn test_resolve_platform_windows_no_gpu_uses_cpu_zip() {
-        let profile = HardwareProfile {
-            os: Os::Windows,
-            arch: Arch::X86_64,
-            gpu_vendor: crate::hardware::probe::GpuVendor::None,
-            vram_gb: 0.0,
+    fn mk(os: Os, arch: Arch, gpu: crate::hardware::probe::GpuVendor) -> HardwareProfile {
+        HardwareProfile {
+            os,
+            arch,
+            gpu_vendor: gpu,
             total_ram_gb: 16.0,
             cpu_cores: 8,
-            cpu_model: "Intel Core i5-12400".to_string(),
+            cpu_model: "synthetic test cpu".to_string(),
             ..Default::default()
-        };
-        let (platform, ext) = resolve_platform(&profile).unwrap();
-        assert_eq!(platform, "win-cpu-x64");
+        }
+    }
+
+    #[test]
+    fn resolve_platform_linux_x64_nvidia_uses_vulkan() {
+        // Linux + NVIDIA: upstream dropped CUDA prebuilts ~b8370; Vulkan is
+        // the best GPU path available.
+        let (p, ext) = resolve_platform(&mk(
+            Os::Linux,
+            Arch::X86_64,
+            crate::hardware::probe::GpuVendor::Nvidia,
+        ))
+        .unwrap();
+        assert_eq!(p, "ubuntu-vulkan-x64");
+        assert_eq!(ext, "tar.gz");
+    }
+
+    #[test]
+    fn resolve_platform_linux_x64_amd_uses_vulkan() {
+        let (p, ext) = resolve_platform(&mk(
+            Os::Linux,
+            Arch::X86_64,
+            crate::hardware::probe::GpuVendor::Amd,
+        ))
+        .unwrap();
+        assert_eq!(p, "ubuntu-vulkan-x64");
+        assert_eq!(ext, "tar.gz");
+    }
+
+    #[test]
+    fn resolve_platform_linux_x64_intel_igpu_uses_vulkan() {
+        // Intel iGPUs (Iris/Arc) are Vulkan-capable via Mesa Iris driver.
+        // Must route here rather than the CPU fallback or perf cratters.
+        let (p, ext) = resolve_platform(&mk(
+            Os::Linux,
+            Arch::X86_64,
+            crate::hardware::probe::GpuVendor::Intel,
+        ))
+        .unwrap();
+        assert_eq!(p, "ubuntu-vulkan-x64");
+        assert_eq!(ext, "tar.gz");
+    }
+
+    #[test]
+    fn resolve_platform_linux_x64_no_gpu_uses_cpu() {
+        let (p, ext) = resolve_platform(&mk(
+            Os::Linux,
+            Arch::X86_64,
+            crate::hardware::probe::GpuVendor::None,
+        ))
+        .unwrap();
+        assert_eq!(p, "ubuntu-x64");
+        assert_eq!(ext, "tar.gz");
+    }
+
+    #[test]
+    fn resolve_platform_linux_arm64_with_gpu_uses_vulkan_arm() {
+        // Jetson AGX Orin (sm_87) reports as NVIDIA on aarch64; should
+        // pull the Ubuntu ARM Vulkan build.
+        let (p, ext) = resolve_platform(&mk(
+            Os::Linux,
+            Arch::Aarch64,
+            crate::hardware::probe::GpuVendor::Nvidia,
+        ))
+        .unwrap();
+        assert_eq!(p, "ubuntu-vulkan-arm64");
+        assert_eq!(ext, "tar.gz");
+    }
+
+    #[test]
+    fn resolve_platform_linux_arm64_no_gpu_uses_cpu_arm() {
+        // AWS Graviton, RPi5 without GPU driver, etc.
+        let (p, ext) = resolve_platform(&mk(
+            Os::Linux,
+            Arch::Aarch64,
+            crate::hardware::probe::GpuVendor::None,
+        ))
+        .unwrap();
+        assert_eq!(p, "ubuntu-arm64");
+        assert_eq!(ext, "tar.gz");
+    }
+
+    #[test]
+    fn resolve_platform_windows_x64_nvidia_uses_cuda() {
+        // Windows + NVIDIA = CUDA build. cudart-* DLLs are pulled separately
+        // by the install flow (see cudart_archive_path block in `install`).
+        let (p, ext) = resolve_platform(&mk(
+            Os::Windows,
+            Arch::X86_64,
+            crate::hardware::probe::GpuVendor::Nvidia,
+        ))
+        .unwrap();
+        assert!(
+            p.starts_with("win-cuda-") && p.ends_with("-x64"),
+            "expected win-cuda-*-x64, got {}",
+            p
+        );
         assert_eq!(ext, "zip");
+    }
+
+    #[test]
+    fn resolve_platform_windows_x64_amd_uses_vulkan() {
+        // Windows + AMD = Vulkan (HIP is heavy + opt-in territory).
+        let (p, ext) = resolve_platform(&mk(
+            Os::Windows,
+            Arch::X86_64,
+            crate::hardware::probe::GpuVendor::Amd,
+        ))
+        .unwrap();
+        assert_eq!(p, "win-vulkan-x64");
+        assert_eq!(ext, "zip");
+    }
+
+    #[test]
+    fn resolve_platform_windows_x64_intel_igpu_uses_vulkan() {
+        let (p, ext) = resolve_platform(&mk(
+            Os::Windows,
+            Arch::X86_64,
+            crate::hardware::probe::GpuVendor::Intel,
+        ))
+        .unwrap();
+        assert_eq!(p, "win-vulkan-x64");
+        assert_eq!(ext, "zip");
+    }
+
+    #[test]
+    fn resolve_platform_windows_x64_no_gpu_uses_cpu() {
+        let (p, ext) = resolve_platform(&mk(
+            Os::Windows,
+            Arch::X86_64,
+            crate::hardware::probe::GpuVendor::None,
+        ))
+        .unwrap();
+        assert_eq!(p, "win-cpu-x64");
+        assert_eq!(ext, "zip");
+    }
+
+    #[test]
+    fn resolve_platform_windows_arm64_uses_cpu_arm() {
+        // Upstream ships no GPU build for ARM Windows; CPU only.
+        let (p, ext) = resolve_platform(&mk(
+            Os::Windows,
+            Arch::Aarch64,
+            crate::hardware::probe::GpuVendor::Nvidia,
+        ))
+        .unwrap();
+        assert_eq!(p, "win-cpu-arm64");
+        assert_eq!(ext, "zip");
+    }
+
+    #[test]
+    fn variant_override_auto_matches_probe_selection() {
+        // auto override (or unset) must match the no-override matrix exactly.
+        // Use the pure helper rather than mutating LMFORGE_LLAMACPP_VARIANT,
+        // since that env var is process-global and races other parallel tests.
+        let p = mk(
+            Os::Linux,
+            Arch::X86_64,
+            crate::hardware::probe::GpuVendor::Nvidia,
+        );
+        let (asset, _) = resolve_platform_with_override(&p, Some("auto")).unwrap();
+        assert_eq!(asset, "ubuntu-vulkan-x64");
+        let (asset, _) = resolve_platform_with_override(&p, None).unwrap();
+        assert_eq!(asset, "ubuntu-vulkan-x64");
+    }
+
+    #[test]
+    fn variant_override_cpu_forces_cpu_build() {
+        // cpu override must downgrade even an NVIDIA-equipped profile to the
+        // CPU build on both Linux and Windows.
+        let (asset, _) = resolve_platform_with_override(
+            &mk(
+                Os::Linux,
+                Arch::X86_64,
+                crate::hardware::probe::GpuVendor::Nvidia,
+            ),
+            Some("cpu"),
+        )
+        .unwrap();
+        assert_eq!(asset, "ubuntu-x64");
+
+        let (asset, _) = resolve_platform_with_override(
+            &mk(
+                Os::Windows,
+                Arch::X86_64,
+                crate::hardware::probe::GpuVendor::Nvidia,
+            ),
+            Some("cpu"),
+        )
+        .unwrap();
+        assert_eq!(asset, "win-cpu-x64");
+    }
+
+    #[test]
+    fn variant_override_gpu_forces_vulkan_when_no_vendor_detected() {
+        // gpu override must upgrade a vendor=None profile to a Vulkan build.
+        // On Windows specifically, the override must NOT pick CUDA — that
+        // path needs cudart DLLs which 404 without nvidia-smi at install.
+        let (asset, _) = resolve_platform_with_override(
+            &mk(
+                Os::Linux,
+                Arch::X86_64,
+                crate::hardware::probe::GpuVendor::None,
+            ),
+            Some("gpu"),
+        )
+        .unwrap();
+        assert_eq!(asset, "ubuntu-vulkan-x64");
+
+        let (asset, _) = resolve_platform_with_override(
+            &mk(
+                Os::Windows,
+                Arch::X86_64,
+                crate::hardware::probe::GpuVendor::None,
+            ),
+            Some("gpu"),
+        )
+        .unwrap();
+        assert_eq!(
+            asset, "win-vulkan-x64",
+            "gpu override on Windows must pick Vulkan, not CUDA"
+        );
+    }
+
+    #[test]
+    fn cudart_pattern_matches_upstream_asset_format() {
+        // The llama.cpp release page ships:
+        //   cudart-llama-bin-win-cuda-12.4-x64.zip
+        //   cudart-llama-bin-win-cuda-13.1-x64.zip
+        // The pattern in engines.toml must expand to those names byte-exact
+        // or Windows installs will 404 silently.
+        let registry = crate::engine::EngineRegistry::load(None).unwrap();
+        let llama = registry.get("llamacpp").expect("llamacpp engine");
+        let pattern = llama
+            .cudart_pattern
+            .as_ref()
+            .expect("cudart_pattern must be set for Windows NVIDIA installs");
+        for variant in &["12.4", "13.1"] {
+            let resolved = format!("{}.zip", pattern.replace("{cuda_variant}", variant));
+            let expected = format!("cudart-llama-bin-win-cuda-{}-x64.zip", variant);
+            assert_eq!(resolved, expected, "cudart pattern drift detected");
+        }
     }
 }

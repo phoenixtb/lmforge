@@ -345,7 +345,11 @@ fn plan_runtime(
         match gpu {
             GpuVendor::None => 0,
             GpuVendor::Apple => 99,
-            GpuVendor::Nvidia | GpuVendor::Amd => {
+            // Vulkan-capable discrete + integrated GPUs all use the same
+            // proportional-offload heuristic. Intel iGPUs share system RAM
+            // (see hardware::vram::estimate_intel_vram), so `free_vram_gb`
+            // is already a conservative shared-RAM-based number.
+            GpuVendor::Nvidia | GpuVendor::Amd | GpuVendor::Intel => {
                 // 1.0 GB compute-scratch + KV-growth headroom on top of
                 // the weights themselves (mmproj also lives in VRAM).
                 const SCRATCH_GB: f32 = 1.0;

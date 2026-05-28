@@ -21,10 +21,13 @@ isolated venvs under `~/.lmforge/engines/<id>/venv/`.
 LMForge ships three tiers (full table in
 [ADR-001](architecture/ADR-001-engine-tiers.md)):
 
-- **`default` — `llama.cpp` b9351** is bundled as a prebuilt binary. Works
-  on every Linux + NVIDIA combo including consumer Blackwell (`sm_120`).
-  No Python, no `pip`, no `nvcc`. This is what `lmforge init` selects on a
-  fresh box.
+- **`default` — `llama.cpp` b9351** is downloaded by `lmforge init` on
+  first run (~70 MB; takes 5–15 s on a warm connection). The release binary
+  itself ships naked — no engine payload — so the install script is small
+  and platform-symmetric. Works on every Linux GPU vendor: NVIDIA (including
+  consumer Blackwell `sm_120`), AMD, Intel iGPU — all via the Vulkan path.
+  CPU-only fallback is automatic on machines without a GPU. No Python, no
+  `pip`, no `nvcc` required.
 - **`opt-in` — `vllm` 0.21 and `tabbyapi` (ExLlamaV3)**. ~5 GB each, only
   installed when you explicitly run `lmforge engine install <id>`. Use
   vLLM for concurrent batching, EXL3 for fastest single-stream INT4 on
@@ -61,11 +64,29 @@ sudo apt-get install -y libwebkit2gtk-4.1-dev   # Ubuntu 24.04
 # sudo apt-get install -y libwebkitgtk-6.0-dev  # Ubuntu 26.04
 ```
 
+### Variant matrix (what `lmforge init` will fetch)
+
+| Your hardware | Asset pulled at init | Notes |
+|---|---|---|
+| Linux x86_64 + NVIDIA / AMD / Intel iGPU | `llama-b9351-bin-ubuntu-vulkan-x64.tar.gz` | Vulkan binary, one build for all GPU vendors |
+| Linux x86_64 + no GPU | `llama-b9351-bin-ubuntu-x64.tar.gz` | CPU only |
+| Linux aarch64 + any GPU | `llama-b9351-bin-ubuntu-vulkan-arm64.tar.gz` | Vulkan ARM (Jetson, Rockchip) |
+| Linux aarch64 + no GPU | `llama-b9351-bin-ubuntu-arm64.tar.gz` | CPU only |
+
+The Vulkan path requires `libvulkan.so.1` (shipped by every NVIDIA
+proprietary driver, Mesa, and Intel Mesa-Iris). `lmforge init` emits a
+loud warning if the loader is missing but proceeds with the GPU variant
+anyway (in case you're about to install drivers).
+
+Override the auto-selected variant with `LMFORGE_LLAMACPP_VARIANT={gpu,cpu}`
+before running `lmforge init` — useful for headless VMs where Vulkan isn't
+worth installing.
+
 ### CUDA toolkit (only required for `opt-in` engines)
 
-`llama.cpp` (default tier) ships its own CUDA runtime statically and has
-**no** `nvcc` requirement. Only install CUDA if you plan to opt-in to vLLM
-or TabbyAPI/ExLlamaV3 — both need `nvcc` to JIT-compile their kernels.
+`llama.cpp` (default tier) uses Vulkan on Linux and has **no** `nvcc`
+requirement. Only install CUDA if you plan to opt-in to vLLM or
+TabbyAPI/ExLlamaV3 — both need `nvcc` to JIT-compile their kernels.
 
 ```bash
 nvidia-smi                       # confirm RTX visible inside VM (driver-side)
@@ -321,10 +342,13 @@ git checkout -b release/0.2.x
 git tag -a v0.2.x -m "..." && git push origin v0.2.x
 ```
 
-Release workflow at `.github/workflows/release.yml` builds DMG/AppImage/MSI.
-Phase 6's release work (bundle script + 5 artefacts in CI) lands the
-`llama.cpp` binary alongside the LMForge binary so the default-tier path
-ships zero-Python.
+Release workflow at `.github/workflows/release.yml` builds 4 naked core
+binaries (linux x86_64, linux arm64, windows x86_64, macOS arm64) plus
+the Tauri UI bundles. The `llama.cpp` engine is **not** bundled into the
+release artifacts — it's pulled from upstream on first `lmforge init` by
+the variant matrix above. This keeps the release artifacts small (<10 MB
+per platform) and lets us track upstream `llama.cpp` releases without
+re-cutting our own.
 
 ---
 

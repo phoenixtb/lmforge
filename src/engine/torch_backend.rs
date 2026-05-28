@@ -94,6 +94,10 @@ fn derive_from_profile(profile: &HardwareProfile) -> Option<String> {
         GpuVendor::Apple => Some("cpu".to_string()), // torch on Apple uses MPS via the cpu wheel
         GpuVendor::Amd => derive_rocm(profile),
         GpuVendor::Nvidia => derive_cuda(profile),
+        // No production-grade Intel-XPU wheel for torch on Linux/Windows yet.
+        // vLLM + TabbyAPI never run on Intel iGPUs in practice anyway (the gate
+        // matrix in engines.toml already routes Intel users to llama.cpp).
+        GpuVendor::Intel => Some("cpu".to_string()),
     }
 }
 

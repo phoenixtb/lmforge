@@ -174,6 +174,7 @@ pub fn detect_engine_format(data_dir: &std::path::Path) -> String {
             "apple" => crate::hardware::probe::GpuVendor::Apple,
             "nvidia" => crate::hardware::probe::GpuVendor::Nvidia,
             "amd" => crate::hardware::probe::GpuVendor::Amd,
+            "intel" => crate::hardware::probe::GpuVendor::Intel,
             _ => crate::hardware::probe::GpuVendor::None,
         };
         return format_for_gpu_vendor(vendor);
@@ -190,7 +191,10 @@ pub fn format_for_gpu_vendor(vendor: crate::hardware::probe::GpuVendor) -> Strin
     match vendor {
         GpuVendor::Apple => "mlx".to_string(),
         // Everything else lands on llama.cpp by default → GGUF catalog.
-        GpuVendor::Nvidia | GpuVendor::Amd | GpuVendor::None => "gguf".to_string(),
+        // Intel iGPUs included; they run llama.cpp via Vulkan, same as AMD.
+        GpuVendor::Nvidia | GpuVendor::Amd | GpuVendor::Intel | GpuVendor::None => {
+            "gguf".to_string()
+        }
     }
 }
 

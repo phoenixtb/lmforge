@@ -24,6 +24,9 @@
 #   ./dev_test.sh --embed-model qwen3-embed:0.6b:8bit   override embed model
 #   ./dev_test.sh --no-embed             skip the embeddings probe
 #   ./dev_test.sh --keep-daemon          don't stop daemon after e2e (for poking)
+#   ./dev_test.sh --force-init           re-run `lmforge init` clean (~10–15 s; opt-in
+#                                         because it re-downloads ~70 MB of llama.cpp).
+#                                         Also enabled by LMFORGE_DEV_FORCE_INIT=1.
 #
 # Exit codes:
 #   0  all selected tests passed
@@ -165,6 +168,71 @@ if (( DO_INTEGRATION )); then
         else
             fail "lmforge engine install llamacpp" "$(( $(date +%s) - t0 ))" "expected no-op explanation"
         fi
+    fi
+fi
+
+# ── Phase 2.6: `lmforge init` smoke (install-at-init path) ──────────────────
+# Validates the full first-run experience: probe hardware, select engine,
+# download upstream llama.cpp, stage shared libs, copy binary. ~10–15 s on
+# a warm network, longer on cold cache. Skipped automatically when a previous
+# init has already cached the binary AND no --force-init flag was passed,
+# so daily dev runs don't re-download 70 MB every time.
+#
+# Opt-in only — guarded by --force-init or LMFORGE_DEV_FORCE_INIT=1 so CI
+# can enable it without slowing down interactive dev.
+DEV_FORCE_INIT="${LMFORGE_DEV_FORCE_INIT:-0}"
+for arg in "$@"; do
+    [[ "$arg" == "--force-init" ]] && DEV_FORCE_INIT=1
+done
+if (( DO_INTEGRATION )) && (( DEV_FORCE_INIT )); then
+    sec "init smoke (clean reinstall)"
+    LMFORGE_DATA="${LMFORGE_DATA_DIR:-$HOME/.lmforge}"
+
+    BIN="${BIN:-$REPO_ROOT/target/debug/lmforge}"
+    if [[ ! -x "$BIN" ]]; then
+        BIN="$(command -v lmforge || true)"
+    fi
+
+    if [[ -z "$BIN" || ! -x "$BIN" ]]; then
+        fail "lmforge init smoke" "0" "no binary available"
+    else
+        # Snapshot existing engines/ so we can restore if init fails. Don't
+        # touch models/ (potentially many GB).
+        SNAP="$(mktemp -d)"
+        if [[ -d "$LMFORGE_DATA/engines" ]]; then
+            mv "$LMFORGE_DATA/engines" "$SNAP/engines.bak"
+        fi
+
+        t0=$(date +%s)
+        OUT=$("$BIN" init 2>&1 || true)
+        ELAPSED=$(( $(date +%s) - t0 ))
+
+        # Required surface: probe summary, engine selection, variant line,
+        # and a successful "installed at <path>" message from installer.rs.
+        if echo "$OUT" | grep -q 'Selected:' \
+            && echo "$OUT" | grep -q 'Variant:' \
+            && echo "$OUT" | grep -q 'installed at'; then
+            pass "lmforge init (variant + install)" "$ELAPSED"
+        else
+            fail "lmforge init" "$ELAPSED" "missing Selected/Variant/installed-at lines"
+            echo "$OUT" | tail -20 | sed 's/^/    │ /'
+        fi
+
+        # llama-server binary must exist + be executable after init.
+        LS="$LMFORGE_DATA/engines/llama-server"
+        if [[ -x "$LS" ]] && "$LS" --version >/dev/null 2>&1; then
+            pass "llama-server --version" "0"
+        else
+            fail "llama-server --version" "0" "binary missing or unrunnable at $LS"
+        fi
+
+        # Cleanup: restore snapshot (test left engines/ populated; restoring
+        # avoids polluting subsequent dev runs with a half-installed state).
+        if [[ -d "$SNAP/engines.bak" ]]; then
+            rm -rf "$LMFORGE_DATA/engines"
+            mv "$SNAP/engines.bak" "$LMFORGE_DATA/engines"
+        fi
+        rm -rf "$SNAP"
     fi
 fi
 

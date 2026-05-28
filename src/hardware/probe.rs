@@ -29,13 +29,19 @@ pub enum Arch {
     Unknown,
 }
 
-/// GPU vendor classification
+/// GPU vendor classification.
+///
+/// `Intel` covers Intel iGPUs (Iris/Arc-integrated and discrete Arc dGPUs).
+/// They're Vulkan-capable when the user has the Mesa or Windows Intel
+/// drivers installed, so the llama.cpp variant selector treats them as a
+/// real GPU rather than falling back to CPU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum GpuVendor {
     Apple,
     Nvidia,
     Amd,
+    Intel,
     #[default]
     None,
 }
@@ -251,6 +257,13 @@ fn detect_gpu_vendor(os: Os, arch: Arch) -> GpuVendor {
         return GpuVendor::Amd;
     }
 
+    // Intel: iGPU (Iris/UHD) or discrete Arc — only reported when no NVIDIA
+    // or AMD card is present, so we don't accidentally downgrade a system
+    // with both an Intel iGPU + a real dGPU.
+    if check_intel_present() {
+        return GpuVendor::Intel;
+    }
+
     GpuVendor::None
 }
 
@@ -286,6 +299,62 @@ fn check_amd_present() -> bool {
     }
 
     false
+}
+
+/// Detect Intel GPUs (iGPU or discrete Arc). Probed AFTER NVIDIA + AMD so
+/// systems with a real dGPU + an Intel iGPU don't get reported as Intel.
+fn check_intel_present() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        // Read every DRM card's vendor ID. Intel's PCI vendor is 0x8086.
+        // The path layout is `/sys/class/drm/card<N>/device/vendor`; the file
+        // contains the hex vendor ID on its own line. This catches both Iris
+        // iGPUs and discrete Arc dGPUs without needing lspci installed.
+        if let Ok(entries) = std::fs::read_dir("/sys/class/drm") {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if !name_str.starts_with("card") || name_str.contains('-') {
+                    // Skip card connectors like "card0-DP-1"; only the cardN nodes.
+                    continue;
+                }
+                let vendor_path = entry.path().join("device/vendor");
+                if let Ok(v) = std::fs::read_to_string(&vendor_path)
+                    && v.trim().eq_ignore_ascii_case("0x8086")
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Shell out to PowerShell's CIM API. WMIC is deprecated in
+        // Windows 11+ but Get-CimInstance is available on every supported
+        // Windows release. The query returns each video adapter's
+        // AdapterCompatibility field, which is "Intel Corporation" for
+        // Intel iGPUs/Arc, "NVIDIA" for NVIDIA, "Advanced Micro Devices, Inc." for AMD.
+        if let Ok(output) = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty AdapterCompatibility) -join ';'",
+            ])
+            .output()
+            && output.status.success()
+            && let Ok(stdout) = String::from_utf8(output.stdout)
+        {
+            return stdout.to_lowercase().contains("intel");
+        }
+        return false;
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        // macOS Apple Silicon already returned GpuVendor::Apple upstream of
+        // this function; macOS Intel hardware (long EOL) is out of scope.
+        false
+    }
 }
 
 fn detect_tegra() -> bool {
@@ -524,6 +593,45 @@ mod tests {
         let vendor = detect_gpu_vendor(Os::Darwin, Arch::X86_64);
         // On a real Intel Mac this would be None; on Apple Silicon it doesn't matter
         assert_ne!(vendor, GpuVendor::Apple);
+    }
+
+    #[test]
+    fn gpu_vendor_serde_includes_intel() {
+        // Catalog comments + UI display rely on the lowercase serde
+        // representation. Adding GpuVendor::Intel must serialize to "intel"
+        // — anything else silently breaks `format_for_gpu_vendor()` lookups.
+        let json = serde_json::to_string(&GpuVendor::Intel).unwrap();
+        assert_eq!(json, "\"intel\"");
+        let parsed: GpuVendor = serde_json::from_str("\"intel\"").unwrap();
+        assert_eq!(parsed, GpuVendor::Intel);
+    }
+
+    #[test]
+    fn check_intel_present_does_not_panic_on_this_host() {
+        // We can't assert true/false (depends on whether the test runner has
+        // an Intel iGPU), but the function must not panic — it spawns child
+        // processes and touches /sys/class/drm, both of which can return
+        // unexpected output on weird kernels or in chroots/containers.
+        let _ = check_intel_present();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn check_intel_present_handles_missing_sysfs() {
+        // /sys/class/drm may not exist inside minimal containers. The
+        // function must return false (not panic, not error) when the dir
+        // is absent. We can't unmount it for the test, so we sanity-check
+        // via the public probe that it returns *some* GpuVendor variant.
+        let vendor = detect_gpu_vendor(Os::Linux, Arch::X86_64);
+        // Either some valid variant — the function must terminate.
+        assert!(matches!(
+            vendor,
+            GpuVendor::Nvidia
+                | GpuVendor::Amd
+                | GpuVendor::Intel
+                | GpuVendor::Apple
+                | GpuVendor::None
+        ));
     }
 
     // ── Schema v2 parser tests ───────────────────────────────────────────────

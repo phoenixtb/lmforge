@@ -23,16 +23,13 @@ done
 
 # ── Config ────────────────────────────────────────────────────────────────────
 BINARY_NAME="lmforge"
-# All locations install-core.sh might have placed the binary or symlink
+# All locations install-core.sh might have placed the binary
 INSTALL_DIRS=(
     "${HOME}/.local/bin"
     "${HOME}/.cargo/bin"
     "/usr/local/bin"
     "/opt/homebrew/bin"
 )
-# Bundle extract dir (introduced when install-core.sh switched from naked-binary
-# to platform tarballs that also ship `llama-server` + sibling shared libs).
-BUNDLE_DIR="${HOME}/.local/share/lmforge/bin"
 DATA_DIR="${HOME}/.lmforge"
 LAUNCHD_LABEL="com.lmforge.daemon"
 LAUNCHD_PLIST="${HOME}/Library/LaunchAgents/${LAUNCHD_LABEL}.plist"
@@ -108,7 +105,8 @@ section "Removing binary..."
 FOUND=false
 for dir in "${INSTALL_DIRS[@]}"; do
     bin="$dir/$BINARY_NAME"
-    # -e covers both regular files and dangling symlinks (-f follows the link).
+    # `-f` follows the symlink; `-e || -L` covers both regular files and
+    # symlinks (including dangling ones left over from earlier installs).
     if [[ -e "$bin" || -L "$bin" ]]; then
         rm -f "$bin"
         info "Removed $bin"
@@ -116,15 +114,6 @@ for dir in "${INSTALL_DIRS[@]}"; do
     fi
 done
 $FOUND || warn "lmforge binary not found in standard locations (may already be removed)"
-
-# Bundle dir holds `lmforge` + `llama-server` + ~40 sibling .so/.dll files.
-if [[ -d "$BUNDLE_DIR" ]]; then
-    BUNDLE_SIZE=$(du -sh "$BUNDLE_DIR" 2>/dev/null | cut -f1 || echo "?")
-    rm -rf "$BUNDLE_DIR"
-    info "Removed $BUNDLE_DIR ($BUNDLE_SIZE)"
-    # Clean the empty parent if nothing else lives there.
-    rmdir "${HOME}/.local/share/lmforge" 2>/dev/null || true
-fi
 
 # ── 6. Remove PATH injection lines from shell profiles ───────────────────────
 section "Cleaning up PATH entries..."

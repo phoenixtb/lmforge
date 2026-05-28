@@ -113,11 +113,20 @@ lmforge service install        # register Scheduled Task (auto-starts at logon)
 ```
 
 What the install script does on macOS/Linux:
-1. Downloads the pre-built binary for your platform/arch
+1. Downloads the pre-built `lmforge` binary for your platform/arch (~5 MB)
 2. Installs to `/usr/local/bin/lmforge`
-3. Runs `lmforge init` — detects hardware, selects and installs the right engine
+3. Runs `lmforge init` — probes hardware, pulls the matching inference engine
+   from upstream:
+   - **macOS** → oMLX (MLX on Metal) via Homebrew
+   - **Linux / Windows** → `llama.cpp` b9351; Vulkan build for any GPU
+     (NVIDIA + AMD + Intel iGPU) on Linux; CUDA build for NVIDIA on
+     Windows; CPU build for GPU-less machines. ~70 MB at first run.
 4. Registers a system service (`launchd` on macOS, `systemd --user` on Linux)
 5. Starts the daemon immediately
+
+Override the engine variant by exporting `LMFORGE_LLAMACPP_VARIANT=cpu`
+(or `=gpu`) before running `lmforge init` — useful for headless VMs and
+testing.
 
 To pin a specific version:
 ```bash

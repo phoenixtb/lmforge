@@ -56,9 +56,10 @@ Restart PowerShell so the new tools land on `PATH`.
 
 ## A.2 NVIDIA driver + CUDA toolkit (only for opt-in engines)
 
-`llama.cpp` (default) and TabbyAPI/ExLlamaV3 (opt-in) only need an NVIDIA
-driver — they don't link CUDA toolkit. Install the toolkit only if you
-plan to opt-in to **vLLM under WSL2** (Path B below). For Path A:
+`llama.cpp` (default) only needs an NVIDIA driver — the CUDA runtime DLLs
+(`cudart64_*.dll`) are pulled automatically by `lmforge init` alongside
+the engine binary. Install the CUDA *toolkit* only if you plan to opt-in
+to **vLLM under WSL2** (Path B below). For Path A:
 
 ```powershell
 nvidia-smi   # must succeed and show your RTX
@@ -66,6 +67,20 @@ nvidia-smi   # must succeed and show your RTX
 
 If `nvidia-smi` is missing, install the latest Game Ready or Studio driver
 from nvidia.com — that ships `nvidia-smi.exe`.
+
+### Variant matrix (what `lmforge init` will fetch)
+
+| Your GPU | Asset pulled at init | Notes |
+|---|---|---|
+| NVIDIA (any RTX) | `llama-b9351-bin-win-cuda-{12.4\|13.1}-x64.zip` + `cudart-llama-bin-win-cuda-*-x64.zip` | CUDA variant chosen from `nvidia-smi`-reported runtime version |
+| AMD Radeon | `llama-b9351-bin-win-vulkan-x64.zip` | Vulkan; requires `vulkan-1.dll` (shipped by AMD Adrenalin) |
+| Intel iGPU / Arc | `llama-b9351-bin-win-vulkan-x64.zip` | Vulkan; requires Intel Arc/iGPU driver |
+| No GPU | `llama-b9351-bin-win-cpu-x64.zip` | CPU only |
+
+NVIDIA Windows users get the CUDA build (15–25 % faster than Vulkan on
+consumer Ada/Blackwell). Other vendors get Vulkan. Override with
+`$env:LMFORGE_LLAMACPP_VARIANT="cpu"` before `lmforge init` if you want
+to force the CPU build.
 
 ## A.3 Toolchains
 
@@ -248,7 +263,8 @@ inside WSL2 — paths and commands are identical.
 # Hardware + driver notes
 
 - **Native Windows + RTX 50-series (`sm_120`)**: `llama.cpp` works
-  out-of-the-box because the bundled binary ships `sm_120` cubins.
+  out-of-the-box. `lmforge init` pulls the `win-cuda-13.1-x64` variant
+  (`sm_120`-capable cubins) plus the matching cudart DLLs on first run.
   TabbyAPI works via JIT-compiled kernels (`cu128`+ wheels).
 - **`sm_120` + vLLM**: only via WSL2. The hardware gate
   (`compute_cap = (12, 0)` × `os_family = "windows-native"`) refuses the

@@ -137,6 +137,21 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     );
     println!("  Format:   {}", selected.model_format);
     println!("  Install:  {}", selected.install_method);
+
+    // For binary-install engines (currently just llama.cpp), preview the exact
+    // upstream asset we're about to fetch. Lets users sanity-check the GPU vs
+    // CPU choice before the download eats 50-200 MB of disk + bandwidth, and
+    // catches LMFORGE_LLAMACPP_VARIANT overrides in real time.
+    if selected.install_method == "binary"
+        && let Ok((variant, ext)) = crate::engine::installer::resolve_platform(&profile)
+    {
+        println!("  Variant:  {}.{}", variant, ext);
+        if let Ok(override_val) = std::env::var("LMFORGE_LLAMACPP_VARIANT")
+            && !override_val.eq_ignore_ascii_case("auto")
+        {
+            println!("            (forced by LMFORGE_LLAMACPP_VARIANT={})", override_val);
+        }
+    }
     println!();
 
     // Engine installation
