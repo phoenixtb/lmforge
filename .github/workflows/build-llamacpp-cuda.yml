@@ -42,7 +42,7 @@ jobs:
           - variant: cuda12
             cuda: "12.8.1"
             image: "nvidia/cuda:12.8.1-devel-rockylinux8"
-            archs: "75-real;80-real;86-real;89-real;90-real;120-real;120-virtual"
+            archs: "86-real;89-real;90-real;120-real;120-virtual"
             cudart_so: "libcudart.so.12"
             cublas_so: "libcublas.so.12"
             cublaslt_so: "libcublasLt.so.12"
@@ -50,7 +50,7 @@ jobs:
           - variant: cuda13
             cuda: "13.1.0"
             image: "nvidia/cuda:13.1.0-devel-rockylinux8"
-            archs: "75-real;80-real;86-real;89-real;90-real;100-real;120-real;120-virtual"
+            archs: "86-real;89-real;90-real;100-real;120-real;120-virtual"
             cudart_so: "libcudart.so.13"
             cublas_so: "libcublas.so.13"
             cublaslt_so: "libcublasLt.so.13"
@@ -103,6 +103,25 @@ jobs:
             || { echo "::error::CUDA stubs/libcuda.so missing — image layout has changed"; exit 1; }
           nvcc --version
 
+      - name: Expose CUDA driver stub on default linker path
+        # CMake's find_package(CUDAToolkit) does NOT reliably wire
+        # CUDA::cuda_driver -> stubs/libcuda.so on rocky-linux 8 NVIDIA
+        # images (works on the ubuntu variants). Result: libggml-cuda.so
+        # ends up with unresolved refs to cuMemCreate/cuMemMap/etc., and
+        # the executables fail to link at the very end of a 90-min build.
+        #
+        # Bullet-proof workaround: symlink the stub into /usr/lib64
+        # under both libcuda.so and libcuda.so.1 so ld finds it via the
+        # default search path. At RUNTIME the user's installed NVIDIA
+        # driver provides the real libcuda.so.1 (resolved via the
+        # dynamic loader's normal precedence), so the stub is link-only.
+        run: |
+          set -eux
+          ln -sfv /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib64/libcuda.so
+          ln -sfv /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib64/libcuda.so.1
+          ldconfig -n /usr/lib64 || true
+          ls -l /usr/lib64/libcuda*
+
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
         with:
@@ -112,12 +131,6 @@ jobs:
 
       - name: Configure + build (CUDA, archs=${{ matrix.archs }})
         working-directory: llama.cpp
-        env:
-          # CUDA driver-API symbols (cuMem*, cuDevice*, …) are referenced
-          # by ggml-cuda but resolved at runtime via the host's NVIDIA
-          # driver. At BUILD time we link against the CUDA toolkit stub
-          # libcuda.so; GCC's linker picks it up from LIBRARY_PATH.
-          LIBRARY_PATH: /usr/local/cuda/lib64/stubs
         run: |
           source /opt/rh/gcc-toolset-12/enable
           cmake -S . -B build -G Ninja \
