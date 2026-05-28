@@ -89,7 +89,19 @@ jobs:
           dnf clean expire-cache
           dnf -y install \
             git cmake ninja-build gcc-toolset-12 \
-            libcurl-devel patchelf tar gzip findutils which
+            libcurl-devel patchelf tar gzip findutils which ccache
+
+      - name: Sanity-check CUDA toolkit + stubs
+        # Surface the toolkit + stub paths so future link failures are
+        # diagnosable without having to fetch the run log. The stub
+        # libcuda.so is required at LINK time on hosts with no NVIDIA
+        # driver (CI runners). It's auto-resolved by GCC via LIBRARY_PATH.
+        run: |
+          set -eux
+          ls -l /usr/local/cuda/lib64/stubs/ || true
+          test -f /usr/local/cuda/lib64/stubs/libcuda.so \
+            || { echo "::error::CUDA stubs/libcuda.so missing — image layout has changed"; exit 1; }
+          nvcc --version
 
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
@@ -100,6 +112,12 @@ jobs:
 
       - name: Configure + build (CUDA, archs=${{ matrix.archs }})
         working-directory: llama.cpp
+        env:
+          # CUDA driver-API symbols (cuMem*, cuDevice*, …) are referenced
+          # by ggml-cuda but resolved at runtime via the host's NVIDIA
+          # driver. At BUILD time we link against the CUDA toolkit stub
+          # libcuda.so; GCC's linker picks it up from LIBRARY_PATH.
+          LIBRARY_PATH: /usr/local/cuda/lib64/stubs
         run: |
           source /opt/rh/gcc-toolset-12/enable
           cmake -S . -B build -G Ninja \
@@ -110,7 +128,10 @@ jobs:
             -DLLAMA_CURL=ON \
             -DGGML_CUDA_FA_ALL_QUANTS=ON \
             -DCMAKE_CUDA_ARCHITECTURES="${{ matrix.archs }}" \
-            -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath,'\$ORIGIN/lib'"
+            -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath,'\$ORIGIN/lib'" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
           cmake --build build -j"$(nproc)" \
             --target llama-server llama-cli llama-bench llama-quantize
 
