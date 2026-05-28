@@ -565,4 +565,63 @@ mod tests {
         // still pass. So we only assert that `is_ready` is deterministic.
         let _ = m.is_ready();
     }
+
+    #[test]
+    fn manifest_is_ready_true_when_all_shas_populated() {
+        let json = r#"{
+            "llamacpp_tag": "b9351",
+            "release_tag": "llamacpp-b9351",
+            "variants": [
+                {"id":"cuda12","cuda":"12.8.1","driver_min":"570.26","cap_min":7.5,
+                 "platform":"linux-x64","url":"https://example/x.tar.gz",
+                 "sha256":"a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00"},
+                {"id":"cuda13","cuda":"13.1.0","driver_min":"590.44.01","cap_min":7.5,
+                 "platform":"linux-x64","url":"https://example/y.tar.gz",
+                 "sha256":"deadbeefcafebabefeedfacefacefacefacefacefacefacefacefacefacefa"}
+            ]
+        }"#;
+        let m: Manifest = serde_json::from_str(json).unwrap();
+        assert!(m.is_ready(), "shas populated → ready");
+        assert_eq!(m.find("cuda12").unwrap().platform, "linux-x64");
+        assert!(m.find("cuda13").unwrap().sha256.starts_with("deadbeef"));
+    }
+
+    #[test]
+    fn manifest_is_ready_false_when_any_sha_is_placeholder() {
+        let json = r#"{
+            "llamacpp_tag": "b9351",
+            "release_tag": "llamacpp-b9351",
+            "variants": [
+                {"id":"cuda12","cuda":"12.8.1","driver_min":"570.26","cap_min":7.5,
+                 "platform":"linux-x64","url":"https://example/x.tar.gz",
+                 "sha256":"a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00"},
+                {"id":"cuda13","cuda":"13.1.0","driver_min":"590.44.01","cap_min":7.5,
+                 "platform":"linux-x64","url":"https://example/y.tar.gz",
+                 "sha256":"<populated-by-ci>"}
+            ]
+        }"#;
+        let m: Manifest = serde_json::from_str(json).unwrap();
+        assert!(!m.is_ready(), "any placeholder → not ready");
+    }
+
+    #[test]
+    fn manifest_is_ready_false_when_any_sha_empty() {
+        let json = r#"{
+            "llamacpp_tag": "b9351",
+            "release_tag": "llamacpp-b9351",
+            "variants": [
+                {"id":"cuda12","cuda":"12.8.1","driver_min":"570.26","cap_min":7.5,
+                 "platform":"linux-x64","url":"https://example/x.tar.gz","sha256":""}
+            ]
+        }"#;
+        let m: Manifest = serde_json::from_str(json).unwrap();
+        assert!(!m.is_ready(), "empty sha → not ready");
+    }
+
+    #[test]
+    fn manifest_find_returns_none_for_unknown_variant() {
+        let m = Manifest::embedded().unwrap();
+        assert!(m.find("rocm").is_none());
+        assert!(m.find("").is_none());
+    }
 }

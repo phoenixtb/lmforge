@@ -451,4 +451,89 @@ max_request_body_mb = 64
         assert_eq!(cfg.resources.request_queue_size, 32);
         assert_eq!(cfg.resources.max_gpu_memory_fraction, 0.75);
     }
+
+    /// Empty `[speculative]` block must load and inherit every default.
+    #[test]
+    fn empty_speculative_block_inherits_defaults() {
+        let cfg: LmForgeConfig = toml::from_str(
+            r#"
+[speculative]
+"#,
+        )
+        .expect("must parse");
+        let defaults = crate::engine::speculative::SpeculativeConfig::default();
+        assert_eq!(cfg.speculative.mode, defaults.mode);
+        assert_eq!(cfg.speculative.draft_max, defaults.draft_max);
+        assert_eq!(cfg.speculative.draft_min, defaults.draft_min);
+        assert!((cfg.speculative.draft_p_min - defaults.draft_p_min).abs() < 1e-6);
+        assert_eq!(cfg.speculative.draft_gpu_layers, defaults.draft_gpu_layers);
+        assert_eq!(cfg.speculative.vram_safety_mib, defaults.vram_safety_mib);
+        assert!(cfg.speculative.draft_model.is_none());
+    }
+
+    /// Partial `[speculative]` — only `mode` overridden, rest must
+    /// inherit defaults. Regression guard against accidentally moving
+    /// to `#[serde(default = ...)]` on the wrong layer.
+    #[test]
+    fn partial_speculative_block_inherits_defaults() {
+        let cfg: LmForgeConfig = toml::from_str(
+            r#"
+[speculative]
+mode = "off"
+"#,
+        )
+        .expect("must parse");
+        assert_eq!(
+            cfg.speculative.mode,
+            crate::engine::speculative::SpecMode::Off
+        );
+        assert_eq!(cfg.speculative.draft_max, 16);
+        assert!((cfg.speculative.draft_p_min - 0.75).abs() < 1e-6);
+        assert_eq!(cfg.speculative.vram_safety_mib, 1024);
+    }
+
+    /// Full override — every speculative knob is set.
+    #[test]
+    fn full_speculative_block_overrides_all_fields() {
+        let cfg: LmForgeConfig = toml::from_str(
+            r#"
+[speculative]
+mode = "mtp"
+draft_max = 4
+draft_min = 1
+draft_p_min = 0.65
+draft_gpu_layers = 99
+vram_safety_mib = 2048
+draft_model = "/models/draft.gguf"
+"#,
+        )
+        .expect("must parse");
+        use crate::engine::speculative::SpecMode;
+        assert_eq!(cfg.speculative.mode, SpecMode::Mtp);
+        assert_eq!(cfg.speculative.draft_max, 4);
+        assert_eq!(cfg.speculative.draft_min, 1);
+        assert!((cfg.speculative.draft_p_min - 0.65).abs() < 1e-6);
+        assert_eq!(cfg.speculative.draft_gpu_layers, 99);
+        assert_eq!(cfg.speculative.vram_safety_mib, 2048);
+        assert_eq!(
+            cfg.speculative.draft_model.as_deref(),
+            Some("/models/draft.gguf")
+        );
+    }
+
+    /// `draft-model` (kebab-case) is the documented variant — must parse.
+    #[test]
+    fn speculative_mode_accepts_draft_model_kebab() {
+        let cfg: LmForgeConfig = toml::from_str(
+            r#"
+[speculative]
+mode = "draft-model"
+"#,
+        )
+        .expect("must parse");
+        assert_eq!(
+            cfg.speculative.mode,
+            crate::engine::speculative::SpecMode::DraftModel
+        );
+    }
 }

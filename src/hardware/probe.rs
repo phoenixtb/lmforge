@@ -358,7 +358,7 @@ fn check_intel_present() -> bool {
                 }
             }
         }
-        return false;
+        false
     }
     #[cfg(target_os = "windows")]
     {
