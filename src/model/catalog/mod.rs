@@ -2,6 +2,47 @@ use std::collections::HashMap;
 use std::path::Path;
 use tracing::debug;
 
+// ── Catalog value shape ───────────────────────────────────────────────────────
+
+/// A raw catalog value as it appears in the JSON file.
+///
+/// Backward-compatible: most entries are still plain strings
+/// (`"qwen3:8b:4bit": "unsloth/Qwen3-8B-GGUF"`). The object form carries
+/// extra hints like `mtp` that the resolver propagates into
+/// `ResolvedModel` so the launch path can flip on speculative decoding
+/// without re-probing the file.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(untagged)]
+enum CatalogValue {
+    /// Plain repo string — the historical shape.
+    Repo(String),
+    /// Structured entry with optional engine hints.
+    Object(CatalogObject),
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct CatalogObject {
+    repo: String,
+    #[serde(default)]
+    mtp: Option<bool>,
+}
+
+impl CatalogValue {
+    fn repo(&self) -> &str {
+        match self {
+            Self::Repo(r) => r,
+            Self::Object(o) => &o.repo,
+        }
+    }
+
+    fn mtp(&self) -> Option<bool> {
+        match self {
+            Self::Repo(_) => None,
+            Self::Object(o) => o.mtp,
+        }
+    }
+}
+
 /// The bundled default MLX catalog — embedded at compile time.
 /// This is the authoritative fallback used when no runtime catalog file exists.
 /// This means `lmforge pull <shortcut>` works on a fresh install without running `lmforge init` first.
@@ -31,10 +72,30 @@ pub const BUNDLED_EXL3: &str = include_str!("../../../data/catalogs/exl3.json");
 /// files; for GGUF repos with multiple quants, the resolver further narrows
 /// the selection via the `:NNbit` suffix in the shortcut (see
 /// `gguf_patterns_for_quant` + `select_gguf_files` in `model::resolver`).
+///
+/// The optional `mtp` flag is carried through from the catalog so the
+/// launch path can enable speculative decoding without re-probing the
+/// downloaded GGUF (see `src/model/gguf_inspect.rs`).
 #[derive(Debug, Clone)]
 pub enum CatalogResult {
     /// Download all format-matching files from this HuggingFace repo.
-    AllFiles(String),
+    AllFiles { repo: String, mtp: Option<bool> },
+}
+
+impl CatalogResult {
+    /// Repository identifier (e.g. `"unsloth/Qwen3-8B-GGUF"`).
+    pub fn repo(&self) -> &str {
+        match self {
+            Self::AllFiles { repo, .. } => repo,
+        }
+    }
+
+    /// Catalog-declared MTP flag, if any.
+    pub fn mtp(&self) -> Option<bool> {
+        match self {
+            Self::AllFiles { mtp, .. } => *mtp,
+        }
+    }
 }
 
 // ── Resolution API ────────────────────────────────────────────────────────────
@@ -80,10 +141,14 @@ fn resolve_from_content(
     format_str: &str,
 ) -> Option<CatalogResult> {
     match format_str {
-        // All three catalogs share the same `{ shortcut: "org/repo" }` shape.
+        // All three catalogs share the same `{ shortcut: <CatalogValue> }` shape.
+        // CatalogValue is either a bare repo string or an object with optional hints.
         "mlx" | "safetensors" | "gguf" => {
-            let map: HashMap<String, String> = serde_json::from_str(content).ok()?;
-            map.get(normalized).cloned().map(CatalogResult::AllFiles)
+            let map: HashMap<String, CatalogValue> = serde_json::from_str(content).ok()?;
+            map.get(normalized).map(|v| CatalogResult::AllFiles {
+                repo: v.repo().to_string(),
+                mtp: v.mtp(),
+            })
         }
         _ => None,
     }
@@ -113,7 +178,7 @@ pub fn bundled_shortcuts(format_str: &str) -> Vec<String> {
         _ => return vec![],
     };
 
-    let keys: Vec<String> = serde_json::from_str::<HashMap<String, String>>(content)
+    let keys: Vec<String> = serde_json::from_str::<HashMap<String, CatalogValue>>(content)
         .map(|m| m.into_keys().collect())
         .unwrap_or_default();
 
@@ -237,14 +302,15 @@ pub fn list_for_ui(format: &str) -> Vec<CatalogEntry> {
     let mut entries: Vec<CatalogEntry> = Vec::new();
 
     for &(fmt, content) in formats {
-        let map: HashMap<String, String> = match serde_json::from_str(content) {
+        let map: HashMap<String, CatalogValue> = match serde_json::from_str(content) {
             Ok(m) => m,
             Err(_) => continue,
         };
-        for (shortcut, hf_repo) in map {
+        for (shortcut, value) in map {
             if shortcut.starts_with('_') {
                 continue;
             }
+            let hf_repo = value.repo().to_string();
             if !hf_repo.contains('/') {
                 continue;
             }
@@ -302,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_bundled_mlx_catalog_is_valid_json() {
-        let result: Result<HashMap<String, String>, _> = serde_json::from_str(BUNDLED_MLX);
+        let result: Result<HashMap<String, CatalogValue>, _> = serde_json::from_str(BUNDLED_MLX);
         assert!(
             result.is_ok(),
             "MLX catalog is not valid JSON: {:?}",
@@ -312,7 +378,8 @@ mod tests {
 
     #[test]
     fn test_bundled_safetensors_catalog_is_valid_json() {
-        let result: Result<HashMap<String, String>, _> = serde_json::from_str(BUNDLED_SAFETENSORS);
+        let result: Result<HashMap<String, CatalogValue>, _> =
+            serde_json::from_str(BUNDLED_SAFETENSORS);
         assert!(
             result.is_ok(),
             "safetensors catalog is not valid JSON: {:?}",
@@ -322,7 +389,7 @@ mod tests {
 
     #[test]
     fn test_bundled_gguf_catalog_is_valid_json() {
-        let result: Result<HashMap<String, String>, _> = serde_json::from_str(BUNDLED_GGUF);
+        let result: Result<HashMap<String, CatalogValue>, _> = serde_json::from_str(BUNDLED_GGUF);
         assert!(
             result.is_ok(),
             "GGUF catalog is not valid JSON: {:?}",
@@ -334,7 +401,7 @@ mod tests {
 
     #[test]
     fn test_primary_models_exist_in_mlx() {
-        let map: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
+        let map: HashMap<String, CatalogValue> = serde_json::from_str(BUNDLED_MLX).unwrap();
         assert!(map.contains_key("qwen3.5:4b:4bit"), "MLX missing LLM_MODEL");
         assert!(
             map.contains_key("qwen3.5:2b:4bit"),
@@ -348,7 +415,8 @@ mod tests {
 
     #[test]
     fn test_primary_models_exist_in_safetensors() {
-        let map: HashMap<String, String> = serde_json::from_str(BUNDLED_SAFETENSORS).unwrap();
+        let map: HashMap<String, CatalogValue> =
+            serde_json::from_str(BUNDLED_SAFETENSORS).unwrap();
         // Chat: catalog is quantized-only — every inference shortcut carries
         // a `:4bit` or `:8bit` suffix (no bare `qwen3:8b` aliases).
         assert!(map.contains_key("qwen3:8b:4bit"), "safetensors missing qwen3:8b:4bit");
@@ -359,14 +427,15 @@ mod tests {
 
     #[test]
     fn test_safetensors_has_vlm_entries() {
-        let map: HashMap<String, String> = serde_json::from_str(BUNDLED_SAFETENSORS).unwrap();
+        let map: HashMap<String, CatalogValue> =
+            serde_json::from_str(BUNDLED_SAFETENSORS).unwrap();
         // VLMs are quantized-only too — `:4bit` maps to the official AWQ build.
         assert_eq!(
-            map.get("qwen2.5-vl:3b:4bit").unwrap(),
+            map.get("qwen2.5-vl:3b:4bit").unwrap().repo(),
             "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
         );
         assert_eq!(
-            map.get("qwen2.5-vl:7b:4bit").unwrap(),
+            map.get("qwen2.5-vl:7b:4bit").unwrap().repo(),
             "Qwen/Qwen2.5-VL-7B-Instruct-AWQ"
         );
     }
@@ -375,7 +444,7 @@ mod tests {
 
     #[test]
     fn test_no_legacy_q4_suffix_in_mlx() {
-        let mlx: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
+        let mlx: HashMap<String, CatalogValue> = serde_json::from_str(BUNDLED_MLX).unwrap();
         for key in mlx.keys() {
             assert!(
                 !key.ends_with(":q4"),
@@ -580,15 +649,15 @@ mod tests {
     #[test]
     fn test_resolve_from_bundled_safetensors() {
         let r = resolve_from_bundled("qwen2.5-vl:7b:4bit", "safetensors").unwrap();
-        let CatalogResult::AllFiles(repo) = r;
-        assert_eq!(repo, "Qwen/Qwen2.5-VL-7B-Instruct-AWQ");
+        assert_eq!(r.repo(), "Qwen/Qwen2.5-VL-7B-Instruct-AWQ");
+        assert_eq!(r.mtp(), None);
     }
 
     #[test]
     fn test_resolve_from_bundled_mlx() {
         let r = resolve_from_bundled("qwen3.5:4b:4bit", "mlx").unwrap();
-        let CatalogResult::AllFiles(repo) = r;
-        assert_eq!(repo, "mlx-community/Qwen3.5-4B-4bit");
+        assert_eq!(r.repo(), "mlx-community/Qwen3.5-4B-4bit");
+        assert_eq!(r.mtp(), None);
     }
 
     #[test]
@@ -596,16 +665,81 @@ mod tests {
         // GGUF catalog restored — same shape as MLX/safetensors. Resolver
         // picks the right .gguf file from the :NNbit suffix downstream.
         let r = resolve_from_bundled("qwen3.5:4b:4bit", "gguf").unwrap();
-        let CatalogResult::AllFiles(repo) = r;
-        assert_eq!(repo, "unsloth/Qwen3.5-4B-GGUF");
+        assert_eq!(r.repo(), "unsloth/Qwen3.5-4B-GGUF");
 
         let r = resolve_from_bundled("qwen3.5:4b:6bit", "gguf").unwrap();
-        let CatalogResult::AllFiles(repo) = r;
-        assert_eq!(repo, "unsloth/Qwen3.5-4B-GGUF");
+        assert_eq!(r.repo(), "unsloth/Qwen3.5-4B-GGUF");
 
         let r = resolve_from_bundled("qwen3-embed:0.6b:f16", "gguf").unwrap();
-        let CatalogResult::AllFiles(repo) = r;
-        assert_eq!(repo, "Qwen/Qwen3-Embedding-0.6B-GGUF");
+        assert_eq!(r.repo(), "Qwen/Qwen3-Embedding-0.6B-GGUF");
+    }
+
+    #[test]
+    fn catalog_value_accepts_both_string_and_object_shapes() {
+        // Sanity: the new untagged enum still parses the legacy plain-string
+        // shape so all the bundled catalogs (which are still mostly strings)
+        // continue to deserialize without changes.
+        let json = r#"{
+            "old": "foo/bar",
+            "new":   { "repo": "foo/baz", "mtp": true },
+            "noflag": { "repo": "foo/qux" }
+        }"#;
+        let parsed: HashMap<String, CatalogValue> = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed["old"].repo(), "foo/bar");
+        assert_eq!(parsed["old"].mtp(), None);
+        assert_eq!(parsed["new"].repo(), "foo/baz");
+        assert_eq!(parsed["new"].mtp(), Some(true));
+        assert_eq!(parsed["noflag"].repo(), "foo/qux");
+        assert_eq!(parsed["noflag"].mtp(), None);
+    }
+
+    #[test]
+    fn bundled_gguf_propagates_mtp_for_qwen3_coder_next_and_qwen35() {
+        // Regression: the S-1.4 catalog audit tags Qwen3-Coder-Next and
+        // Qwen3.5 with `mtp: true`. If anyone reverts those entries to plain
+        // strings, this test fails and the spec-dec launch silently breaks.
+        for shortcut in &[
+            "qwen3-coder:next:4bit",
+            "qwen3-coder:next:6bit",
+            "qwen3-coder:next:8bit",
+            "qwen3.5:4b:4bit",
+            "qwen3.5:9b:4bit",
+            "qwen3.5:27b:8bit",
+        ] {
+            let r = resolve_from_bundled(shortcut, "gguf")
+                .unwrap_or_else(|| panic!("missing gguf shortcut {shortcut}"));
+            assert_eq!(
+                r.mtp(),
+                Some(true),
+                "{shortcut} should carry mtp:true (catalog audit S-1.4)"
+            );
+        }
+    }
+
+    #[test]
+    fn bundled_gguf_legacy_string_entries_have_no_mtp() {
+        // Sanity: plain-Qwen3 entries (no MTP architecture) must NOT inherit
+        // an mtp flag from the catalog. They will fall through to the
+        // gguf_inspect probe at pull time, which should report `Some(false)`.
+        let r = resolve_from_bundled("qwen3:8b:4bit", "gguf").unwrap();
+        assert_eq!(r.mtp(), None);
+        let r = resolve_from_bundled("llama3.1:8b:4bit", "gguf").unwrap();
+        assert_eq!(r.mtp(), None);
+    }
+
+    #[test]
+    fn resolve_from_content_preserves_mtp_flag() {
+        let json = r#"{
+            "qwen-test:4bit": { "repo": "unsloth/Qwen3-Coder-Next-GGUF", "mtp": true },
+            "plain:4bit": "unsloth/Qwen3-4B-GGUF"
+        }"#;
+        let r1 = resolve_from_content(json, "qwen-test:4bit", "gguf").unwrap();
+        assert_eq!(r1.repo(), "unsloth/Qwen3-Coder-Next-GGUF");
+        assert_eq!(r1.mtp(), Some(true));
+
+        let r2 = resolve_from_content(json, "plain:4bit", "gguf").unwrap();
+        assert_eq!(r2.repo(), "unsloth/Qwen3-4B-GGUF");
+        assert_eq!(r2.mtp(), None);
     }
 
     #[test]

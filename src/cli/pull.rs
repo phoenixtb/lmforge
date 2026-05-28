@@ -136,10 +136,23 @@ pub async fn run(
     println!("\n  ✓ Downloaded {} MB", size_mb);
 
     // Detect capabilities
-    let caps = index::detect_capabilities(&model_dir, Some(&resolved.id), Some(&resolved.hf_repo));
+    let mut caps =
+        index::detect_capabilities(&model_dir, Some(&resolved.id), Some(&resolved.hf_repo));
+    // Layered MTP detection (S-1.7): catalog flag wins, GGUF probe fills
+    // the blank, None when both are silent. Only meaningful for GGUF;
+    // safetensors / MLX engines don't consume this signal today.
+    if matches!(resolved.format, resolver::ModelFormat::Gguf) {
+        caps.mtp = crate::model::gguf_inspect::resolve_mtp_for_model(&model_dir, resolved.mtp);
+    }
     println!(
-        "  Capabilities: chat={} embeddings={} reranking={} thinking={} vision={} dims={:?}",
-        caps.chat, caps.embeddings, caps.reranking, caps.thinking, caps.vision, caps.embedding_dims
+        "  Capabilities: chat={} embeddings={} reranking={} thinking={} vision={} dims={:?} mtp={:?}",
+        caps.chat,
+        caps.embeddings,
+        caps.reranking,
+        caps.thinking,
+        caps.vision,
+        caps.embedding_dims,
+        caps.mtp,
     );
     if let Some(mmproj) = caps.mmproj_path.as_deref() {
         println!("  mmproj:       {}", mmproj);

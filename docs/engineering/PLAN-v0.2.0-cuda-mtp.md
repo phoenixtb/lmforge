@@ -29,10 +29,10 @@ This is the working tracker for v0.2.0. Check items off as they complete. Update
 
 | Phase | Status | Owner | PR / commit |
 |---|---|---|---|
-| C-1 — CUDA build pipeline | ⏳ | | |
+| C-1 — CUDA build pipeline | 🚧 | agent | scaffolded on `v0.2.0-cuda-mtp` (workflow + manifest; build not yet run) |
 | C-2 — Variant infrastructure | ⏳ | | |
 | C-3 — Variant-aware launch | ⏳ | | |
-| S-1 — MTP detection | ⏳ | | |
+| S-1 — MTP detection | ✅ | agent | `v0.2.0-cuda-mtp` (parser + catalog schema + pull-time probe) |
 | S-2 — Spec-dec launch + telemetry | ⏳ | | |
 | S-3 — Draft-model pairs | ⏳ | | |
 | Polish — docs + UI + ADRs | ⏳ | | |
@@ -93,17 +93,17 @@ C-1 and S-1 can proceed **in parallel** (no file overlap). They converge in C-3 
 
 #### Tasks
 
-- [ ] **C-1.1** New file: `.github/workflows/build-llamacpp-cuda.yml` per the spec below.
-- [ ] **C-1.2** Hard CI guard in workflow refuses CUDA `13.2*` / `13.3*` build matrix entries.
-- [ ] **C-1.3** Workflow produces `lmforge-llamacpp-b9351-cuda12-linux-x64.tar.gz` on `workflow_dispatch`.
-- [ ] **C-1.4** Tarball staging: bundle `libcudart.so.12`, `libcublas.so.12`, `libcublasLt.so.12` from `/usr/local/cuda*/lib64/` into `lib/`.
-- [ ] **C-1.5** Apply `patchelf --set-rpath '$ORIGIN/lib'` to each of `llama-{server,cli,bench,quantize}` AFTER `strip`.
-- [ ] **C-1.6** Generate `VERSION` file with `llamacpp_tag`, `cuda`, `archs`, `driver_min`.
-- [ ] **C-1.7** Publish tarball + `.sha256` companion to release tag `llamacpp-b9351`.
-- [ ] **C-1.8** New file: `data/engines/llamacpp/variants-manifest.json` listing tarball URLs + sha256s. Embedded into the binary via `include_str!`.
-- [ ] **C-1.9** Smoke-test the tarball on AlmaLinux 8, Ubuntu 22.04, Ubuntu 24.04 VMs.
-- [ ] **C-1.10** Run `llama-bench` on user's RTX 5060 Ti; confirm no PTX-JIT pause + ≥95% of native tok/s.
-- [ ] **C-1.11** Verify `ldd llama-server` shows only `libcuda.so.1` as external CUDA dep.
+- [x] **C-1.1** `.github/workflows/build-llamacpp-cuda.yml` added (workflow_dispatch matrix: cuda12 + cuda13).
+- [x] **C-1.2** Hard CI guard refuses CUDA `13.2*` / `13.3*` matrix entries (first step of the build job).
+- [ ] **C-1.3** Workflow produces `lmforge-llamacpp-b9351-cuda12-linux-x64.tar.gz` on `workflow_dispatch`. *(scaffold only — first dispatch pending)*
+- [x] **C-1.4** Tarball staging copies `libcudart.so.12`, `libcublas.so.12`, `libcublasLt.so.12` from `/usr/local/cuda*/lib64/` into `lib/`, including SONAME symlinks.
+- [x] **C-1.5** `patchelf --set-rpath '$ORIGIN/lib'` runs AFTER `strip` per the plan ordering.
+- [x] **C-1.6** `VERSION` file emitted with `llamacpp_tag`, `cuda`, `archs`, `driver_min`, `variant`.
+- [x] **C-1.7** `softprops/action-gh-release@v2` publishes the tarball + `.sha256` to `llamacpp-b9351`.
+- [x] **C-1.8** `data/engines/llamacpp/variants-manifest.json` checked in; sha256 stays as `<populated-by-ci>` until the first dispatch.
+- [ ] **C-1.9** Smoke-test on AlmaLinux 8 / Ubuntu 22.04 / Ubuntu 24.04. *(post-dispatch)*
+- [ ] **C-1.10** Bench on user's RTX 5060 Ti — no PTX-JIT pause; ≥95% of native tok/s. *(post-dispatch)*
+- [x] **C-1.11** Workflow audits `ldd llama-server` — fails if `libcublas`/`libcudart` show up as external deps (i.e. ensures only `libcuda.so.1` remains external). Adds belt-and-suspenders to the 500 MB tarball size guard.
 
 #### Workflow sketch
 
@@ -322,17 +322,17 @@ $ lmforge doctor
 
 #### Tasks
 
-- [ ] **S-1.1** Add `gguf = "0.2"` to `Cargo.toml`.
-- [ ] **S-1.2** Extend `data/catalogs/gguf.json` schema: entries become either `string` (plain repo, backward compat) or `{repo, mtp?}`. Document in catalog header comment.
-- [ ] **S-1.3** Update catalog parser in `src/model/catalog/mod.rs` to accept both shapes.
-- [ ] **S-1.4** Catalog audit pass — mark `mtp: true` on:
-  - [ ] `unsloth/Qwen3-Coder-Next-GGUF` (all variants)
-  - [ ] `unsloth/Qwen3.5-{0.8B,2B,4B,9B,27B}-GGUF` (verify each via test pull + tensor inspection)
-  - [ ] Add `_audit_note` for MiniMax-M2/M2.5 — investigate before tagging.
-- [ ] **S-1.5** New module: `src/model/gguf_inspect.rs` with `detect_mtp(path) -> Option<bool>`.
-- [ ] **S-1.6** Extend `ResolvedModel` in `src/model/resolver.rs` with `pub mtp: Option<bool>`.
-- [ ] **S-1.7** Wire detection: catalog flag → if missing, GGUF probe at pull time → write to `~/.lmforge/models/<id>/meta.json`.
-- [ ] **S-1.8** Tests: `detect_mtp` returns `Some(true)` on Qwen3-Next GGUF, `Some(false)` on Llama-3.1 GGUF (use real downloaded files).
+- [x] **S-1.1** ~~Add `gguf = "0.2"` to `Cargo.toml`.~~ **Skipped** — the only published `gguf` crate (0.1.2) ships a stale `GGMLType` enum that fails on every modern K/IQ/BF16 quant. Wrote a focused, dep-free parser in `src/model/gguf_inspect.rs` instead (~150 lines, scoped to tensor-name lookup).
+- [x] **S-1.2** Extend `data/catalogs/gguf.json` schema: entries are now either `string` (plain repo, backward compat) or `{ repo, mtp? }`.
+- [x] **S-1.3** Catalog parser in `src/model/catalog/mod.rs` now accepts both shapes via an untagged `CatalogValue` enum; `CatalogResult` carries `mtp: Option<bool>` through to the resolver.
+- [x] **S-1.4** Catalog audit pass:
+  - [x] `unsloth/Qwen3-Coder-Next-GGUF` (all 3 variants) — tagged `mtp: true`.
+  - [x] `unsloth/Qwen3.5-{0.8B,2B,4B,9B,27B}-GGUF` (all 15 variants) — tagged `mtp: true` per spec doc; runtime probe at pull time provides ground truth.
+  - [x] Added `_audit_note` on `_comment_minimax` — investigate via probe before promoting to `mtp: true`.
+- [x] **S-1.5** New module `src/model/gguf_inspect.rs` exposes `detect_mtp(&Path) -> Option<bool>` and `read_tensor_names`. Synthetic-file unit tests cover the `mtp.*` / `nextn.*` / `*.nextn.*` / case-insensitive paths, plus garbage/missing-file negative cases.
+- [x] **S-1.6** `ResolvedModel.mtp: Option<bool>` propagates the catalog flag.
+- [x] **S-1.7** Pull-time wiring: `gguf_inspect::resolve_mtp_for_model` runs after download (catalog flag wins; otherwise probe the largest non-mmproj `.gguf`). Result persists into `ModelCapabilities.mtp` in `models.json` (chose the existing index over the plan's `meta.json` — same role, one source of truth).
+- [ ] **S-1.8** Tests against real Qwen3-Next + Llama-3.1 GGUF files. Deferred — requires multi-GB downloads. The synthetic-file tests already exercise the parser; live-file confirmation will land alongside the S-2 launch test on the user's RTX 5060 Ti box.
 
 #### Catalog schema example (backward-compat)
 

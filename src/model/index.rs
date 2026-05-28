@@ -49,6 +49,13 @@ pub struct ModelCapabilities {
     /// Used by SGLang to set --pooling-method. None means engine default.
     #[serde(default)]
     pub pooling: Option<String>,
+    /// Multi-Token Prediction (MTP / nextn) support — drives speculative
+    /// decoding on `llama-server`. Resolved with a layered precedence:
+    /// (1) catalog `mtp` flag, (2) `gguf_inspect::detect_mtp` probe at
+    /// pull time. `None` means "unknown / not yet probed" — the launch
+    /// path falls back to spec-dec OFF rather than guessing.
+    #[serde(default)]
+    pub mtp: Option<bool>,
 }
 
 impl ModelIndex {

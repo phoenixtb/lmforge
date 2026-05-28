@@ -9,6 +9,12 @@ pub struct ResolvedModel {
     pub hf_repo: String,
     pub format: ModelFormat,
     pub files: Vec<String>,
+    /// Layered MTP signal — `Some(true)` means speculative decoding via
+    /// the model's own next-N head is known to be available; `Some(false)`
+    /// confirms the model has no MTP layers; `None` means "not probed yet"
+    /// (the launch path will fall back to the catalog flag, then to a
+    /// GGUF tensor probe via `crate::model::gguf_inspect::detect_mtp`).
+    pub mtp: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +62,7 @@ pub async fn resolve(
             hf_repo: input.to_string(),
             format: detect_format_from_engine(engine_format),
             files: vec![input.to_string()],
+            mtp: None,
         });
     }
 
@@ -73,6 +80,7 @@ pub async fn resolve(
             hf_repo: path,
             format: detect_format_from_engine(engine_format),
             files: vec![],
+            mtp: None,
         });
     }
 
@@ -204,6 +212,7 @@ async fn resolve_hf_repo(
         hf_repo,
         format,
         files,
+        mtp: None,
     })
 }
 
@@ -234,19 +243,21 @@ async fn resolve_logical_name(
     engine_format: &str,
     catalogs_dir: &std::path::Path,
 ) -> Result<ResolvedModel> {
-    use crate::model::catalog::CatalogResult;
-
-    if let Some(CatalogResult::AllFiles(repo)) =
+    if let Some(catalog_result) =
         crate::model::catalog::load_catalog_and_resolve(name, engine_format, catalogs_dir).await
     {
+        let repo = catalog_result.repo().to_string();
+        let catalog_mtp = catalog_result.mtp();
         let quant_hint = extract_quant_hint(name);
         debug!(
             name,
             ?quant_hint,
+            catalog_mtp = ?catalog_mtp,
             "Resolved repo from catalog, querying HF API"
         );
         let mut rm = resolve_hf_repo(&repo, engine_format, quant_hint).await?;
         rm.id = name.to_string();
+        rm.mtp = catalog_mtp;
         return Ok(rm);
     }
 
