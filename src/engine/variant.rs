@@ -556,15 +556,26 @@ mod tests {
     }
 
     #[test]
-    fn embedded_manifest_is_currently_a_stub() {
-        // Before the first CI dispatch, sha256 is `<populated-by-ci>`.
-        // `is_ready()` reflects that — when it flips to `true` we know the
-        // manifest has been updated post-build.
+    fn embedded_manifest_has_real_shas_post_ci() {
+        // Manifest was populated with real sha256s after the first
+        // successful build-llamacpp-cuda.yml run on b9351. This test
+        // is now a regression guard — if someone reverts the manifest
+        // to placeholders or empties a sha, this fails loud.
         let m = Manifest::embedded().unwrap();
-        // Don't assert false/true unconditionally — once CI runs and the
-        // user pastes real sha256s, this becomes true and the test should
-        // still pass. So we only assert that `is_ready` is deterministic.
-        let _ = m.is_ready();
+        assert!(
+            m.is_ready(),
+            "embedded manifest must have real sha256 values for every variant; \
+             did someone revert variants-manifest.json to <populated-by-ci>?"
+        );
+        // Spot-check format: 64 lowercase hex chars per sha256.
+        for v in &m.variants {
+            assert_eq!(v.sha256.len(), 64, "{} sha256 must be 64 hex chars", v.id);
+            assert!(
+                v.sha256.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()),
+                "{} sha256 must be lowercase hex",
+                v.id
+            );
+        }
     }
 
     #[test]
