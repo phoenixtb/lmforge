@@ -178,16 +178,7 @@ fn print_runtime_hints(profile: &HardwareProfile, active: LlamaVariant) {
 }
 
 fn scan_variants(data_dir: &std::path::Path, profile: &HardwareProfile) -> VariantState {
-    use crate::engine::installer::variant_installed;
-    VariantState {
-        cuda12_installed: variant_installed(data_dir, LlamaVariant::Cuda12, profile),
-        cuda13_installed: variant_installed(data_dir, LlamaVariant::Cuda13, profile),
-        vulkan_installed: variant_installed(data_dir, LlamaVariant::Vulkan, profile),
-        cpu_installed: variant_installed(data_dir, LlamaVariant::Cpu, profile),
-        prefer_cuda13: std::env::var("LMFORGE_LLAMACPP_VARIANT")
-            .map(|s| s.eq_ignore_ascii_case("cuda13"))
-            .unwrap_or(false),
-    }
+    crate::engine::installer::scan_variant_state(data_dir, profile)
 }
 
 fn yesno(b: bool) -> &'static str {

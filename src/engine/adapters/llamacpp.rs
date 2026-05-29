@@ -49,12 +49,30 @@ impl EngineAdapter for LlamacppAdapter {
         logs_dir: &Path,
         role: ModelRole,
     ) -> Result<ActiveEngine> {
-        // Resolve the absolute path to `llama-server` from the install location
-        // (`<data_dir>/engines/llama-server`) before any other work. If the
-        // installer hasn't run yet — or the binary was removed via
-        // `lmforge clean --engines` — fall back to a PATH lookup so users with
-        // a system-wide install (homebrew / apt / built-from-source) still work.
-        let executable = resolve_executable(&self.executable, data_dir);
+        // Resolve the active llama.cpp variant from on-disk state +
+        // hardware. `variant::select` picks one of {Cuda12, Cuda13, Vulkan,
+        // Cpu} based on what's installed under the variant tree and what
+        // the GPU + driver actually support. Falls through to legacy flat
+        // layout (and ultimately PATH) when no variant is installed —
+        // keeps pre-v0.2.0 setups working through the upgrade.
+        //
+        // We probe the profile ONCE here and reuse it below for the
+        // VRAM-aware runtime planner. Double-probing was wasteful
+        // (`nvidia-smi` shells out twice) and could give inconsistent
+        // results if the GPU state changed mid-spawn.
+        let profile = resolve_profile_with_vram();
+        let variant_state =
+            crate::engine::installer::scan_variant_state(data_dir, &profile);
+        let active_variant = crate::engine::variant::select(&profile, &variant_state);
+        let variant_dir =
+            crate::engine::installer::variant_install_dir(data_dir, active_variant);
+        let variant_dir_opt = if variant_dir.is_dir() {
+            Some(variant_dir.as_path())
+        } else {
+            None
+        };
+
+        let executable = resolve_executable(&self.executable, data_dir, variant_dir_opt);
 
         // llama-server requires a single .gguf file path, not a directory.
         // Find the largest .gguf file in the model directory.
@@ -89,9 +107,9 @@ impl EngineAdapter for LlamacppAdapter {
         let model_size_gb = file_size_gb(&gguf_path);
         let mmproj_size_gb = mmproj_path.as_deref().map(file_size_gb).unwrap_or(0.0);
 
-        // Resolve hardware profile (with VRAM filled in). Falls back to a CPU
-        // profile so the heuristic still produces a sane ngl=0 and small ctx.
-        let profile = resolve_profile_with_vram();
+        // (`profile` was probed above for variant selection — reuse it
+        // here for the VRAM-aware runtime planner instead of probing
+        // again. Double-probing shelled out to nvidia-smi twice.)
         let free_vram_gb = crate::hardware::vram::get_free_vram(&profile);
         let plan = plan_runtime(
             profile.gpu_vendor,
@@ -198,23 +216,44 @@ impl EngineAdapter for LlamacppAdapter {
 
         info!(
             executable = %executable.display(),
+            active_variant = %active_variant,
             args = ?args,
             "Spawning llama-server"
         );
 
-        let child = Command::new(&executable)
-            .args(&args)
+        let mut cmd = Command::new(&executable);
+        cmd.args(&args)
             .stdout(std::process::Stdio::from(stdout_file))
             .stderr(std::process::Stdio::from(stderr_file))
-            .kill_on_drop(true)
-            .spawn()
-            .with_context(|| {
-                format!(
-                    "Failed to spawn llama-server at {}. \
-                     Run `lmforge init` to (re-)install the bundled binary.",
-                    executable.display()
-                )
-            })?;
+            .kill_on_drop(true);
+
+        // Variant tarballs ship cudart / cublas / cublasLt under
+        // `<variant_dir>/lib/` and the binaries are patchelf'd with
+        // RUNPATH=$ORIGIN/lib. RUNPATH is consulted AFTER LD_LIBRARY_PATH
+        // by the dynamic loader, so a user with a stale system-wide
+        // libcudart on LD_LIBRARY_PATH would shadow our bundled one.
+        // Pre-pend our `lib/` so the bundled libs always win, while
+        // preserving any existing LD_LIBRARY_PATH entries the user had.
+        if let Some(parent) = executable.parent() {
+            let bundled_lib = parent.join("lib");
+            if bundled_lib.is_dir() {
+                let existing = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+                let new_val = if existing.is_empty() {
+                    bundled_lib.to_string_lossy().into_owned()
+                } else {
+                    format!("{}:{}", bundled_lib.display(), existing)
+                };
+                cmd.env("LD_LIBRARY_PATH", new_val);
+            }
+        }
+
+        let child = cmd.spawn().with_context(|| {
+            format!(
+                "Failed to spawn llama-server at {}. \
+                 Run `lmforge init` to (re-)install the bundled binary.",
+                executable.display()
+            )
+        })?;
 
         Ok(ActiveEngine {
             process: child,
@@ -258,15 +297,26 @@ impl EngineAdapter for LlamacppAdapter {
 /// Resolution order (first hit wins):
 ///   1. `LMFORGE_LLAMACPP_BIN` env override — absolute path. Useful for
 ///      hacking on a locally-built `llama.cpp` without re-running `init`.
-///   2. `<data_dir>/engines/<basename>` — where `installer::install_via_binary`
-///      stages the prebuilt download. Primary path for end users.
-///   3. `<data_dir>/engines/<basename>.exe` — Windows fallback when `.exe`
-///      wasn't already on `basename`.
-///   4. Bare `basename` — relies on PATH. Works for system-wide installs
+///   2. **Variant-aware layout** (v0.2.0+): `<variant_dir>/<basename>` when
+///      `variant_dir` is `Some(...)`. Set by the runtime spawn path after
+///      consulting [`crate::engine::variant::select`] — picks the
+///      currently-active CUDA / Vulkan / CPU variant.
+///   3. **Variant-aware Windows fallback**: `<variant_dir>/<basename>.exe`.
+///   4. **Legacy flat layout**: `<data_dir>/engines/<basename>`. Where the
+///      pre-v0.2.0 `installer::install_via_binary` flow staged its single
+///      binary. Kept so older installs keep working until users re-run
+///      `lmforge init`.
+///   5. **Legacy Windows fallback**: `<data_dir>/engines/<basename>.exe`.
+///   6. Bare `basename` — relies on PATH. Works for system-wide installs
 ///      (homebrew / apt / built-from-source).
 ///
-/// Pure function — exposed for unit tests.
-pub(crate) fn resolve_executable(basename: &str, data_dir: &Path) -> PathBuf {
+/// Pure function — exposed for unit tests. The `variant_dir` parameter is
+/// what makes this testable without standing up a hardware probe.
+pub(crate) fn resolve_executable(
+    basename: &str,
+    data_dir: &Path,
+    variant_dir: Option<&Path>,
+) -> PathBuf {
     if let Ok(s) = std::env::var("LMFORGE_LLAMACPP_BIN")
         && !s.is_empty()
     {
@@ -276,13 +326,26 @@ pub(crate) fn resolve_executable(basename: &str, data_dir: &Path) -> PathBuf {
         }
     }
 
+    // Variant-aware layout — the v0.2.0 default.
+    if let Some(vdir) = variant_dir {
+        let candidate = vdir.join(basename);
+        if candidate.is_file() {
+            return candidate;
+        }
+        if cfg!(windows) && !basename.ends_with(".exe") {
+            let win = vdir.join(format!("{basename}.exe"));
+            if win.is_file() {
+                return win;
+            }
+        }
+    }
+
+    // Legacy flat layout — pre-v0.2.0 installs that haven't migrated.
     let engines_dir = data_dir.join("engines");
     let primary = engines_dir.join(basename);
     if primary.is_file() {
         return primary;
     }
-
-    // Windows: try the `.exe` suffix if the caller passed bare `llama-server`.
     if cfg!(windows) && !basename.ends_with(".exe") {
         let win = engines_dir.join(format!("{basename}.exe"));
         if win.is_file() {
@@ -867,7 +930,8 @@ mod tests {
         let bin = engines.join("llama-server");
         std::fs::write(&bin, "fake").unwrap();
 
-        let resolved = resolve_executable("llama-server", &dir);
+        // No variant_dir → falls through to legacy flat layout.
+        let resolved = resolve_executable("llama-server", &dir, None);
         assert_eq!(resolved, bin);
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -882,8 +946,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("engines")).unwrap();
 
-        let resolved = resolve_executable("llama-server", &dir);
-        // No file at <data_dir>/engines/llama-server → PATH fallback.
+        let resolved = resolve_executable("llama-server", &dir, None);
+        // No file anywhere → PATH fallback.
         assert_eq!(resolved, PathBuf::from("llama-server"));
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -903,7 +967,7 @@ mod tests {
         std::fs::write(&custom, "custom").unwrap();
 
         unsafe { std::env::set_var("LMFORGE_LLAMACPP_BIN", custom.to_string_lossy().to_string()) };
-        let resolved = resolve_executable("llama-server", &dir);
+        let resolved = resolve_executable("llama-server", &dir, None);
         unsafe { std::env::remove_var("LMFORGE_LLAMACPP_BIN") };
 
         assert_eq!(resolved, custom);
@@ -922,11 +986,118 @@ mod tests {
         std::fs::write(&staged, "staged").unwrap();
 
         unsafe { std::env::set_var("LMFORGE_LLAMACPP_BIN", "/nonexistent/path") };
-        let resolved = resolve_executable("llama-server", &dir);
+        let resolved = resolve_executable("llama-server", &dir, None);
         unsafe { std::env::remove_var("LMFORGE_LLAMACPP_BIN") };
 
         // Bad override → fall through to engines dir.
         assert_eq!(resolved, staged);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ── variant-aware resolve_executable (C-3) ──────────────────────────────
+    //
+    // The new layout is `<data_dir>/engines/llamacpp/variants/<id>/llama-server`.
+    // Variant tree wins over the legacy flat `<data_dir>/engines/llama-server`
+    // path. Env override (LMFORGE_LLAMACPP_BIN) still wins over both.
+
+    #[test]
+    fn resolve_executable_prefers_variant_dir_over_legacy_flat() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("LMFORGE_LLAMACPP_BIN") };
+
+        let dir = std::env::temp_dir().join("lmforge_test_resolve_variant_wins");
+        let _ = std::fs::remove_dir_all(&dir);
+        let engines = dir.join("engines");
+        std::fs::create_dir_all(&engines).unwrap();
+
+        // Both layouts present — variant must win.
+        let legacy = engines.join("llama-server");
+        std::fs::write(&legacy, "legacy").unwrap();
+        let variant = engines.join("llamacpp").join("variants").join("cuda12");
+        std::fs::create_dir_all(&variant).unwrap();
+        let variant_bin = variant.join("llama-server");
+        std::fs::write(&variant_bin, "cuda12").unwrap();
+
+        let resolved = resolve_executable("llama-server", &dir, Some(&variant));
+        assert_eq!(
+            resolved, variant_bin,
+            "variant_dir/llama-server must win over legacy <engines>/llama-server"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolve_executable_falls_through_to_legacy_when_variant_missing() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("LMFORGE_LLAMACPP_BIN") };
+
+        let dir = std::env::temp_dir().join("lmforge_test_resolve_variant_empty");
+        let _ = std::fs::remove_dir_all(&dir);
+        let engines = dir.join("engines");
+        std::fs::create_dir_all(&engines).unwrap();
+
+        // Variant dir exists but is EMPTY — no llama-server inside.
+        let variant = engines.join("llamacpp").join("variants").join("vulkan");
+        std::fs::create_dir_all(&variant).unwrap();
+        // Legacy flat binary IS present.
+        let legacy = engines.join("llama-server");
+        std::fs::write(&legacy, "legacy").unwrap();
+
+        let resolved = resolve_executable("llama-server", &dir, Some(&variant));
+        assert_eq!(
+            resolved, legacy,
+            "empty variant dir must fall through to legacy flat layout"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolve_executable_path_fallback_when_variant_dir_passed_but_nothing_installed() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("LMFORGE_LLAMACPP_BIN") };
+
+        let dir = std::env::temp_dir().join("lmforge_test_resolve_variant_no_anything");
+        let _ = std::fs::remove_dir_all(&dir);
+        let engines = dir.join("engines");
+        std::fs::create_dir_all(&engines).unwrap();
+        let variant = engines.join("llamacpp").join("variants").join("cpu");
+        std::fs::create_dir_all(&variant).unwrap();
+
+        let resolved = resolve_executable("llama-server", &dir, Some(&variant));
+        // Nothing installed anywhere → bare basename, picked up via PATH.
+        assert_eq!(resolved, PathBuf::from("llama-server"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolve_executable_env_override_wins_over_variant_dir() {
+        let _g = ENV_LOCK.lock().unwrap();
+
+        let dir = std::env::temp_dir().join("lmforge_test_resolve_env_beats_variant");
+        let _ = std::fs::remove_dir_all(&dir);
+        let engines = dir.join("engines");
+        std::fs::create_dir_all(&engines).unwrap();
+
+        let variant = engines.join("llamacpp").join("variants").join("cuda13");
+        std::fs::create_dir_all(&variant).unwrap();
+        let variant_bin = variant.join("llama-server");
+        std::fs::write(&variant_bin, "cuda13").unwrap();
+
+        let custom = dir.join("hand-rolled-llama-server");
+        std::fs::write(&custom, "custom").unwrap();
+
+        unsafe { std::env::set_var("LMFORGE_LLAMACPP_BIN", custom.to_string_lossy().to_string()) };
+        let resolved = resolve_executable("llama-server", &dir, Some(&variant));
+        unsafe { std::env::remove_var("LMFORGE_LLAMACPP_BIN") };
+
+        assert_eq!(
+            resolved, custom,
+            "LMFORGE_LLAMACPP_BIN must win over variant tree (developer escape hatch)"
+        );
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

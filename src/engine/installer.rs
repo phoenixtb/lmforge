@@ -1405,6 +1405,27 @@ pub fn variant_installed(
         .is_file()
 }
 
+/// Snapshot the on-disk variant tree into a [`VariantState`] suitable for
+/// [`crate::engine::variant::select`]. Centralises the directory scan +
+/// `LMFORGE_LLAMACPP_VARIANT` env-override parsing so `lmforge doctor`,
+/// `lmforge engine list`, and the runtime spawn path (C-3) all see the
+/// same view.
+pub fn scan_variant_state(
+    data_dir: &std::path::Path,
+    profile: &HardwareProfile,
+) -> crate::engine::variant::VariantState {
+    use crate::engine::variant::{LlamaVariant, VariantState};
+    VariantState {
+        cuda12_installed: variant_installed(data_dir, LlamaVariant::Cuda12, profile),
+        cuda13_installed: variant_installed(data_dir, LlamaVariant::Cuda13, profile),
+        vulkan_installed: variant_installed(data_dir, LlamaVariant::Vulkan, profile),
+        cpu_installed: variant_installed(data_dir, LlamaVariant::Cpu, profile),
+        prefer_cuda13: std::env::var("LMFORGE_LLAMACPP_VARIANT")
+            .map(|s| s.eq_ignore_ascii_case("cuda13"))
+            .unwrap_or(false),
+    }
+}
+
 fn variant_binary_name(profile: &HardwareProfile) -> &'static str {
     if profile.os == Os::Windows {
         "llama-server.exe"
