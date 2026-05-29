@@ -4,16 +4,21 @@ use crate::config::LmForgeConfig;
 use crate::engine::registry::EngineRegistry;
 use crate::model::{downloader, index, resolver};
 
-/// `lmforge pull <model> [--engine <id>]` — Download a model.
+/// `lmforge pull <model> [--engine <id>] [--refresh]` — Download a model.
 ///
 /// When `engine_override` is `None`, the format is determined by the
 /// hardware-aware auto-selector (same as `lmforge run` / `lmforge catalog`).
 /// When set, the registry's `select_explicit` is used so the user can pull
 /// safetensors for vLLM on a host where llamacpp is the default.
+///
+/// `refresh` re-evaluates capabilities for an already-present model without
+/// re-downloading the weights. Migration story for users who pulled a model
+/// before a capability detector landed (e.g. MTP detection in S-1).
 pub async fn run(
     config: &LmForgeConfig,
     model_input: &str,
     engine_override: Option<&str>,
+    refresh: bool,
 ) -> Result<()> {
     let data_dir = config.data_dir();
     std::fs::create_dir_all(data_dir.join("models"))?;
@@ -54,6 +59,55 @@ pub async fn run(
     let mut idx = index::ModelIndex::load(&data_dir)?;
 
     if let Some(existing) = idx.get(&resolved.id) {
+        if refresh {
+            // Re-evaluate capabilities for an already-downloaded model.
+            // Same detection pipeline as a fresh pull (incl. layered MTP),
+            // but no network I/O — we only touch the on-disk weights and
+            // the catalog metadata that came with `resolved`.
+            println!(
+                "  Model '{}' present at {} — refreshing capabilities (no re-download)",
+                resolved.id, existing.path
+            );
+
+            let mut caps = index::detect_capabilities(
+                &model_dir,
+                Some(&resolved.id),
+                Some(&resolved.hf_repo),
+            );
+            if matches!(resolved.format, resolver::ModelFormat::Gguf) {
+                caps.mtp =
+                    crate::model::gguf_inspect::resolve_mtp_for_model(&model_dir, resolved.mtp);
+            }
+            println!(
+                "  Capabilities: chat={} embeddings={} reranking={} thinking={} vision={} dims={:?} mtp={:?}",
+                caps.chat,
+                caps.embeddings,
+                caps.reranking,
+                caps.thinking,
+                caps.vision,
+                caps.embedding_dims,
+                caps.mtp,
+            );
+            if let Some(mmproj) = caps.mmproj_path.as_deref() {
+                println!("  mmproj:       {}", mmproj);
+            }
+
+            let entry = index::ModelEntry {
+                id: resolved.id.clone(),
+                path: existing.path.clone(),
+                format: resolved.format.to_string(),
+                engine: engine_format.clone(),
+                hf_repo: Some(resolved.hf_repo.clone()),
+                size_bytes: index::dir_size(&model_dir),
+                capabilities: caps,
+                added_at: existing.added_at.clone(),
+            };
+            idx.add(entry);
+            idx.save(&data_dir)?;
+
+            println!("\n✓ Model '{}' capabilities refreshed.", resolved.id);
+            return Ok(());
+        }
         println!(
             "  Model '{}' already installed at {}",
             resolved.id, existing.path
@@ -62,7 +116,19 @@ pub async fn run(
             "  To re-download, remove it first: lmforge models remove {}",
             resolved.id
         );
+        println!(
+            "  To update capabilities (e.g. mtp) without re-downloading: lmforge pull {} --refresh",
+            resolved.id
+        );
         return Ok(());
+    }
+
+    if refresh {
+        anyhow::bail!(
+            "--refresh requires an already-installed model. \
+             '{}' is not in the index — drop --refresh to download it.",
+            resolved.id
+        );
     }
 
     // Download

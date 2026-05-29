@@ -173,10 +173,122 @@ pub fn select(profile: &HardwareProfile, state: &VariantState) -> LlamaVariant {
     fallback_variant(profile)
 }
 
+/// Plan for which `llama.cpp` build `lmforge init` should install on Linux.
+/// CUDA flavours (`cuda12` / `cuda13`) use the manifest-driven
+/// `install_variant` path; Vulkan / CPU still go through the legacy
+/// upstream-binary downloader until those entries land in the manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InitVariantPlan {
+    pub variant: LlamaVariant,
+    /// When true, `installer::install_variant` handles the download.
+    pub use_manifest: bool,
+    /// Optional operator-facing note (e.g. below-floor driver → Vulkan).
+    pub hint: Option<String>,
+}
+
+/// Decide which variant `lmforge init` should install on Linux.
+///
+/// Rules mirror the design contract in PLAN-v0.2.0 §0:
+///   • Linux NVIDIA + driver ≥ r570.26 + supported sm → `cuda12` (manifest)
+///   • `LMFORGE_LLAMACPP_VARIANT=cuda13` + driver ≥ r590.44.01 → `cuda13`
+///   • `LMFORGE_LLAMACPP_VARIANT=cpu` → CPU legacy binary
+///   • Below CUDA12 driver floor → Vulkan legacy binary + upgrade hint
+///   • AMD / Intel / no GPU → Vulkan or CPU legacy binary
+pub fn init_target_variant(profile: &HardwareProfile) -> InitVariantPlan {
+    if let Ok(override_val) = std::env::var("LMFORGE_LLAMACPP_VARIANT") {
+        match override_val.to_ascii_lowercase().as_str() {
+            "cpu" => {
+                return InitVariantPlan {
+                    variant: LlamaVariant::Cpu,
+                    use_manifest: false,
+                    hint: None,
+                };
+            }
+            "cuda13" => {
+                return InitVariantPlan {
+                    variant: LlamaVariant::Cuda13,
+                    use_manifest: true,
+                    hint: None,
+                };
+            }
+            "cuda12" => {
+                return InitVariantPlan {
+                    variant: LlamaVariant::Cuda12,
+                    use_manifest: true,
+                    hint: None,
+                };
+            }
+            "gpu" | "vulkan" => {
+                return InitVariantPlan {
+                    variant: LlamaVariant::Vulkan,
+                    use_manifest: false,
+                    hint: None,
+                };
+            }
+            "auto" => {}
+            other => {
+                return InitVariantPlan {
+                    variant: fallback_variant(profile),
+                    use_manifest: false,
+                    hint: Some(format!(
+                        "Unknown LMFORGE_LLAMACPP_VARIANT={other:?} — treating as auto"
+                    )),
+                };
+            }
+        }
+    }
+
+    if matches!(profile.os, Os::Linux) && profile.gpu_vendor == GpuVendor::Nvidia {
+        let driver = profile
+            .driver_tuple
+            .or_else(|| {
+                profile
+                    .cuda_driver_version
+                    .as_deref()
+                    .and_then(crate::hardware::probe::parse_driver_tuple)
+            })
+            .unwrap_or((0, 0, 0));
+
+        let cap_ok = matches!(
+            profile.compute_cap,
+            Some((cc_maj, _)) if matches!(cc_maj, 7 | 8 | 9 | 12)
+        );
+
+        if cap_ok && driver >= CUDA12_DRIVER_MIN {
+            return InitVariantPlan {
+                variant: LlamaVariant::Cuda12,
+                use_manifest: true,
+                hint: None,
+            };
+        }
+
+        if cap_ok && driver < CUDA12_DRIVER_MIN {
+            let driver_label = profile
+                .cuda_driver_version
+                .as_deref()
+                .unwrap_or("unknown");
+            return InitVariantPlan {
+                variant: LlamaVariant::Vulkan,
+                use_manifest: false,
+                hint: Some(format!(
+                    "NVIDIA driver {driver_label} is below the CUDA floor (r570.26). \
+                     Installing Vulkan build — run `lmforge doctor` for upgrade guidance."
+                )),
+            };
+        }
+    }
+
+    InitVariantPlan {
+        variant: fallback_variant(profile),
+        use_manifest: false,
+        hint: None,
+    }
+}
+
 /// Variant we'd pick if no CUDA variant is installed (or the driver / cap
 /// gates refuse it). Mirrors `installer::resolve_platform`'s GPU-vs-CPU
 /// decision so the two stay aligned.
-fn fallback_variant(profile: &HardwareProfile) -> LlamaVariant {
+pub(crate) fn fallback_variant(profile: &HardwareProfile) -> LlamaVariant {
     let has_gpu = matches!(
         profile.gpu_vendor,
         GpuVendor::Nvidia | GpuVendor::Amd | GpuVendor::Intel
@@ -593,6 +705,31 @@ mod tests {
         use std::str::FromStr;
         assert!(LlamaVariant::from_str("rocm").is_err());
         assert!(LlamaVariant::from_str("").is_err());
+    }
+
+    // ── init_target_variant (C-3.4) ────────────────────────────────────────
+
+    #[test]
+    fn init_target_linux_nvidia_blackwell_picks_cuda12_manifest() {
+        let plan = init_target_variant(&linux_nvidia_blackwell((595, 71, 5)));
+        assert_eq!(plan.variant, LlamaVariant::Cuda12);
+        assert!(plan.use_manifest);
+        assert!(plan.hint.is_none());
+    }
+
+    #[test]
+    fn init_target_linux_nvidia_below_floor_picks_vulkan_with_hint() {
+        let plan = init_target_variant(&linux_nvidia_blackwell((535, 0, 0)));
+        assert_eq!(plan.variant, LlamaVariant::Vulkan);
+        assert!(!plan.use_manifest);
+        assert!(plan.hint.is_some());
+    }
+
+    #[test]
+    fn init_target_linux_amd_picks_vulkan_legacy() {
+        let plan = init_target_variant(&linux_amd());
+        assert_eq!(plan.variant, LlamaVariant::Vulkan);
+        assert!(!plan.use_manifest);
     }
 
     // ── Manifest ─────────────────────────────────────────────────────────

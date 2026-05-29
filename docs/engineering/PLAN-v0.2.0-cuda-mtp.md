@@ -29,11 +29,11 @@ This is the working tracker for v0.2.0. Check items off as they complete. Update
 
 | Phase | Status | Owner | PR / commit |
 |---|---|---|---|
-| C-1 — CUDA build pipeline | ✅ | agent | `v0.2.0-cuda-mtp` (workflow shipped; manifest populated with real shas; lib-bundling fix in flight after live-test discovery) |
+| C-1 — CUDA build pipeline | ✅ | agent | `v0.2.0-cuda-mtp` (workflow shipped; manifest populated with real shas; lib-bundling fix landed) |
 | C-2 — Variant infrastructure | ✅ | agent | `v0.2.0-cuda-mtp` (variant.rs + installer::install_variant + scan_variant_state) |
 | C-3 — Variant-aware launch | ✅ | agent | `v0.2.0-cuda-mtp` 800011f (resolve_executable variant_dir + LD_LIBRARY_PATH injection) |
-| S-1 — MTP detection | ✅ | agent | `v0.2.0-cuda-mtp` (parser + catalog schema + pull-time probe) |
-| S-2 — Spec-dec launch + telemetry | ✅ | agent | `v0.2.0-cuda-mtp` (S-2.1–S-2.5 prior; S-2.6 stderr observer + tee task; S-2.7 /lf/status spec_mode + spec_stats; S-2.8 crash-fallback retry; S-2.9 byte-identity property tests) |
+| S-1 — MTP detection | ✅ | agent | `v0.2.0-cuda-mtp` (parser + catalog schema + pull-time probe; probe-wins-over-catalog after live-test on unsloth/Qwen3.5-4B; `pull --refresh` migration path for already-installed models) |
+| S-2 — Spec-dec launch + telemetry | ✅ | agent | `v0.2.0-cuda-mtp` (S-2.1–S-2.5 prior; S-2.6 stderr observer + tee task; S-2.7 /lf/status spec_mode + spec_stats; S-2.8 crash-fallback retry **fired live**; S-2.9 byte-identity property tests; live MTP-tensor capture deferred — no public GGUF with `nextn.*` tensors verified yet, see §S-2 notes) |
 | S-3 — Draft-model pairs | ⏳ | | |
 | Polish — docs + UI + ADRs | ⏳ | | |
 
@@ -301,9 +301,9 @@ $ lmforge doctor
 - [ ] **C-3.1** Extend `src/engine/adapters/llamacpp.rs` with `resolve_binary_path(profile, data_dir) -> PathBuf` that consults `variant::select()`.
 - [ ] **C-3.2** Launch state machine with fallback chain: cuda12 → vulkan → cpu. Each step logs `engine=<variant> reason=...`.
 - [ ] **C-3.3** Extend `last_errors` in `src/server/native.rs` with `engine_errors: Vec<EngineLoadError> { variant, exit_code, stderr_tail }`.
-- [ ] **C-3.4** Extend `src/cli/init.rs` to auto-install cuda12 on Linux NVIDIA when `driver_tuple >= CUDA12_DRIVER_MIN`.
-- [ ] **C-3.5** Idempotency check: skip auto-install if `~/.lmforge/engines/llamacpp/variants/cuda12/VERSION` matches manifest's `llamacpp_tag`.
-- [ ] **C-3.6** Honour `LMFORGE_LLAMACPP_VARIANT=cpu` to skip CUDA auto-install (existing env override extends to this).
+- [ ] **C-3.4** Extend `src/cli/init.rs` to auto-install cuda12 on Linux NVIDIA when `driver_tuple >= CUDA12_DRIVER_MIN`. — **Done**: `variant::init_target_variant` + `installer::install_llamacpp_on_init`; live-tested on Blackwell (cuda12 downloaded + idempotent skip on re-run).
+- [ ] **C-3.5** Idempotency check: skip auto-install if `~/.lmforge/engines/llamacpp/variants/cuda12/VERSION` matches manifest's `llamacpp_tag`. — **Done** (in `install_variant`; verified live).
+- [ ] **C-3.6** Honour `LMFORGE_LLAMACPP_VARIANT=cpu` to skip CUDA auto-install (existing env override extends to this). — **Done** in `init_target_variant`.
 - [ ] **C-3.7** Extend `/lf/status` payload with `engine_active_variant` field, `engine_errors` array.
 
 #### Acceptance criteria
@@ -391,6 +391,14 @@ pub fn detect_mtp(gguf_path: &Path) -> Option<bool> {
 - [x] **S-2.7** Stderr scraper for accept-rate / tokens-drafted / tokens-accepted; emit to `/lf/status.speculative`. — `ModelSlot.spec_mode` + `ModelSlot.spec_stats` (`SpecStats { drafted_total, accepted_total, samples, last_accept_rate, cumulative_accept_rate }`) populated from the live observer on every `notify()`. Live `/lf/status` confirmed surfacing `spec_mode: "off"` for non-mtp models; spec_stats omitted via `skip_serializing_if` until the first sample arrives.
 - [x] **S-2.8** Fallback policy: if `llama-server` exits non-zero within 5 s of start AND spec was on, restart once with `mode=Off`; never silently disable MTP mid-stream. — `EngineManager::handle_ensure_model` keys off `engine.spec_mode != Off` + `load_started.elapsed() < 5s`, sets `LMFORGE_SPECULATIVE_MODE=off` with save+restore guard, retries once. Combined error message surfaces both attempts in `last_errors` so users see WHY spec was disabled.
 - [x] **S-2.9** Tests: launched server with `mode=mtp` and `mode=off` (greedy, same seed) produces byte-identical output (lossless property). — Unit-level structural property tests in `llamacpp::tests` assert (a) off→mtp diff is purely additive (off args is a strict prefix of mtp args), (b) every emitted spec flag begins with `--spec-`, ruling out accidental seed/sampler perturbation, and (c) a parameterised grid sweep across `{mode, draft_max, draft_min, draft_p_min, draft_gpu_layers, draft_model_path}` preserves the baseline contract. End-to-end byte-identity (running real `llama-server` greedy decode + diffing tokens) is e2e territory and tracked in §11 e2e tests.
+
+#### S-2 live-test notes (Blackwell + cuda13, 2026-05-29)
+
+- **`--spec-type` flag was missing.** Initial `append_spec_args` only emitted `--spec-draft-*` knobs. `llama-server` requires `--spec-type {draft-mtp|draft-simple|ngram-*}` to pick an implementation; without it the server logs `common_speculative_init: no implementations specified for speculative decoding` and silently runs without spec. Fix: emit `--spec-type draft-mtp` (Mtp) / `--spec-type draft-simple` (DraftModel). Regression test added (`append_spec_args_mtp_emits_spec_type_draft_mtp`).
+- **Probe must outrank catalog.** Catalog hand-tagged `unsloth/Qwen3.5-*-GGUF` as `mtp:true`, but the actual Q6_K_XL has 0 nextn/mtp tensors (verified with `examples/probe_mtp.rs`). With the original "catalog wins" precedence, every spawn crashed with `context type MTP requested but model doesn't contain MTP layers` and triggered the S-2.8 retry. Fix: `resolve_mtp_for_model` now prefers the probe whenever it returns `Some(_)`, falling back to the catalog only when the file is unreadable. Three new tests (`resolve_mtp_probe_wins_over_catalog_when_definitive`, `resolve_mtp_probe_positive_overrides_catalog_negative`, `resolve_mtp_falls_back_to_catalog_when_probe_unreadable`).
+- **`pull --refresh` migration path.** Re-evaluates capabilities for an already-installed model without re-downloading the weights; necessary because models pulled before S-1 landed had stale `mtp = null` in `models.json`.
+- **S-2.8 fired in production.** First run with the corrected `--spec-type draft-mtp` flag died at 2310 ms during MTP context creation; daemon log: `WARN: Spec-dec engine died <5s after spawn — retrying once with spec=off (S-2.8)` → `INFO: Spec-dec retry succeeded — slot is Ready with spec=off`. Crash-fallback path is now field-validated.
+- **Live `draft acceptance rate` capture deferred.** No public GGUF with verified `nextn.*` tensors found yet (Unsloth's Q*_K_XL family strips them during quantization). Parser has 12 unit tests against canonical + adversarial upstream formats and the tee task is wired in `llamacpp::start`; the residual gap is purely "run against a real MTP-active GGUF." Tracked under Polish/§11 e2e once we identify or build one.
 
 #### Code sketch — `src/engine/speculative.rs`
 

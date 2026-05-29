@@ -93,6 +93,13 @@ pub enum Command {
         /// format mismatch.
         #[arg(long)]
         engine: Option<String>,
+
+        /// Re-evaluate capabilities for an already-downloaded model without
+        /// re-fetching the weights. Useful after upgrading lmforge — newer
+        /// versions detect capabilities (e.g. the `mtp` flag for speculative
+        /// decoding, S-1) that older pulls didn't record.
+        #[arg(long)]
+        refresh: bool,
     },
 
     /// Run an interactive REPL with a model
@@ -304,7 +311,11 @@ pub async fn dispatch(cli: Cli, config: LmForgeConfig) -> Result<()> {
         }
         Command::Stop => stop::run(&config).await,
         Command::Status => status::run(&config).await,
-        Command::Pull { model, engine } => pull::run(&config, &model, engine.as_deref()).await,
+        Command::Pull {
+            model,
+            engine,
+            refresh,
+        } => pull::run(&config, &model, engine.as_deref(), refresh).await,
         Command::Models { action } => models::run(&config, action).await,
         Command::Catalog { format, search } => catalog::run(&config, format, search).await,
         Command::Clean {

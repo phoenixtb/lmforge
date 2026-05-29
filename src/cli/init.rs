@@ -139,26 +139,48 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     println!("  Install:  {}", selected.install_method);
 
     // For binary-install engines (currently just llama.cpp), preview the exact
-    // upstream asset we're about to fetch. Lets users sanity-check the GPU vs
-    // CPU choice before the download eats 50-200 MB of disk + bandwidth, and
-    // catches LMFORGE_LLAMACPP_VARIANT overrides in real time.
-    if selected.install_method == "binary"
-        && let Ok((variant, ext)) = crate::engine::installer::resolve_platform(&profile)
-    {
-        println!("  Variant:  {}.{}", variant, ext);
+    // build we're about to fetch. On Linux this follows the variant-aware init
+    // plan (cuda12 manifest tarball when hardware allows); on Windows it still
+    // uses the legacy upstream asset naming from resolve_platform.
+    if selected.install_method == "binary" {
+        if profile.os == crate::hardware::probe::Os::Linux {
+            let plan = crate::engine::variant::init_target_variant(&profile);
+            println!(
+                "  Variant:  {} ({})",
+                plan.variant,
+                if plan.use_manifest {
+                    "manifest tarball"
+                } else {
+                    "legacy upstream"
+                }
+            );
+            if let Some(ref hint) = plan.hint {
+                println!("            {hint}");
+            }
+        } else if let Ok((variant, ext)) = crate::engine::installer::resolve_platform(&profile) {
+            println!("  Variant:  {}.{}", variant, ext);
+        }
         if let Ok(override_val) = std::env::var("LMFORGE_LLAMACPP_VARIANT")
             && !override_val.eq_ignore_ascii_case("auto")
         {
-            println!("            (forced by LMFORGE_LLAMACPP_VARIANT={})", override_val);
+            println!("            (forced by LMFORGE_LLAMACPP_VARIANT={override_val})");
         }
     }
     println!();
 
     // Engine installation
     println!("⚙ Installing engine...");
-    let install_result = crate::engine::installer::install(selected, &profile, &data_dir)
-        .await
-        .with_context(|| format!("Engine installation failed for {}", selected.id))?;
+    let install_result = if selected.id == "llamacpp"
+        && profile.os == crate::hardware::probe::Os::Linux
+    {
+        crate::engine::installer::install_llamacpp_on_init(selected, &profile, &data_dir)
+            .await
+            .with_context(|| format!("Engine installation failed for {}", selected.id))?
+    } else {
+        crate::engine::installer::install(selected, &profile, &data_dir)
+            .await
+            .with_context(|| format!("Engine installation failed for {}", selected.id))?
+    };
     println!("  Method: {}", install_result.method_used);
     println!();
 

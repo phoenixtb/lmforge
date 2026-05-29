@@ -694,10 +694,15 @@ mod tests {
     }
 
     #[test]
-    fn bundled_gguf_propagates_mtp_for_qwen3_coder_next_and_qwen35() {
-        // Regression: the S-1.4 catalog audit tags Qwen3-Coder-Next and
-        // Qwen3.5 with `mtp: true`. If anyone reverts those entries to plain
-        // strings, this test fails and the spec-dec launch silently breaks.
+    fn bundled_gguf_qwen3_family_relies_on_probe_not_catalog_for_mtp() {
+        // S-2 live-test finding (2026-05-29): catalog hand-tagging
+        // `mtp:true` for Qwen3.5 / Qwen3-Coder-Next was misleading — the
+        // actual GGUF shards (Unsloth Q*_K_XL family) ship with zero
+        // nextn/mtp tensors, so trusting the catalog crashed every spawn
+        // with `model doesn't contain MTP layers`. Truth-source flipped:
+        // catalog stays editorial, the gguf_inspect probe is authoritative
+        // at pull time. These shortcuts must therefore carry `None` — the
+        // probe fills it in (positive or negative) when weights land.
         for shortcut in &[
             "qwen3-coder:next:4bit",
             "qwen3-coder:next:6bit",
@@ -710,8 +715,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing gguf shortcut {shortcut}"));
             assert_eq!(
                 r.mtp(),
-                Some(true),
-                "{shortcut} should carry mtp:true (catalog audit S-1.4)"
+                None,
+                "{shortcut} must rely on probe, not catalog tag (S-2 live finding)"
             );
         }
     }

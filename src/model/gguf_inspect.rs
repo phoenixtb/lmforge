@@ -72,24 +72,31 @@ impl MetaType {
 /// Layered MTP resolver for a freshly-pulled model.
 ///
 /// Resolution order (S-1 / S-1.7):
-///   1. If `catalog_mtp` is set, it wins — the catalog is the authoritative
-///      record because it's been hand-audited (`data/catalogs/gguf.json`).
-///   2. Otherwise, probe the largest .gguf file in `model_dir` for MTP
-///      tensor names.
-///   3. If the probe fails (truncated file, unsupported version), return
-///      `None` so the launch path can fall back to spec-dec OFF instead
-///      of guessing.
+///   1. **Probe wins when definitive.** If `detect_mtp` returns `Some(_)`,
+///      use it: the file's own tensor names are ground truth, and we have
+///      evidence (S-2 live test on `unsloth/Qwen3.5-4B-GGUF`) that catalog
+///      tags can lag reality — quant tools sometimes strip nextn/mtp
+///      tensors during conversion, leaving a "should have MTP" repo with
+///      a non-MTP GGUF. Acting on a wrong catalog tag means llama-server
+///      crashes on `--spec-type draft-mtp` ("model doesn't contain MTP
+///      layers"), forcing the S-2.8 retry path on every spawn.
+///   2. **Catalog fills the gap when the probe can't read.** If the file
+///      is missing, truncated, or an unsupported GGUF version, fall back
+///      to whatever the catalog declared so we don't lose the editorial
+///      hint entirely.
+///   3. Returns `None` only when both signals are silent.
 ///
 /// `model_dir` is the directory where the downloader staged files. We
 /// pick the largest `.gguf` file because multi-quant repos sometimes
 /// include shards or sidecars (e.g. `mmproj-*.gguf`) we don't want to
 /// probe.
 pub fn resolve_mtp_for_model(model_dir: &Path, catalog_mtp: Option<bool>) -> Option<bool> {
-    if let Some(flag) = catalog_mtp {
-        return Some(flag);
+    if let Some(largest) = largest_gguf_in_dir(model_dir)
+        && let Some(probed) = detect_mtp(&largest)
+    {
+        return Some(probed);
     }
-    let largest = largest_gguf_in_dir(model_dir)?;
-    detect_mtp(&largest)
+    catalog_mtp
 }
 
 /// Find the largest `.gguf` file under `dir` (non-recursive — model dirs
@@ -383,21 +390,40 @@ mod tests {
     }
 
     #[test]
-    fn resolve_mtp_catalog_flag_wins_over_probe() {
+    fn resolve_mtp_probe_wins_over_catalog_when_definitive() {
+        // Live S-2 finding: catalog tagged unsloth/Qwen3.5-* mtp:true, but
+        // the actual GGUFs have zero nextn tensors. Acting on the catalog
+        // tag crashed llama-server with "model doesn't contain MTP layers"
+        // every spawn. The probe is ground truth — it wins when definitive.
         let dir = tempfile::tempdir().unwrap();
         write_gguf_into(dir.path(), "model.gguf", &["token_embd.weight"]);
 
-        // Catalog says yes — we trust it even if probe would say no.
-        assert_eq!(resolve_mtp_for_model(dir.path(), Some(true)), Some(true));
-        // Catalog says no — same: catalog wins.
+        // Catalog says yes, probe says no → probe wins.
+        assert_eq!(resolve_mtp_for_model(dir.path(), Some(true)), Some(false));
+        // Catalog says no, probe says no → no contradiction.
         assert_eq!(resolve_mtp_for_model(dir.path(), Some(false)), Some(false));
+        // Catalog silent → fall back to probe.
+        assert_eq!(resolve_mtp_for_model(dir.path(), None), Some(false));
     }
 
     #[test]
-    fn resolve_mtp_falls_back_to_probe_when_catalog_silent() {
+    fn resolve_mtp_probe_positive_overrides_catalog_negative() {
+        // Symmetric: probe says yes → it wins regardless of catalog.
         let dir = tempfile::tempdir().unwrap();
         write_gguf_into(dir.path(), "model.gguf", &["nextn.0.norm.weight"]);
+        assert_eq!(resolve_mtp_for_model(dir.path(), Some(false)), Some(true));
+        assert_eq!(resolve_mtp_for_model(dir.path(), Some(true)), Some(true));
         assert_eq!(resolve_mtp_for_model(dir.path(), None), Some(true));
+    }
+
+    #[test]
+    fn resolve_mtp_falls_back_to_catalog_when_probe_unreadable() {
+        // No GGUF present → probe returns None, catalog hint takes over.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("readme.txt"), "not a model").unwrap();
+        assert_eq!(resolve_mtp_for_model(dir.path(), Some(true)), Some(true));
+        assert_eq!(resolve_mtp_for_model(dir.path(), Some(false)), Some(false));
+        assert_eq!(resolve_mtp_for_model(dir.path(), None), None);
     }
 
     #[test]
@@ -419,12 +445,12 @@ mod tests {
                 "blk.0.ffn_down.weight",
             ],
         );
-        // Probe must look at the main model, not the mmproj — Some(false).
+        // Probe looks at the main model, not the mmproj — Some(false).
         assert_eq!(resolve_mtp_for_model(dir.path(), None), Some(false));
     }
 
     #[test]
-    fn resolve_mtp_returns_none_when_no_gguf_present() {
+    fn resolve_mtp_returns_none_when_no_gguf_and_no_catalog() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("readme.txt"), "not a model").unwrap();
         assert_eq!(resolve_mtp_for_model(dir.path(), None), None);

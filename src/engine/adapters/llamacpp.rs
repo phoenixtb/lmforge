@@ -653,10 +653,23 @@ fn load_speculative_config(data_dir: &Path) -> SpeculativeConfig {
 /// Translate a resolved spec-dec plan into `llama-server` flags. The
 /// flag names match the b9351 release; if upstream renames them we'll
 /// see test failures on the first dispatch and bump the names here.
+///
+/// **Critical**: `llama-server` requires BOTH a `--spec-type` flag (which
+/// selects the implementation: `draft-mtp` / `draft-simple` / `ngram-*`)
+/// AND the per-flag `--spec-draft-*` knobs. Without `--spec-type`, the
+/// server defaults to `none` and silently ignores every other spec-* flag.
+/// Caught live during S-2 verification: the first MTP run produced
+/// `common_speculative_init: no implementations specified for speculative
+/// decoding` despite all the right `--spec-draft-*` flags being present.
 pub(crate) fn append_spec_args(args: &mut Vec<String>, spec: &SpecResolved) {
     match spec.mode {
         SpecMode::Off => {}
         SpecMode::Mtp => {
+            // MTP uses the model's own next-token prediction head — no
+            // draft-model file. Upstream's enum value is `draft-mtp`
+            // (despite the "draft" prefix it's a sidecar-free path).
+            args.push("--spec-type".to_string());
+            args.push("draft-mtp".to_string());
             args.push("--spec-draft-n-max".to_string());
             args.push(spec.draft_max.to_string());
             args.push("--spec-draft-n-min".to_string());
@@ -665,6 +678,12 @@ pub(crate) fn append_spec_args(args: &mut Vec<String>, spec: &SpecResolved) {
             args.push(format!("{:.3}", spec.draft_p_min));
         }
         SpecMode::DraftModel => {
+            // Generic draft-model speculation. EAGLE-3 (`draft-eagle3`)
+            // is a separate mode tied to specific model architectures;
+            // we'd need a per-pair `spec_type` field in `draft_pairs.toml`
+            // to opt into it. For S-2 we only support classic draft-model.
+            args.push("--spec-type".to_string());
+            args.push("draft-simple".to_string());
             if let Some(path) = spec.draft_model_path.as_deref() {
                 args.push("--spec-draft-model".to_string());
                 args.push(path.to_string());
@@ -732,6 +751,8 @@ mod tests {
         assert_eq!(
             args,
             vec![
+                "--spec-type".to_string(),
+                "draft-mtp".to_string(),
                 "--spec-draft-n-max".to_string(),
                 "16".to_string(),
                 "--spec-draft-n-min".to_string(),
@@ -759,10 +780,38 @@ mod tests {
             reason: "draft-model".into(),
         };
         append_spec_args(&mut args, &spec);
+        // The --spec-type flag must be present and set to draft-simple.
+        let type_idx = args.iter().position(|a| a == "--spec-type").unwrap();
+        assert_eq!(args[type_idx + 1], "draft-simple");
         assert!(args.iter().any(|a| a == "--spec-draft-model"));
         assert!(args.iter().any(|a| a == "/m/draft.gguf"));
         assert!(args.iter().any(|a| a == "--spec-draft-ngl"));
         assert!(args.iter().any(|a| a == "99"));
+    }
+
+    #[test]
+    fn append_spec_args_mtp_emits_spec_type_draft_mtp() {
+        // Regression: MTP MUST emit `--spec-type draft-mtp` or
+        // llama-server silently disables spec-dec with the message
+        // "common_speculative_init: no implementations specified".
+        // Discovered live with a real qwen3.5-4B run that decoded fine
+        // but never emitted a `draft acceptance rate` line.
+        let mut args: Vec<String> = Vec::new();
+        let spec = SpecResolved {
+            mode: SpecMode::Mtp,
+            draft_max: 16,
+            draft_min: 0,
+            draft_p_min: 0.75,
+            draft_model_path: None,
+            draft_gpu_layers: -1,
+            reason: "regression-guard".into(),
+        };
+        append_spec_args(&mut args, &spec);
+        let type_idx = args
+            .iter()
+            .position(|a| a == "--spec-type")
+            .expect("--spec-type missing — MTP would silently no-op");
+        assert_eq!(args[type_idx + 1], "draft-mtp");
     }
 
     #[test]

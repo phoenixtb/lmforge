@@ -1204,6 +1204,59 @@ fn run_preflight_checks(engine: &EngineConfig) -> Result<()> {
     Ok(())
 }
 
+/// Linux `lmforge init` path for `llamacpp`: manifest-driven CUDA install
+/// when hardware allows, legacy upstream binary otherwise (Vulkan / CPU).
+pub async fn install_llamacpp_on_init(
+    engine: &EngineConfig,
+    profile: &HardwareProfile,
+    data_dir: &std::path::Path,
+) -> Result<InstallResult> {
+    use crate::engine::variant::init_target_variant;
+
+    let plan = init_target_variant(profile);
+    if let Some(ref hint) = plan.hint {
+        println!("  ℹ {hint}");
+    }
+
+    println!(
+        "  Target variant: {} ({})",
+        plan.variant,
+        if plan.use_manifest {
+            "manifest"
+        } else {
+            "legacy upstream"
+        }
+    );
+
+    if plan.use_manifest {
+        if let Err(reason) = crate::engine::variant::refuse_reason(plan.variant, profile) {
+            println!(
+                "  ⚠ Cannot install `{}`: {reason}",
+                plan.variant
+            );
+            println!("  ↪ Falling back to legacy Vulkan/CPU binary install...");
+            return install_via_binary(engine, profile, data_dir).await;
+        }
+
+        let result = install_variant(profile, plan.variant, data_dir).await?;
+        println!(
+            "  ✓ {} ({}, tag={}) at {}",
+            plan.variant,
+            engine.name,
+            result.llamacpp_tag,
+            result.install_dir.display()
+        );
+        return Ok(InstallResult {
+            engine_id: engine.id.clone(),
+            version: engine.version.clone(),
+            install_path: result.binary_path.to_string_lossy().to_string(),
+            method_used: "binary-variant".to_string(),
+        });
+    }
+
+    install_via_binary(engine, profile, data_dir).await
+}
+
 // ── llama.cpp variant installer (C-2.4 / C-2.5) ────────────────────────────────
 //
 // Installs ONE `llama.cpp` variant tarball from the embedded manifest into

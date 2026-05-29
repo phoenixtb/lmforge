@@ -27,7 +27,7 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
         std::io::stdin().read_line(&mut input)?;
         if input.trim().eq_ignore_ascii_case("y") {
             println!();
-            crate::cli::pull::run(config, model_input, None).await?;
+            crate::cli::pull::run(config, model_input, None, false).await?;
         } else {
             anyhow::bail!("Model required to start interactive session. Exiting.");
         }
