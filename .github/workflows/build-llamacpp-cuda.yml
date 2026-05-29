@@ -245,12 +245,19 @@ jobs:
           echo "sha256_file=${out}.tar.gz.sha256" >> "$GITHUB_OUTPUT"
           echo "size_mb=$(du -m "${out}.tar.gz" | cut -f1)" >> "$GITHUB_OUTPUT"
 
-      - name: Tarball size guard (< 500 MB)
+      - name: Tarball size guard (< 750 MB)
+        # Empirical sizes at b9351 with archs trimmed to {86,89,90,(100),120}:
+        #   cuda12 ≈ 567 MB   (cuBLAS 12 is the bulk)
+        #   cuda13 ≈ ~480 MB
+        # 750 MB gives ~30% headroom for future llama.cpp growth and the
+        # extra Blackwell-datacenter arch on cuda13. Tighter than this
+        # would just be a tripwire that costs reruns instead of catching
+        # real bloat.
         run: |
           size="${{ steps.stage.outputs.size_mb }}"
           echo "tarball size = ${size} MB"
-          if [ "$size" -ge 500 ]; then
-            echo "::error::tarball exceeds 500 MB budget"
+          if [ "$size" -ge 750 ]; then
+            echo "::error::tarball exceeds 750 MB budget"
             exit 1
           fi
 
