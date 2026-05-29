@@ -34,7 +34,7 @@ This is the working tracker for v0.2.0. Check items off as they complete. Update
 | C-3 — Variant-aware launch | ✅ | agent | `v0.2.0-cuda-mtp` 800011f (resolve_executable variant_dir + LD_LIBRARY_PATH injection) |
 | S-1 — MTP detection | ✅ | agent | `v0.2.0-cuda-mtp` (parser + catalog schema + pull-time probe; probe-wins-over-catalog after live-test on unsloth/Qwen3.5-4B; `pull --refresh` migration path for already-installed models) |
 | S-2 — Spec-dec launch + telemetry | ✅ | agent | `v0.2.0-cuda-mtp` (S-2.1–S-2.5 prior; S-2.6 stderr observer + tee task; S-2.7 /lf/status spec_mode + spec_stats; S-2.8 crash-fallback retry **fired live**; S-2.9 byte-identity property tests; live MTP-tensor capture deferred — no public GGUF with `nextn.*` tensors verified yet, see §S-2 notes) |
-| S-3 — Draft-model pairs | ⏳ | | |
+| S-3 — Draft-model pairs | ✅ | agent | `draft_pairs.toml` + lookup/cache + auto resolution in `speculative::resolve` (qwen3.x → qwen3:0.6b:4bit; llama/qwen2.5 pairs commented pending catalog entries) |
 | Polish — docs + UI + ADRs | ⏳ | | |
 
 ---

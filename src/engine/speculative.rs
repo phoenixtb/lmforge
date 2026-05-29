@@ -182,11 +182,10 @@ pub struct VramBudget {
 /// Then the resolved mode is *validated* against the model + hardware:
 ///   * `Mtp` but `caps.mtp != Some(true)` → fall through to `Off` with
 ///     a `reason` explaining the mismatch. Adapter logs a one-line warn.
-///   * `DraftModel` but no `draft_model` configured → fall through to
-///     `Off` with a reason.
-///   * Any path that would OOM (`free_vram - model - mmproj <
-///     vram_safety_mib`) → fall through to `Off`.
+///   * `DraftModel` but no draft path → fall through to `Off` with a reason.
+///   * Any path that would OOM → fall through to `Off`.
 ///   * `Auto` with `caps.mtp == Some(true)` → `Mtp`.
+///   * `Auto` with eligible draft pair (S-3) → `DraftModel`.
 ///   * `Auto` otherwise → `Off`.
 ///
 /// MoE override: when `inputs.is_moe`, `draft_max` is clamped to ≤ 4
@@ -196,6 +195,7 @@ pub fn resolve(
     inputs: ModelSpecInputs,
     cfg: &SpeculativeConfig,
     budget: VramBudget,
+    draft: Option<&crate::engine::draft_pairs::DraftResolveContext>,
 ) -> SpecResolved {
     let requested = env_override().unwrap_or(cfg.mode);
 
@@ -209,7 +209,7 @@ pub fn resolve(
         return SpecResolved::off("spec-dec disabled by config");
     }
 
-    let vram_headroom_gb = vram_headroom_gb(&budget);
+    let headroom_gb = vram_headroom_gb(&budget);
     let safety_gb = cfg.vram_safety_mib as f32 / 1024.0;
 
     match requested {
@@ -223,10 +223,10 @@ pub fn resolve(
             // MTP draws from the same model's internal head — adds a few
             // hundred MiB of activation cache. Be conservative: require
             // safety_gb to be free on GPU.
-            if budget.gpu_vendor != GpuVendor::None && vram_headroom_gb < safety_gb {
+            if budget.gpu_vendor != GpuVendor::None && headroom_gb < safety_gb {
                 return SpecResolved::off(format!(
                     "VRAM headroom {:.2} GB < safety floor {:.2} GB — disabling spec-dec to avoid OOM",
-                    vram_headroom_gb, safety_gb
+                    headroom_gb, safety_gb
                 ));
             }
             SpecResolved {
@@ -244,15 +244,24 @@ pub fn resolve(
             }
         }
         SpecMode::DraftModel => {
-            let Some(draft) = cfg.draft_model.clone() else {
+            let draft_path = cfg
+                .draft_model
+                .clone()
+                .or_else(|| {
+                    draft.map(|d| d.gguf_path.to_string_lossy().into_owned())
+                });
+            let Some(path) = draft_path else {
                 return SpecResolved::off(
-                    "draft-model requested but [speculative].draft_model is unset",
+                    "draft-model requested but no draft path configured or paired",
                 );
             };
-            if budget.gpu_vendor != GpuVendor::None && vram_headroom_gb < safety_gb {
+            let draft_size = draft.map(|d| d.draft_size_gb).unwrap_or(0.0);
+            if budget.gpu_vendor != GpuVendor::None
+                && !vram_fits_draft(&budget, draft_size, cfg.vram_safety_mib)
+            {
                 return SpecResolved::off(format!(
-                    "VRAM headroom {:.2} GB < safety floor {:.2} GB — refusing to load draft model",
-                    vram_headroom_gb, safety_gb
+                    "VRAM headroom insufficient for draft model ({:.2} GB needed incl. safety)",
+                    draft_size + cfg.vram_safety_mib as f32 / 1024.0
                 ));
             }
             SpecResolved {
@@ -260,37 +269,57 @@ pub fn resolve(
                 draft_max: draft_max_effective,
                 draft_min: cfg.draft_min,
                 draft_p_min: cfg.draft_p_min,
-                draft_model_path: Some(draft),
+                draft_model_path: Some(path),
                 draft_gpu_layers: cfg.draft_gpu_layers,
-                reason: "draft-model pairing enabled".to_string(),
+                reason: if let Some(ctx) = draft {
+                    format!("draft-model pairing enabled ({})", ctx.draft_id)
+                } else {
+                    "draft-model pairing enabled".to_string()
+                },
             }
         }
         SpecMode::Auto => {
-            // Auto promotes only to MTP — draft-model is opt-in territory.
-            if inputs.mtp != Some(true) {
-                return SpecResolved::off(
-                    "mode=auto and model.capabilities.mtp != true → spec-dec off",
-                );
+            if inputs.mtp == Some(true) {
+                if budget.gpu_vendor != GpuVendor::None && headroom_gb < safety_gb {
+                    return SpecResolved::off(format!(
+                        "mode=auto: VRAM headroom {:.2} GB < safety floor {:.2} GB",
+                        headroom_gb, safety_gb
+                    ));
+                }
+                return SpecResolved {
+                    mode: SpecMode::Mtp,
+                    draft_max: draft_max_effective,
+                    draft_min: cfg.draft_min,
+                    draft_p_min: cfg.draft_p_min,
+                    draft_model_path: None,
+                    draft_gpu_layers: cfg.draft_gpu_layers,
+                    reason: if inputs.is_moe {
+                        "auto → MTP (MoE-conservative draft_max≤4)".to_string()
+                    } else {
+                        "auto → MTP".to_string()
+                    },
+                };
             }
-            if budget.gpu_vendor != GpuVendor::None && vram_headroom_gb < safety_gb {
+
+            if let Some(ctx) = draft {
+                if vram_fits_draft(&budget, ctx.draft_size_gb, cfg.vram_safety_mib) {
+                    return SpecResolved {
+                        mode: SpecMode::DraftModel,
+                        draft_max: draft_max_effective,
+                        draft_min: cfg.draft_min,
+                        draft_p_min: cfg.draft_p_min,
+                        draft_model_path: Some(ctx.gguf_path.to_string_lossy().into_owned()),
+                        draft_gpu_layers: cfg.draft_gpu_layers,
+                        reason: format!("auto → draft-model ({})", ctx.draft_id),
+                    };
+                }
                 return SpecResolved::off(format!(
-                    "mode=auto: VRAM headroom {:.2} GB < safety floor {:.2} GB",
-                    vram_headroom_gb, safety_gb
+                    "auto: draft pair {} configured but VRAM headroom insufficient ({:.2} GB draft + safety)",
+                    ctx.draft_id, ctx.draft_size_gb
                 ));
             }
-            SpecResolved {
-                mode: SpecMode::Mtp,
-                draft_max: draft_max_effective,
-                draft_min: cfg.draft_min,
-                draft_p_min: cfg.draft_p_min,
-                draft_model_path: None,
-                draft_gpu_layers: cfg.draft_gpu_layers,
-                reason: if inputs.is_moe {
-                    "auto → MTP (MoE-conservative draft_max≤4)".to_string()
-                } else {
-                    "auto → MTP".to_string()
-                },
-            }
+
+            SpecResolved::off("mode=auto: no MTP and no eligible draft pair → spec-dec off")
         }
         SpecMode::Off => unreachable!("matched above"),
     }
@@ -305,6 +334,16 @@ fn vram_headroom_gb(budget: &VramBudget) -> f32 {
         return f32::INFINITY;
     }
     (budget.free_vram_gb - budget.model_size_gb - budget.mmproj_size_gb).max(0.0)
+}
+
+/// Whether the remaining VRAM can host a draft model on top of the main
+/// model already loaded. Used by S-3 draft-pair auto resolution.
+pub fn vram_fits_draft(budget: &VramBudget, draft_size_gb: f32, vram_safety_mib: u32) -> bool {
+    if budget.gpu_vendor == GpuVendor::None {
+        return true;
+    }
+    let safety_gb = vram_safety_mib as f32 / 1024.0;
+    vram_headroom_gb(budget) >= draft_size_gb + safety_gb
 }
 
 fn env_override() -> Option<SpecMode> {
@@ -380,7 +419,7 @@ mod tests {
             mtp: Some(true),
             is_moe: false,
         };
-        let r = resolve(inputs, &cfg, gpu_budget(16.0, 4.0));
+        let r = resolve(inputs, &cfg, gpu_budget(16.0, 4.0), None);
         assert_eq!(r.mode, SpecMode::Mtp);
         assert_eq!(r.draft_max, 16);
         assert!(r.reason.contains("auto"));
@@ -393,16 +432,16 @@ mod tests {
             mtp: Some(false),
             ..Default::default()
         };
-        let r = resolve(inputs, &cfg, gpu_budget(16.0, 4.0));
+        let r = resolve(inputs, &cfg, gpu_budget(16.0, 4.0), None);
         assert_eq!(r.mode, SpecMode::Off);
-        assert!(r.reason.contains("mtp"));
+        assert!(r.reason.contains("no MTP and no eligible draft pair"));
     }
 
     #[test]
     fn resolve_auto_unknown_mtp_falls_back_to_off() {
         let cfg = SpeculativeConfig::default();
         let inputs = ModelSpecInputs::default();
-        let r = resolve(inputs, &cfg, gpu_budget(16.0, 4.0));
+        let r = resolve(inputs, &cfg, gpu_budget(16.0, 4.0), None);
         assert_eq!(r.mode, SpecMode::Off);
     }
 
@@ -418,7 +457,7 @@ mod tests {
             mtp: Some(true),
             is_moe: true,
         };
-        let r = resolve(inputs, &cfg, gpu_budget(16.0, 4.0));
+        let r = resolve(inputs, &cfg, gpu_budget(16.0, 4.0), None);
         assert_eq!(r.mode, SpecMode::Mtp);
         assert_eq!(r.draft_max, 4, "MoE must clamp draft_max ≤ 4");
         assert!(r.reason.contains("MoE"));
@@ -434,7 +473,7 @@ mod tests {
             mtp: Some(true),
             is_moe: true,
         };
-        let r = resolve(inputs, &cfg, gpu_budget(16.0, 4.0));
+        let r = resolve(inputs, &cfg, gpu_budget(16.0, 4.0), None);
         assert_eq!(r.draft_max, 2, "MoE clamp must use min(), not overwrite");
     }
 
@@ -453,6 +492,7 @@ mod tests {
             },
             &cfg,
             gpu_budget(16.0, 4.0),
+            None,
         );
         assert_eq!(r.mode, SpecMode::Off);
     }
@@ -470,6 +510,7 @@ mod tests {
             },
             &cfg,
             gpu_budget(16.0, 4.0),
+            None,
         );
         assert_eq!(r.mode, SpecMode::Off);
         assert!(r.reason.contains("mtp != true"));
@@ -482,9 +523,37 @@ mod tests {
             draft_model: None,
             ..Default::default()
         };
-        let r = resolve(ModelSpecInputs::default(), &cfg, gpu_budget(16.0, 4.0));
+        let r = resolve(ModelSpecInputs::default(), &cfg, gpu_budget(16.0, 4.0), None);
         assert_eq!(r.mode, SpecMode::Off);
-        assert!(r.reason.contains("draft_model"));
+        assert!(r.reason.contains("draft path"));
+    }
+
+    #[test]
+    fn resolve_auto_with_draft_pair_enables_draft_model() {
+        use crate::engine::draft_pairs::DraftResolveContext;
+        use std::path::PathBuf;
+
+        let cfg = SpeculativeConfig::default();
+        let inputs = ModelSpecInputs {
+            mtp: Some(false),
+            ..Default::default()
+        };
+        let draft = DraftResolveContext {
+            draft_id: "qwen3:0.6b:4bit".to_string(),
+            gguf_path: PathBuf::from("/models/qwen3-0.6b.gguf"),
+            draft_size_gb: 0.4,
+            note: "test".to_string(),
+        };
+        let r = resolve(inputs, &cfg, gpu_budget(16.0, 4.0), Some(&draft));
+        assert_eq!(r.mode, SpecMode::DraftModel);
+        assert!(r.reason.contains("auto → draft-model"));
+    }
+
+    #[test]
+    fn vram_fits_draft_respects_headroom() {
+        let budget = gpu_budget(8.0, 6.5);
+        assert!(!vram_fits_draft(&budget, 1.5, 1024));
+        assert!(vram_fits_draft(&budget, 0.3, 1024));
     }
 
     #[test]
@@ -501,6 +570,7 @@ mod tests {
             },
             &cfg,
             gpu_budget(16.0, 4.0),
+            None,
         );
         assert_eq!(r.mode, SpecMode::DraftModel);
         assert_eq!(
@@ -525,6 +595,7 @@ mod tests {
             },
             &cfg,
             gpu_budget(4.0, 3.5),
+            None,
         );
         assert_eq!(r.mode, SpecMode::Off);
         assert!(r.reason.contains("headroom"));
@@ -540,6 +611,7 @@ mod tests {
             },
             &cfg,
             cpu_budget(),
+            None,
         );
         assert_eq!(r.mode, SpecMode::Mtp);
     }

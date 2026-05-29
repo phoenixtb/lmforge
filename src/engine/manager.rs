@@ -615,6 +615,23 @@ impl EngineManager {
                     "Spec-dec engine died <5s after spawn — retrying once with spec=off (S-2.8)"
                 );
 
+                if engine.spec_mode == crate::engine::speculative::SpecMode::DraftModel {
+                    let hf_repo = crate::model::index::ModelIndex::load(&self.data_dir)
+                        .ok()
+                        .and_then(|idx| idx.get(model_id).and_then(|e| e.hf_repo.clone()));
+                    if let Some(draft_id) = crate::engine::draft_pairs::lookup_draft_pair(
+                        model_id,
+                        hf_repo.as_deref(),
+                    ) && let Err(rec_err) = crate::engine::draft_pairs::record_broken_pair(
+                        &self.data_dir,
+                        model_id,
+                        &draft_id,
+                        &e.to_string(),
+                    ) {
+                        warn!(model_id, error = %rec_err, "Failed to record broken draft pair");
+                    }
+                }
+
                 // Save + restore the existing env override so an operator
                 // who set `LMFORGE_SPECULATIVE_MODE=mtp` explicitly isn't
                 // permanently overridden by our retry. The supervisor

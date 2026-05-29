@@ -205,8 +205,14 @@ impl EngineAdapter for LlamacppAdapter {
                 model_size_gb,
                 mmproj_size_gb,
             };
+            let hf_repo = load_model_hf_repo(data_dir, model_id);
+            let draft_ctx = crate::engine::draft_pairs::build_draft_context(
+                data_dir,
+                model_id,
+                hf_repo.as_deref(),
+            );
             let spec_cfg = load_speculative_config(data_dir);
-            let spec = resolve_spec(spec_inputs, &spec_cfg, budget);
+            let spec = resolve_spec(spec_inputs, &spec_cfg, budget, draft_ctx.as_ref());
             append_spec_args(&mut args, &spec);
             info!(
                 model_id = %model_id,
@@ -627,6 +633,11 @@ fn load_model_mtp(data_dir: &Path, model_id: &str) -> Option<bool> {
     let index = crate::model::index::ModelIndex::load(data_dir).ok()?;
     let entry = index.get(model_id)?;
     entry.capabilities.mtp
+}
+
+fn load_model_hf_repo(data_dir: &Path, model_id: &str) -> Option<String> {
+    let index = crate::model::index::ModelIndex::load(data_dir).ok()?;
+    index.get(model_id)?.hf_repo.clone()
 }
 
 /// Load the `[speculative]` block from `<data_dir>/config.toml`. Falls
