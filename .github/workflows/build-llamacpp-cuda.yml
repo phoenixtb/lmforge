@@ -129,10 +129,29 @@ jobs:
           ref: ${{ inputs.llamacpp_tag }}
           path: llama.cpp
 
+      - name: Restore ccache
+        # ccache compiler launchers are already wired below. Persisting
+        # the cache between runs makes the (otherwise ~60-min) CUDA
+        # rebuild a near-no-op on identical llama.cpp tags. Cache key
+        # is per-variant + tag; partial hits restore via restore-keys.
+        # CCACHE_DIR is pinned to $GITHUB_WORKSPACE/.ccache so the path
+        # is identical inside the container and on the host runner.
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-${{ matrix.variant }}-${{ inputs.llamacpp_tag }}-${{ matrix.archs }}
+          restore-keys: |
+            ccache-${{ matrix.variant }}-${{ inputs.llamacpp_tag }}-
+            ccache-${{ matrix.variant }}-
+
       - name: Configure + build (CUDA, archs=${{ matrix.archs }})
         working-directory: llama.cpp
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          CCACHE_MAXSIZE: 5G
         run: |
           source /opt/rh/gcc-toolset-12/enable
+          ccache -z || true
           cmake -S . -B build -G Ninja \
             -DGGML_CUDA=ON \
             -DGGML_NATIVE=OFF \
@@ -147,6 +166,9 @@ jobs:
             -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
           cmake --build build -j"$(nproc)" \
             --target llama-server llama-cli llama-bench llama-quantize
+          echo "::group::ccache stats"
+          ccache -s || true
+          echo "::endgroup::"
 
       - name: Stage tarball (bundle CUDA libs + RPATH)
         working-directory: llama.cpp
@@ -168,12 +190,24 @@ jobs:
           strip "$out"/llama-*
 
           # Bundle CUDA runtime libs (real file, not symlink).
+          # NOTE: `find -L` is critical — modern NVIDIA images make
+          # /usr/local/cuda/lib64 a symlink to targets/<arch>/lib, and
+          # bare `find` won't follow it. Search a broader set of paths
+          # too (target-specific layout, /usr/lib64, /usr/lib) so we
+          # tolerate future image-layout changes.
           for so in "${{ matrix.cudart_so }}" "${{ matrix.cublas_so }}" "${{ matrix.cublaslt_so }}"; do
-            src="$(find /usr/local/cuda*/lib64 -name "${so}*" -type f | head -n 1 || true)"
+            src="$(find -L \
+              /usr/local/cuda /usr/local/cuda-*/  /usr/lib64 /usr/lib \
+              -name "${so}*" -type f 2>/dev/null | head -n 1 || true)"
             if [ -z "$src" ]; then
-              echo "::error::missing ${so} in /usr/local/cuda*/lib64"
+              echo "::group::diagnostics — searched dirs"
+              ls -l /usr/local/cuda/lib64/ 2>/dev/null || true
+              ls -l /usr/local/cuda/targets/*/lib/ 2>/dev/null || true
+              echo "::endgroup::"
+              echo "::error::missing ${so} in /usr/local/cuda or /usr/lib*"
               exit 1
             fi
+            echo "Bundling $(basename "$src") (from $src)"
             cp -L "$src" "$out/lib/$(basename "$src")"
             # If the file we copied was a symlink target like libcudart.so.12.8.1,
             # also create the SONAME-level symlink so RPATH lookup succeeds.
