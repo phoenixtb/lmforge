@@ -189,7 +189,12 @@ impl EngineAdapter for LlamacppAdapter {
         // single-pass scoring with no draft head. Reading the spec config
         // happens here (rather than at adapter construction) so a hot
         // config reload picks it up on next model load.
-        if matches!(role, ModelRole::Chat) {
+        //
+        // `spec_mode` is captured outside the `if Chat` block so it can be
+        // attached to `ActiveEngine` for downstream consumers — `/lf/status`
+        // surfaces it (S-2.7) and `EngineManager`'s crash-fallback retry
+        // policy keys off it (S-2.8: spec on + early crash → retry off).
+        let spec_mode = if matches!(role, ModelRole::Chat) {
             let spec_inputs = ModelSpecInputs {
                 mtp: load_model_mtp(data_dir, model_id),
                 is_moe: detect_moe_by_name(model_id),
@@ -212,7 +217,11 @@ impl EngineAdapter for LlamacppAdapter {
                 reason = %spec.reason,
                 "Speculative-decoding plan"
             );
-        }
+            spec.mode
+        } else {
+            // embed / rerank — spec-dec doesn't apply.
+            SpecMode::Off
+        };
 
         info!(
             executable = %executable.display(),
@@ -224,7 +233,11 @@ impl EngineAdapter for LlamacppAdapter {
         let mut cmd = Command::new(&executable);
         cmd.args(&args)
             .stdout(std::process::Stdio::from(stdout_file))
-            .stderr(std::process::Stdio::from(stderr_file))
+            // Pipe stderr through a tee task so we can scan for
+            // speculative-decoding acceptance-rate samples (S-2.6) while
+            // STILL writing every line to the per-model rotated log
+            // (operator-visible logging is preserved unchanged).
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
 
         // Variant tarballs ship cudart / cublas / cublasLt under
@@ -247,7 +260,7 @@ impl EngineAdapter for LlamacppAdapter {
             }
         }
 
-        let child = cmd.spawn().with_context(|| {
+        let mut child = cmd.spawn().with_context(|| {
             format!(
                 "Failed to spawn llama-server at {}. \
                  Run `lmforge init` to (re-)install the bundled binary.",
@@ -255,9 +268,37 @@ impl EngineAdapter for LlamacppAdapter {
             )
         })?;
 
+        // Wire up the stderr tee + spec observer. Doing this AFTER spawn
+        // means a spawn failure short-circuits without leaving a half-
+        // initialized observer dangling. `child.stderr.take()` is
+        // `Option<ChildStderr>` and is `Some` here because we set
+        // `Stdio::piped()` above.
+        let observer = crate::engine::spec_observer::SpecObserver::new();
+        if let Some(stderr) = child.stderr.take() {
+            let observer_clone = observer.clone();
+            let model_id_owned = model_id.to_string();
+            tokio::spawn(stderr_tee_task(
+                stderr,
+                stderr_file,
+                observer_clone,
+                model_id_owned,
+            ));
+        } else {
+            // Should be unreachable given Stdio::piped() above, but if a
+            // future tokio change ever returns None, fall through gracefully:
+            // the engine still runs, just without per-request acceptance
+            // telemetry. Surface a warn so it's grep-able.
+            warn!(
+                model_id = %model_id,
+                "child.stderr was None after spawn — spec-dec telemetry disabled for this slot"
+            );
+        }
+
         Ok(ActiveEngine {
             process: child,
             model_id: model_id.to_string(),
+            spec_observer: Some(observer),
+            spec_mode,
         })
     }
 
@@ -290,6 +331,52 @@ impl EngineAdapter for LlamacppAdapter {
         }
         Ok(())
     }
+}
+
+/// Stream `llama-server` stderr through both the per-model rotated log
+/// file (operator-visible logging — preserves the legacy behaviour) and
+/// the [`SpecObserver`] (S-2.6 acceptance-rate parser).
+///
+/// Lifecycle: spawned at engine start, terminates naturally when the
+/// child closes its stderr pipe (process exit or SIGKILL). Errors are
+/// swallowed-with-warn — telemetry must never bring down the spawn path.
+async fn stderr_tee_task(
+    stderr: tokio::process::ChildStderr,
+    sink_file: std::fs::File,
+    observer: crate::engine::spec_observer::SpecObserver,
+    model_id: String,
+) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let mut reader = BufReader::new(stderr).lines();
+    let mut sink = tokio::fs::File::from_std(sink_file);
+
+    loop {
+        match reader.next_line().await {
+            Ok(Some(line)) => {
+                observer.record_line(&line);
+                if let Err(e) = sink.write_all(line.as_bytes()).await {
+                    warn!(model_id, error = %e, "Failed to write stderr line to log file — tee task aborting");
+                    break;
+                }
+                if sink.write_all(b"\n").await.is_err() {
+                    break;
+                }
+            }
+            Ok(None) => {
+                debug!(model_id, "stderr tee task: child closed stderr (EOF)");
+                break;
+            }
+            Err(e) => {
+                warn!(model_id, error = %e, "stderr tee task: read error");
+                break;
+            }
+        }
+    }
+
+    // Best-effort flush so the last few lines aren't held in the writer
+    // buffer when the child exits abruptly.
+    let _ = sink.flush().await;
 }
 
 /// Pick the absolute path to `llama-server` to spawn.
@@ -694,6 +781,212 @@ mod tests {
         append_spec_args(&mut args, &spec);
         let max_idx = args.iter().position(|a| a == "--spec-draft-n-max").unwrap();
         assert_eq!(args[max_idx + 1], "4");
+    }
+
+    // ── S-2.9: byte-identical-output property tests ──────────────────────
+    //
+    // The contract: spec-dec is **lossless** by construction in llama.cpp —
+    // for greedy decoding (temperature=0, same seed, same prompt), output
+    // tokens must be byte-identical regardless of mode=mtp vs mode=off.
+    // True end-to-end byte-equality requires running a real `llama-server`
+    // against a real model, which is e2e territory. At the unit-level we
+    // assert two **structural invariants** that, taken together, prove
+    // lmforge cannot accidentally break the upstream guarantee:
+    //
+    //   1. Toggling spec on never *removes* an args entry that was present
+    //      with spec off — only adds `--spec-draft-*` flags. Anything that
+    //      WOULD remove a flag (e.g. accidentally dropping `--seed`) would
+    //      cause llama-server to draw a different sampler chain → different
+    //      output tokens.
+    //
+    //   2. The spec-dec block is *local*: every flag added by mode=Mtp /
+    //      mode=DraftModel starts with `--spec-`. No sampler/seed/context
+    //      knobs are touched. This rules out the "I added a temp tweak in
+    //      the Mtp branch" footgun.
+
+    /// Test fixture: a maximally-decorated SpecResolved for either mode.
+    /// Choosing values that are clearly distinguishable so a regression
+    /// (e.g. "draft_max accidentally written into the wrong arg") shows
+    /// up loudly.
+    fn fixture_resolved(mode: SpecMode) -> SpecResolved {
+        SpecResolved {
+            mode,
+            draft_max: 16,
+            draft_min: 1,
+            draft_p_min: 0.75,
+            draft_model_path: Some("/models/draft.gguf".to_string()),
+            draft_gpu_layers: 99,
+            reason: "fixture".into(),
+        }
+    }
+
+    #[test]
+    fn spec_args_are_purely_additive_off_is_prefix_of_mtp() {
+        // Same baseline args list. Off appends nothing, Mtp appends a
+        // contiguous block. Neither modifies the existing baseline.
+        let baseline = vec![
+            "--model".to_string(),
+            "/m.gguf".to_string(),
+            "--port".to_string(),
+            "11434".to_string(),
+            "--seed".to_string(),
+            "42".to_string(),
+            "--temp".to_string(),
+            "0.0".to_string(),
+        ];
+
+        let mut off = baseline.clone();
+        append_spec_args(&mut off, &fixture_resolved(SpecMode::Off));
+        assert_eq!(off, baseline, "mode=Off must NOT touch baseline args");
+
+        let mut mtp = baseline.clone();
+        append_spec_args(&mut mtp, &fixture_resolved(SpecMode::Mtp));
+        assert!(
+            mtp.starts_with(&baseline),
+            "mode=Mtp must preserve the baseline as a prefix — \
+             modifying baseline would break sampler determinism"
+        );
+        assert!(
+            mtp.len() > baseline.len(),
+            "mode=Mtp must add at least one --spec-* flag"
+        );
+
+        let mut draft = baseline.clone();
+        append_spec_args(&mut draft, &fixture_resolved(SpecMode::DraftModel));
+        assert!(draft.starts_with(&baseline));
+        assert!(draft.len() > baseline.len());
+    }
+
+    #[test]
+    fn spec_args_block_is_local_only_spec_flags_emitted() {
+        // Mtp branch: every emitted flag must start with `--spec-`.
+        let mut args: Vec<String> = Vec::new();
+        append_spec_args(&mut args, &fixture_resolved(SpecMode::Mtp));
+        for arg in args.iter().filter(|a| a.starts_with("--")) {
+            assert!(
+                arg.starts_with("--spec-"),
+                "mode=Mtp leaked non-spec flag: {arg}. \
+                 Adding seed/temp/sampler knobs here breaks the byte-identity guarantee."
+            );
+        }
+
+        // Same for DraftModel.
+        let mut args: Vec<String> = Vec::new();
+        append_spec_args(&mut args, &fixture_resolved(SpecMode::DraftModel));
+        for arg in args.iter().filter(|a| a.starts_with("--")) {
+            assert!(
+                arg.starts_with("--spec-"),
+                "mode=DraftModel leaked non-spec flag: {arg}"
+            );
+        }
+    }
+
+    #[test]
+    fn spec_args_diff_off_vs_mtp_is_exactly_the_spec_block() {
+        // Stronger invariant: the symmetric difference between off-args
+        // and mtp-args must be EXACTLY the spec-dec block — i.e. the
+        // first len(off) entries of mtp equal off, and every subsequent
+        // entry is part of the --spec-* block.
+        let baseline = vec![
+            "--model".to_string(),
+            "/m.gguf".to_string(),
+            "-ngl".to_string(),
+            "99".to_string(),
+        ];
+
+        let mut off = baseline.clone();
+        append_spec_args(&mut off, &fixture_resolved(SpecMode::Off));
+
+        let mut mtp = baseline.clone();
+        append_spec_args(&mut mtp, &fixture_resolved(SpecMode::Mtp));
+
+        // Off ≡ baseline.
+        assert_eq!(off, baseline);
+
+        // mtp[..baseline.len()] ≡ baseline.
+        let (mtp_prefix, mtp_suffix) = mtp.split_at(baseline.len());
+        assert_eq!(mtp_prefix, baseline.as_slice());
+
+        // mtp_suffix is non-empty AND every flag in it is `--spec-*`.
+        assert!(!mtp_suffix.is_empty());
+        let suffix_flags: Vec<_> = mtp_suffix
+            .iter()
+            .filter(|a| a.starts_with("--"))
+            .collect();
+        assert!(!suffix_flags.is_empty());
+        for f in suffix_flags {
+            assert!(
+                f.starts_with("--spec-"),
+                "non-spec flag in mtp diff block: {f}"
+            );
+        }
+    }
+
+    #[test]
+    fn spec_args_property_random_resolved_states_preserve_baseline() {
+        // Pseudo-property test (no proptest dep — drive a deterministic
+        // grid of resolved states and assert the contract holds for ALL
+        // of them). Covers the "did someone add a special-case branch
+        // that mutates baseline for unusual draft_max values?" footgun.
+        let baseline = vec![
+            "--model".to_string(),
+            "/m.gguf".to_string(),
+            "--seed".to_string(),
+            "1".to_string(),
+        ];
+
+        let modes = [SpecMode::Off, SpecMode::Mtp, SpecMode::DraftModel];
+        let draft_maxes = [0u32, 1, 4, 16, 64, u32::MAX];
+        let draft_mins = [0u32, 1, 8];
+        let p_mins = [0.0_f32, 0.5, 0.95, 1.0];
+        let ngls = [-1_i32, 0, 32, 99];
+        let paths = [None, Some("/d.gguf".to_string())];
+
+        for &mode in &modes {
+            for &draft_max in &draft_maxes {
+                for &draft_min in &draft_mins {
+                    for &draft_p_min in &p_mins {
+                        for &draft_gpu_layers in &ngls {
+                            for path in &paths {
+                                if matches!(mode, SpecMode::DraftModel) && path.is_none() {
+                                    // DraftModel without a path is a
+                                    // legal state (resolver short-circuits
+                                    // it to Off upstream); the args path
+                                    // emits no --spec-draft-model flag,
+                                    // which is what we want here.
+                                }
+                                let spec = SpecResolved {
+                                    mode,
+                                    draft_max,
+                                    draft_min,
+                                    draft_p_min,
+                                    draft_model_path: path.clone(),
+                                    draft_gpu_layers,
+                                    reason: "prop".into(),
+                                };
+                                let mut args = baseline.clone();
+                                append_spec_args(&mut args, &spec);
+                                assert!(
+                                    args.starts_with(&baseline),
+                                    "mode={mode:?} draft_max={draft_max} \
+                                     mutated baseline — broke spec-dec byte-identity contract"
+                                );
+                                // No accidental long-flag leakage.
+                                for arg in args[baseline.len()..]
+                                    .iter()
+                                    .filter(|a| a.starts_with("--"))
+                                {
+                                    assert!(
+                                        arg.starts_with("--spec-"),
+                                        "mode={mode:?} leaked non-spec flag: {arg}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

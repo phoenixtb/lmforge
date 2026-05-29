@@ -48,6 +48,19 @@ pub struct ModelSlot {
     pub status: EngineStatus,
     pub idle_secs: u64,
     pub vram_est_gb: f32,
+    /// Speculative-decoding mode this slot was started with — one of
+    /// `auto` / `mtp` / `draft-model` / `off`. Resolved by
+    /// `engine::speculative::resolve` at spawn time. Surfaced so the UI
+    /// can show "spec=mtp" badges per slot without re-deriving the
+    /// config. Defaults to `Off` for embed/rerank slots.
+    #[serde(default)]
+    pub spec_mode: crate::engine::speculative::SpecMode,
+    /// Cumulative speculative-decoding stats parsed from `llama-server`
+    /// stderr by the per-slot tee task. `None` until the first request
+    /// served by this slot completes (or always `None` for non-llamacpp
+    /// engines + spec-disabled slots). See `engine::spec_observer`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spec_stats: Option<crate::engine::spec_observer::SpecStats>,
 }
 
 /// One recorded failure for a model load attempt, surfaced in `/lf/status`
@@ -168,7 +181,28 @@ impl EngineManager {
 
     /// Broadcast current state snapshot to all subscribers (tray, SSE, Tauri events).
     /// Call this after every mutation to `self.state`.
+    ///
+    /// Before the broadcast, every active slot's `spec_observer` is sampled
+    /// into the corresponding `ModelSlot.spec_stats` so the snapshot reflects
+    /// the latest acceptance-rate counters (S-2.7). Sampling is a single
+    /// RwLock read per slot — negligible cost on the heartbeat path and the
+    /// only place where live observer → status reconciliation happens.
     async fn notify(&self) {
+        {
+            let mut state = self.state.write().await;
+            for (model_id, active) in &self.active_slots {
+                let Some(slot) = state.running_models.get_mut(model_id) else {
+                    continue;
+                };
+                slot.spec_mode = active.engine.spec_mode;
+                slot.spec_stats = active
+                    .engine
+                    .spec_observer
+                    .as_ref()
+                    .filter(|o| o.has_samples())
+                    .map(|o| o.snapshot());
+            }
+        }
         let snapshot = self.state.read().await.clone();
         // Ignore send errors — no subscribers is fine, lagged is fine.
         let _ = self.status_tx.send(snapshot);
@@ -526,6 +560,11 @@ impl EngineManager {
                     status: EngineStatus::Starting,
                     idle_secs: 0,
                     vram_est_gb: needed_vram_gb,
+                    // spec mode + stats are filled in after the engine
+                    // becomes Ready (we don't know spec.mode until the
+                    // adapter resolves it inside `start()`).
+                    spec_mode: crate::engine::speculative::SpecMode::Off,
+                    spec_stats: None,
                 },
             );
         }
@@ -550,20 +589,115 @@ impl EngineManager {
             }
         };
 
+        // S-2.8 retry book-keeping: capture whether spec-dec was active
+        // for THIS spawn attempt. If the slot dies before health passes
+        // AND elapsed is < 5s, we'll retry once with spec forced off —
+        // the most common cause of fast crashes on opt-in spec-dec is a
+        // misconfigured draft head / MoE clamp / VRAM headroom misread.
+        let spec_was_on_first_attempt =
+            engine.spec_mode != crate::engine::speculative::SpecMode::Off;
+
         if let Err(e) = self.wait_slot_health(port, &mut engine.process).await {
-            // Health timeout — kill the orphaned engine process and clean up state
-            warn!(model_id, port, error = %e, "Engine health check timed out — killing spawned process");
-            let mut orphan = engine;
-            let _ = self.adapter.stop(&mut orphan).await;
-            self.record_load_failure(model_id, &e).await;
-            self.state.write().await.running_models.remove(model_id);
-            crate::server::metrics::observe_model_load(
-                model_id,
-                false,
-                load_started.elapsed().as_secs_f64(),
-            );
-            self.notify().await;
-            return Err(e);
+            // Health failed — kill the orphan in-place (same as before),
+            // then decide whether to retry with spec=off.
+            warn!(model_id, port, error = %e, "Engine health check failed — cleaning up orphan");
+            let _ = self.adapter.stop(&mut engine).await;
+
+            let elapsed = load_started.elapsed();
+            let early_crash = elapsed < std::time::Duration::from_secs(5);
+
+            if spec_was_on_first_attempt && early_crash {
+                warn!(
+                    model_id,
+                    port,
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    first_error = %e,
+                    "Spec-dec engine died <5s after spawn — retrying once with spec=off (S-2.8)"
+                );
+
+                // Save + restore the existing env override so an operator
+                // who set `LMFORGE_SPECULATIVE_MODE=mtp` explicitly isn't
+                // permanently overridden by our retry. The supervisor
+                // task is the single writer of this var, and command
+                // dispatch is sequential, so the restore window can't
+                // race with another spawn.
+                //
+                // SAFETY: `set_var` / `remove_var` are marked `unsafe` in
+                // Rust 1.84+ to flag the thread hazard. We're on the
+                // supervisor task, which is the only thread that calls
+                // `engine::speculative::resolve`.
+                let saved = std::env::var("LMFORGE_SPECULATIVE_MODE").ok();
+                unsafe { std::env::set_var("LMFORGE_SPECULATIVE_MODE", "off") };
+
+                let retry_result = self
+                    .spawn_adapter_process(model_id, &model_dir, port, role)
+                    .await;
+
+                unsafe {
+                    match saved.as_deref() {
+                        Some(v) => std::env::set_var("LMFORGE_SPECULATIVE_MODE", v),
+                        None => std::env::remove_var("LMFORGE_SPECULATIVE_MODE"),
+                    }
+                }
+
+                match retry_result {
+                    Ok(mut retry_engine) => {
+                        if let Err(e2) = self
+                            .wait_slot_health(port, &mut retry_engine.process)
+                            .await
+                        {
+                            let _ = self.adapter.stop(&mut retry_engine).await;
+                            // Annotate the message so users see both
+                            // attempts when reading `/lf/status`.
+                            let combined = anyhow::anyhow!(
+                                "spec-dec retry with spec=off also failed: {e2} \
+                                 (first attempt failed in {}ms with: {e})",
+                                elapsed.as_millis()
+                            );
+                            self.record_load_failure(model_id, &combined).await;
+                            self.state.write().await.running_models.remove(model_id);
+                            crate::server::metrics::observe_model_load(
+                                model_id,
+                                false,
+                                load_started.elapsed().as_secs_f64(),
+                            );
+                            self.notify().await;
+                            return Err(combined);
+                        }
+                        info!(
+                            model_id,
+                            "Spec-dec retry succeeded — slot is Ready with spec=off"
+                        );
+                        engine = retry_engine;
+                    }
+                    Err(e2) => {
+                        let combined = anyhow::anyhow!(
+                            "spec-dec retry spawn failed: {e2} \
+                             (first attempt failed in {}ms with: {e})",
+                            elapsed.as_millis()
+                        );
+                        self.record_load_failure(model_id, &combined).await;
+                        self.state.write().await.running_models.remove(model_id);
+                        crate::server::metrics::observe_model_load(
+                            model_id,
+                            false,
+                            load_started.elapsed().as_secs_f64(),
+                        );
+                        self.notify().await;
+                        return Err(combined);
+                    }
+                }
+            } else {
+                self.record_load_failure(model_id, &e).await;
+                self.state.write().await.running_models.remove(model_id);
+                crate::server::metrics::observe_model_load(
+                    model_id,
+                    false,
+                    load_started.elapsed().as_secs_f64(),
+                );
+                self.notify().await;
+                return Err(e);
+            }
         }
 
         self.active_slots.insert(

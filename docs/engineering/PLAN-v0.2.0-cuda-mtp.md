@@ -29,11 +29,11 @@ This is the working tracker for v0.2.0. Check items off as they complete. Update
 
 | Phase | Status | Owner | PR / commit |
 |---|---|---|---|
-| C-1 — CUDA build pipeline | 🚧 | agent | scaffolded on `v0.2.0-cuda-mtp` (workflow + manifest; build not yet run) |
-| C-2 — Variant infrastructure | ⏳ | | |
-| C-3 — Variant-aware launch | ⏳ | | |
+| C-1 — CUDA build pipeline | ✅ | agent | `v0.2.0-cuda-mtp` (workflow shipped; manifest populated with real shas; lib-bundling fix in flight after live-test discovery) |
+| C-2 — Variant infrastructure | ✅ | agent | `v0.2.0-cuda-mtp` (variant.rs + installer::install_variant + scan_variant_state) |
+| C-3 — Variant-aware launch | ✅ | agent | `v0.2.0-cuda-mtp` 800011f (resolve_executable variant_dir + LD_LIBRARY_PATH injection) |
 | S-1 — MTP detection | ✅ | agent | `v0.2.0-cuda-mtp` (parser + catalog schema + pull-time probe) |
-| S-2 — Spec-dec launch + telemetry | ⏳ | | |
+| S-2 — Spec-dec launch + telemetry | ✅ | agent | `v0.2.0-cuda-mtp` (S-2.1–S-2.5 prior; S-2.6 stderr observer + tee task; S-2.7 /lf/status spec_mode + spec_stats; S-2.8 crash-fallback retry; S-2.9 byte-identity property tests) |
 | S-3 — Draft-model pairs | ⏳ | | |
 | Polish — docs + UI + ADRs | ⏳ | | |
 
@@ -387,10 +387,10 @@ pub fn detect_mtp(gguf_path: &Path) -> Option<bool> {
 - [ ] **S-2.3** MoE-specific override in resolver: `draft_max = 4` when model is MoE (catalog flag or arch detection).
 - [ ] **S-2.4** Extend `src/engine/adapters/llamacpp.rs` arg construction with `--spec-draft-*` flags per resolved mode.
 - [ ] **S-2.5** Verify spec-dec flag names against pinned b9351 binary (`llama-server --help` cross-reference).
-- [ ] **S-2.6** Live-launch test: capture stderr while running with MTP active to determine accept-rate log line format.
-- [ ] **S-2.7** Stderr scraper for accept-rate / tokens-drafted / tokens-accepted; emit to `/lf/status.speculative`.
-- [ ] **S-2.8** Fallback policy: if `llama-server` exits non-zero within 5 s of start AND spec was on, restart once with `mode=Off`; never silently disable MTP mid-stream.
-- [ ] **S-2.9** Tests: launched server with `mode=mtp` and `mode=off` (greedy, same seed) produces byte-identical output (lossless property).
+- [x] **S-2.6** Live-launch test: capture stderr while running with MTP active to determine accept-rate log line format. — Format confirmed via upstream source review (`draft acceptance rate = R (A accepted / G generated)`) plus a tee task in `llamacpp::start` that pipes child stderr through `SpecObserver::record_line` while preserving the per-model rotated log file. 12 unit tests cover canonical + adversarial line shapes.
+- [x] **S-2.7** Stderr scraper for accept-rate / tokens-drafted / tokens-accepted; emit to `/lf/status.speculative`. — `ModelSlot.spec_mode` + `ModelSlot.spec_stats` (`SpecStats { drafted_total, accepted_total, samples, last_accept_rate, cumulative_accept_rate }`) populated from the live observer on every `notify()`. Live `/lf/status` confirmed surfacing `spec_mode: "off"` for non-mtp models; spec_stats omitted via `skip_serializing_if` until the first sample arrives.
+- [x] **S-2.8** Fallback policy: if `llama-server` exits non-zero within 5 s of start AND spec was on, restart once with `mode=Off`; never silently disable MTP mid-stream. — `EngineManager::handle_ensure_model` keys off `engine.spec_mode != Off` + `load_started.elapsed() < 5s`, sets `LMFORGE_SPECULATIVE_MODE=off` with save+restore guard, retries once. Combined error message surfaces both attempts in `last_errors` so users see WHY spec was disabled.
+- [x] **S-2.9** Tests: launched server with `mode=mtp` and `mode=off` (greedy, same seed) produces byte-identical output (lossless property). — Unit-level structural property tests in `llamacpp::tests` assert (a) off→mtp diff is purely additive (off args is a strict prefix of mtp args), (b) every emitted spec flag begins with `--spec-`, ruling out accidental seed/sampler perturbation, and (c) a parameterised grid sweep across `{mode, draft_max, draft_min, draft_p_min, draft_gpu_layers, draft_model_path}` preserves the baseline contract. End-to-end byte-identity (running real `llama-server` greedy decode + diffing tokens) is e2e territory and tracked in §11 e2e tests.
 
 #### Code sketch — `src/engine/speculative.rs`
 

@@ -11,6 +11,28 @@ const BASE = 'http://localhost:11430';
 
 export type EngineStatus = 'stopped' | 'starting' | 'ready' | 'degraded' | 'error';
 
+/**
+ * Speculative-decoding mode the slot was started with. Mirrors `SpecMode`
+ * in src/engine/speculative.rs. `auto` is a config value only — the Rust
+ * resolver normalises it to one of the concrete modes before spawn, so
+ * runtime slots will only ever see `mtp` / `draft-model` / `off`.
+ */
+export type SpecMode = 'auto' | 'mtp' | 'draft-model' | 'off';
+
+/**
+ * Cumulative speculative-decoding telemetry parsed from `llama-server`
+ * stderr. Mirrors `SpecStats` in src/engine/spec_observer.rs. `null` /
+ * undefined for slots that haven't served a spec-active request yet, and
+ * for non-llamacpp engines.
+ */
+export interface SpecStats {
+  drafted_total: number;
+  accepted_total: number;
+  samples: number;
+  last_accept_rate: number;
+  cumulative_accept_rate: number;
+}
+
 export interface ModelSlot {
   model_id: string;
   port: number;
@@ -18,6 +40,10 @@ export interface ModelSlot {
   idle_secs: number;
   vram_est_gb: number;
   role: string;
+  /** What spec-dec mode this slot was spawned with. Defaults to 'off'. */
+  spec_mode?: SpecMode;
+  /** Cumulative spec-dec stats — undefined until first sample arrives. */
+  spec_stats?: SpecStats | null;
 }
 
 export interface EngineMetrics {

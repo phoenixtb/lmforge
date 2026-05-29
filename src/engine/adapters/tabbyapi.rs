@@ -325,6 +325,8 @@ impl EngineAdapter for TabbyApiAdapter {
         Ok(ActiveEngine {
             process: child,
             model_id: model_id.to_string(),
+            spec_observer: None,
+            spec_mode: crate::engine::speculative::SpecMode::Off,
         })
     }
 
