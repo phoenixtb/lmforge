@@ -285,19 +285,21 @@ jobs:
           echo "sha256_file=${out}.tar.gz.sha256" >> "$GITHUB_OUTPUT"
           echo "size_mb=$(du -m "${out}.tar.gz" | cut -f1)" >> "$GITHUB_OUTPUT"
 
-      - name: Tarball size guard (< 750 MB)
-        # Empirical sizes at b9351 with archs trimmed to {86,89,90,(100),120}:
-        #   cuda12 ≈ 567 MB   (cuBLAS 12 is the bulk)
-        #   cuda13 ≈ ~480 MB
-        # 750 MB gives ~30% headroom for future llama.cpp growth and the
-        # extra Blackwell-datacenter arch on cuda13. Tighter than this
-        # would just be a tripwire that costs reruns instead of catching
-        # real bloat.
+      - name: Tarball size guard (< 1500 MB)
+        # Empirical sizes at b9351 with archs trimmed to {86,89,90,(100),120}
+        # AFTER bundling all llama.cpp .so files alongside the CUDA runtime
+        # libs (the lib-bundling fix that landed with the spec-dec telemetry
+        # work):
+        #   cuda12 ≈ 980 MB  (libcublasLt 12.x ~ 540 MB + ggml-cuda kernels)
+        #   cuda13 ≈ 909 MB  (libcublasLt 13.x slightly leaner; +1 arch)
+        # 1500 MB gives ~50% headroom for future llama.cpp / CUDA toolkit
+        # growth. Note: GitHub release assets are capped at 2 GB, so a
+        # tarball >= 1900 MB needs a different distribution path entirely.
         run: |
           size="${{ steps.stage.outputs.size_mb }}"
           echo "tarball size = ${size} MB"
-          if [ "$size" -ge 750 ]; then
-            echo "::error::tarball exceeds 750 MB budget"
+          if [ "$size" -ge 1500 ]; then
+            echo "::error::tarball exceeds 1500 MB budget — investigate kernel-arch list and bundled libs before bumping further"
             exit 1
           fi
 
