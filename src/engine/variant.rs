@@ -114,10 +114,15 @@ pub struct VariantState {
 ///   1. If `compute_cap` is outside `{sm_7x, sm_8x, sm_9x, sm_12x}`, the
 ///      CUDA path is rejected outright (older Volta/Pascal cards are
 ///      handled by the universal Vulkan binary instead).
-///   2. If `prefer_cuda13 && cuda13_installed && driver ≥ CUDA13_DRIVER_MIN`
-///      → `Cuda13`.
-///   3. If `cuda12_installed && driver ≥ CUDA12_DRIVER_MIN` → `Cuda12`.
-///   4. Otherwise fall through to platform fallback (Vulkan / CPU).
+///   2. If both `cuda12_installed` && `cuda13_installed`:
+///      - `prefer_cuda13 && driver ≥ CUDA13_DRIVER_MIN` → `Cuda13`
+///      - else if `driver ≥ CUDA12_DRIVER_MIN` → `Cuda12`
+///   3. If only `cuda13_installed && driver ≥ CUDA13_DRIVER_MIN` → `Cuda13`.
+///      The user explicitly opted into cuda13 by installing it; we don't
+///      silently downgrade to Vulkan just because `prefer_cuda13` defaults
+///      to false (see scan_variant_state — it only flips on env override).
+///   4. If only `cuda12_installed && driver ≥ CUDA12_DRIVER_MIN` → `Cuda12`.
+///   5. Otherwise fall through to platform fallback (Vulkan / CPU).
 ///
 /// Non-Linux NVIDIA and every other vendor / OS combination falls through
 /// directly to the platform fallback. Windows NVIDIA still goes through
@@ -142,11 +147,25 @@ pub fn select(profile: &HardwareProfile, state: &VariantState) -> LlamaVariant {
         );
 
         if cap_ok {
-            if state.prefer_cuda13 && state.cuda13_installed && driver >= CUDA13_DRIVER_MIN {
+            // When both are installed the user is explicitly tie-breaking,
+            // so honour `prefer_cuda13`. Driver floors gate each variant
+            // independently — a driver that's r580 (below cuda13 floor)
+            // but ≥ cuda12 floor will pick cuda12 even with prefer_cuda13.
+            if state.cuda13_installed
+                && state.cuda12_installed
+                && state.prefer_cuda13
+                && driver >= CUDA13_DRIVER_MIN
+            {
                 return LlamaVariant::Cuda13;
             }
             if state.cuda12_installed && driver >= CUDA12_DRIVER_MIN {
                 return LlamaVariant::Cuda12;
+            }
+            // Only one CUDA variant installed: use it. Don't downgrade to
+            // Vulkan just because the OTHER CUDA variant isn't on disk.
+            // Installation was an explicit user act.
+            if state.cuda13_installed && driver >= CUDA13_DRIVER_MIN {
+                return LlamaVariant::Cuda13;
             }
         }
     }
@@ -444,6 +463,37 @@ mod tests {
     fn select_linux_nvidia_no_cuda_installed_falls_back_to_vulkan() {
         let p = linux_nvidia_blackwell((595, 71, 5));
         let s = VariantState::default();
+        assert_eq!(select(&p, &s), LlamaVariant::Vulkan);
+    }
+
+    #[test]
+    fn select_linux_nvidia_only_cuda13_installed_picks_cuda13_without_prefer_flag() {
+        // Regression: when the user explicitly installed cuda13 (and
+        // didn't install cuda12), the selector must pick cuda13 even when
+        // prefer_cuda13 is false. Otherwise installing the variant would
+        // appear to do nothing — the runtime would silently downgrade to
+        // Vulkan. Discovered live during S-2 verification.
+        let p = linux_nvidia_blackwell((595, 71, 5));
+        let s = VariantState {
+            cuda12_installed: false,
+            cuda13_installed: true,
+            prefer_cuda13: false,
+            ..Default::default()
+        };
+        assert_eq!(select(&p, &s), LlamaVariant::Cuda13);
+    }
+
+    #[test]
+    fn select_linux_nvidia_only_cuda13_installed_below_floor_falls_to_vulkan() {
+        // Same as above but the driver is below the cuda13 floor — we
+        // can't run cuda13 safely. With cuda12 also missing, only Vulkan
+        // is available. (This is the "user installed cuda13 on an old
+        // driver" footgun; better to fail-safe to Vulkan than to crash.)
+        let p = linux_nvidia_blackwell((580, 0, 0));
+        let s = VariantState {
+            cuda13_installed: true,
+            ..Default::default()
+        };
         assert_eq!(select(&p, &s), LlamaVariant::Vulkan);
     }
 

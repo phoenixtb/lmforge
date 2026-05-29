@@ -10,7 +10,7 @@
       "cap_min": 8.6,
       "platform": "linux-x64",
       "url": "https://github.com/phoenixtb/lmforge/releases/download/llamacpp-b9351/lmforge-llamacpp-b9351-cuda12-linux-x64.tar.gz",
-      "sha256": "1ee5946ad793d88af2241ce998afb651bfa0ae2ea95a28178ef129f5f54889c9"
+      "sha256": "be8fe4952d43bbb2956ee776291d5c21f469e078d6498c410ff2e0139ffb96ba"
     },
     {
       "id": "cuda13",
@@ -20,7 +20,7 @@
       "platform": "linux-x64",
       "opt_in_only": true,
       "url": "https://github.com/phoenixtb/lmforge/releases/download/llamacpp-b9351/lmforge-llamacpp-b9351-cuda13-linux-x64.tar.gz",
-      "sha256": "9bac0eab76e4054e5d8dd4e11734a0a5f4197b748e563b27f3042b2b2946806e"
+      "sha256": "11cb6a9f787fecfd154d2aadec88353850415e787d301bcb08ea1a312ecca483"
     }
   ]
 }
