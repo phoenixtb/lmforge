@@ -33,9 +33,10 @@ This is the working tracker for v0.2.0. Check items off as they complete. Update
 | C-2 — Variant infrastructure | ✅ | agent | `v0.2.0-cuda-mtp` (variant.rs + installer::install_variant + scan_variant_state) |
 | C-3 — Variant-aware launch | ✅ | agent | `v0.2.0-cuda-mtp` 800011f (resolve_executable variant_dir + LD_LIBRARY_PATH injection) |
 | S-1 — MTP detection | ✅ | agent | `v0.2.0-cuda-mtp` (parser + catalog schema + pull-time probe; probe-wins-over-catalog after live-test on unsloth/Qwen3.5-4B; `pull --refresh` migration path for already-installed models) |
-| S-2 — Spec-dec launch + telemetry | ✅ | agent | `v0.2.0-cuda-mtp` (S-2.1–S-2.5 prior; S-2.6 stderr observer + tee task; S-2.7 /lf/status spec_mode + spec_stats; S-2.8 crash-fallback retry **fired live**; S-2.9 byte-identity property tests; live MTP-tensor capture deferred — no public GGUF with `nextn.*` tensors verified yet, see §S-2 notes) |
+| S-2 — Spec-dec launch + telemetry | ✅ | agent | `v0.2.0-cuda-mtp` (S-2.1–S-2.9; live MTP + spec_stats verified on cuda12/cuda13 with `Qwen3.5-4B-MTP-GGUF`) |
 | S-3 — Draft-model pairs | ✅ | agent | `draft_pairs.toml` + lookup/cache + auto resolution in `speculative::resolve` (qwen3.x → qwen3:0.6b:4bit; llama/qwen2.5 pairs commented pending catalog entries) |
-| Polish — docs + UI + ADRs | ⏳ | | |
+| Polish — docs + UI + ADRs | ✅ | | |
+| Post-tarball live matrix | ⏳ | user | See [TEST-v0.2.0-post-tarball.md](./TEST-v0.2.0-post-tarball.md) — blocked on NCCL-fixed cuda12 + cuda13 tarball rebuild |
 
 ---
 
@@ -387,7 +388,7 @@ pub fn detect_mtp(gguf_path: &Path) -> Option<bool> {
 - [ ] **S-2.3** MoE-specific override in resolver: `draft_max = 4` when model is MoE (catalog flag or arch detection).
 - [ ] **S-2.4** Extend `src/engine/adapters/llamacpp.rs` arg construction with `--spec-draft-*` flags per resolved mode.
 - [ ] **S-2.5** Verify spec-dec flag names against pinned b9351 binary (`llama-server --help` cross-reference).
-- [x] **S-2.6** Live-launch test: capture stderr while running with MTP active to determine accept-rate log line format. — Format confirmed via upstream source review (`draft acceptance rate = R (A accepted / G generated)`) plus a tee task in `llamacpp::start` that pipes child stderr through `SpecObserver::record_line` while preserving the per-model rotated log file. 12 unit tests cover canonical + adversarial line shapes.
+- [x] **S-2.6** Live-launch test: capture stderr while running with MTP active to determine accept-rate log line format. — b9351 emits `draft acceptance = R (A accepted / G generated)` on the `slot print_timing` line (not `draft acceptance rate`). Parser updated + live-verified on `unsloth/Qwen3.5-4B-MTP-GGUF`.
 - [x] **S-2.7** Stderr scraper for accept-rate / tokens-drafted / tokens-accepted; emit to `/lf/status.speculative`. — `ModelSlot.spec_mode` + `ModelSlot.spec_stats` (`SpecStats { drafted_total, accepted_total, samples, last_accept_rate, cumulative_accept_rate }`) populated from the live observer on every `notify()`. Live `/lf/status` confirmed surfacing `spec_mode: "off"` for non-mtp models; spec_stats omitted via `skip_serializing_if` until the first sample arrives.
 - [x] **S-2.8** Fallback policy: if `llama-server` exits non-zero within 5 s of start AND spec was on, restart once with `mode=Off`; never silently disable MTP mid-stream. — `EngineManager::handle_ensure_model` keys off `engine.spec_mode != Off` + `load_started.elapsed() < 5s`, sets `LMFORGE_SPECULATIVE_MODE=off` with save+restore guard, retries once. Combined error message surfaces both attempts in `last_errors` so users see WHY spec was disabled.
 - [x] **S-2.9** Tests: launched server with `mode=mtp` and `mode=off` (greedy, same seed) produces byte-identical output (lossless property). — Unit-level structural property tests in `llamacpp::tests` assert (a) off→mtp diff is purely additive (off args is a strict prefix of mtp args), (b) every emitted spec flag begins with `--spec-`, ruling out accidental seed/sampler perturbation, and (c) a parameterised grid sweep across `{mode, draft_max, draft_min, draft_p_min, draft_gpu_layers, draft_model_path}` preserves the baseline contract. End-to-end byte-identity (running real `llama-server` greedy decode + diffing tokens) is e2e territory and tracked in §11 e2e tests.
@@ -398,7 +399,7 @@ pub fn detect_mtp(gguf_path: &Path) -> Option<bool> {
 - **Probe must outrank catalog.** Catalog hand-tagged `unsloth/Qwen3.5-*-GGUF` as `mtp:true`, but the actual Q6_K_XL has 0 nextn/mtp tensors (verified with `examples/probe_mtp.rs`). With the original "catalog wins" precedence, every spawn crashed with `context type MTP requested but model doesn't contain MTP layers` and triggered the S-2.8 retry. Fix: `resolve_mtp_for_model` now prefers the probe whenever it returns `Some(_)`, falling back to the catalog only when the file is unreadable. Three new tests (`resolve_mtp_probe_wins_over_catalog_when_definitive`, `resolve_mtp_probe_positive_overrides_catalog_negative`, `resolve_mtp_falls_back_to_catalog_when_probe_unreadable`).
 - **`pull --refresh` migration path.** Re-evaluates capabilities for an already-installed model without re-downloading the weights; necessary because models pulled before S-1 landed had stale `mtp = null` in `models.json`.
 - **S-2.8 fired in production.** First run with the corrected `--spec-type draft-mtp` flag died at 2310 ms during MTP context creation; daemon log: `WARN: Spec-dec engine died <5s after spawn — retrying once with spec=off (S-2.8)` → `INFO: Spec-dec retry succeeded — slot is Ready with spec=off`. Crash-fallback path is now field-validated.
-- **Live `draft acceptance rate` capture deferred.** No public GGUF with verified `nextn.*` tensors found yet (Unsloth's Q*_K_XL family strips them during quantization). Parser has 12 unit tests against canonical + adversarial upstream formats and the tee task is wired in `llamacpp::start`; the residual gap is purely "run against a real MTP-active GGUF." Tracked under Polish/§11 e2e once we identify or build one.
+- **Live MTP e2e verified (2026-05-30).** Model `qwen3.5:4b:mtp:4bit` → `unsloth/Qwen3.5-4B-MTP-GGUF` (catalog shortcut added). On RTX 5060 Ti / b9351: **cuda12** `spec_mode=mtp`, accept ~84% (73/87 drafted); **cuda13** `spec_mode=mtp`, accept ~94% (48/51). `/lf/status.spec_stats` populated after chat. **cuda12 tarball gap:** `llama-server` links `libnccl.so.2` but NCCL wasn't bundled — exit 127 until lib copied to `variants/cuda12/lib/`; CI workflow now bundles NCCL when present. Rebuild cuda12 tarball to ship fix.
 
 #### Code sketch — `src/engine/speculative.rs`
 
@@ -514,13 +515,13 @@ note          = "Same Qwen2.5 tokenizer family."
 
 #### Tasks
 
-- [ ] **Polish-1** Update `docs/INSTALL_LINUX_DEV.md` with new variant table (cuda12 default, cuda13 opt-in, Vulkan fallback) and MTP perf claims.
-- [ ] **Polish-2** Update `README.md` install script flow: "fetches CUDA variant on NVIDIA Linux". Update perf positioning.
-- [ ] **Polish-3** New ADR: `docs/architecture/ADR-004-cuda-variant-pipeline.md` (glibc 2.28, static cudart rejection, 13.2 ban, RPATH rationale).
-- [ ] **Polish-4** New ADR: `docs/architecture/ADR-005-speculative-decoding.md` (MTP-first, layered detection, lossless guarantee, fallback chain).
-- [ ] **Polish-5** UI: Overview page tile for "Speculative decoding" showing `mode + accept_rate + tokens_drafted`.
-- [ ] **Polish-6** UI: Settings → Engine: show installed variants per engine; CLI hints for `--variant cuda12 / cuda13`.
-- [ ] **Polish-7** Migration smoke: existing Vulkan-only install gets auto-upgraded to cuda12 on next `init` (tested on user's box end-to-end).
+- [x] **Polish-1** Update `docs/INSTALL_LINUX_DEV.md` with new variant table (cuda12 default, cuda13 opt-in, Vulkan fallback) and MTP perf claims.
+- [x] **Polish-2** Update `README.md` install script flow: "fetches CUDA variant on NVIDIA Linux". Update perf positioning.
+- [x] **Polish-3** New ADR: `docs/architecture/ADR-004-cuda-variant-pipeline.md` (glibc 2.28, static cudart rejection, 13.2 ban, RPATH rationale).
+- [x] **Polish-4** New ADR: `docs/architecture/ADR-005-speculative-decoding.md` (MTP-first, layered detection, lossless guarantee, fallback chain).
+- [x] **Polish-5** UI: Overview page tile for "Speculative decoding" showing `mode + accept_rate + tokens_drafted`.
+- [x] **Polish-6** UI: Settings → Engine: show installed variants per engine; CLI hints for `--variant cuda12 / cuda13`.
+- [x] **Polish-7** Migration smoke: existing Vulkan-only install gets auto-upgraded to cuda12 on next `init` (tested on user's box end-to-end).
 
 ---
 

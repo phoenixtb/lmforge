@@ -53,7 +53,15 @@
     expandedErrors = new Set(expandedErrors); // trigger Svelte reactivity
   }
 
-  function fmtErrorAt(iso: string): string {
+  function fmtSpecMode(mode?: string): string {
+    if (!mode || mode === 'off') return 'off';
+    return mode;
+  }
+
+  function fmtAcceptRate(stats?: import('$lib/api').SpecStats | null): string {
+    if (!stats || stats.samples === 0) return '—';
+    return `${Math.round(stats.cumulative_accept_rate * 100)}%`;
+  }
     try {
       const d = new Date(iso);
       const now = Date.now();
@@ -238,6 +246,12 @@
                 <div class="slot-r2">
                   <span class="sd"><span class="dk">port</span><span class="dv mono">{slot.port}</span></span>
                   <span class="sd"><span class="dk">vram</span><span class="dv mono">{slot.vram_est_gb.toFixed(2)} GB</span></span>
+                  {#if slot.spec_mode && slot.spec_mode !== 'off'}
+                    <span class="sd" title="Speculative decoding">
+                      <span class="dk">spec</span>
+                      <span class="dv mono">{fmtSpecMode(slot.spec_mode)} · {fmtAcceptRate(slot.spec_stats)}</span>
+                    </span>
+                  {/if}
                   <div class="svt"><div class="svf" style="width:{slotP}%;background:{vramBarColor}"></div></div>
                   {#if idle}<span class="ib">idle {fmtSecs(slot.idle_secs??0)}</span>
                   {:else}<span class="ab">active</span>{/if}

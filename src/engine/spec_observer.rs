@@ -5,6 +5,7 @@
 //!
 //! ```text
 //! draft acceptance rate = 0.70312 (   90 accepted /   128 generated)
+//! draft acceptance = 0.84000 (   63 accepted /    75 generated)
 //! ```
 //!
 //! This module parses those lines, accumulates the per-slot counters, and
@@ -51,10 +52,15 @@ pub struct SpecSample {
     pub ratio: f32,
 }
 
+/// Anchor phrases llama-server has emitted across recent builds. Longer
+/// phrases are tried first so `draft acceptance rate` wins over the shorter
+/// `draft acceptance` prefix.
+const ACCEPTANCE_ANCHORS: &[&str] = &["draft acceptance rate", "draft acceptance"];
+
 /// Parse a single stderr line. Returns `Some(sample)` only when the line
-/// matches the canonical `draft acceptance rate = R (A accepted / G generated)`
-/// format. Anything else returns None — the tee task drops it on the floor
-/// after writing it to the engine log.
+/// matches a known `draft acceptance` telemetry format. Anything else
+/// returns None — the tee task drops it on the floor after writing it to
+/// the engine log.
 ///
 /// The parser is **deliberately tolerant**: extra whitespace, leading
 /// log prefixes, trailing junk are all accepted.
@@ -62,8 +68,10 @@ pub fn parse_line(line: &str) -> Option<SpecSample> {
     // Find the anchor phrase. Allowing leading prefixes (timestamps, slot
     // ids, log-level glyphs that llama-server may add before the message)
     // means we don't have to maintain a regex for the prefix shape.
-    let idx = line.find("draft acceptance rate")?;
-    let tail = &line[idx + "draft acceptance rate".len()..];
+    let (anchor, idx) = ACCEPTANCE_ANCHORS
+        .iter()
+        .find_map(|a| line.find(a).map(|i| (*a, i)))?;
+    let tail = &line[idx + anchor.len()..];
 
     // Expect: ` = 0.NNN (   A accepted /   G generated)` — possibly more
     // whitespace, possibly a trailing newline. We crawl manually instead
@@ -169,6 +177,16 @@ mod tests {
     use super::*;
 
     // ── parse_line — canonical format ────────────────────────────────────
+
+    #[test]
+    fn parses_b9351_slot_print_timing_format() {
+        // Live output from llama.cpp b9351 with --spec-type draft-mtp.
+        let line = "0.06.957.831 I slot print_timing: id  3 | task 0 | draft acceptance = 0.84000 (   63 accepted /    75 generated)";
+        let s = parse_line(line).expect("must parse");
+        assert_eq!(s.accepted, 63);
+        assert_eq!(s.generated, 75);
+        assert!((s.ratio - 0.84).abs() < 1e-5);
+    }
 
     #[test]
     fn parses_canonical_line_from_llama_server() {

@@ -231,6 +231,20 @@ jobs:
             fi
           done
 
+          # Some CUDA 12 builds link libnccl (multi-GPU / peer paths in
+          # ggml-cuda). Bundle it when present so llama-server doesn't
+          # exit 127 on single-GPU hosts with no system NCCL install.
+          nccl_src="$(find -L \
+            /usr/local/cuda /usr/local/cuda-*/ /usr/lib64 /usr/lib \
+            -name 'libnccl.so.2' -type f 2>/dev/null | head -n 1 || true)"
+          if [ -n "$nccl_src" ]; then
+            echo "Bundling $(basename "$nccl_src") (from $nccl_src)"
+            cp -L "$nccl_src" "$out/lib/$(basename "$nccl_src")"
+          elif ldd build/bin/llama-server 2>/dev/null | grep -q 'libnccl.so.2'; then
+            echo "::error::llama-server links libnccl.so.2 but no libnccl found in CUDA toolkit paths"
+            exit 1
+          fi
+
           # Set RPATH so binaries find $ORIGIN/lib/libcudart.so.* at runtime.
           # Also set RPATH on the bundled .so files themselves — when
           # `libllama-server-impl.so` loads `libllama.so`, the loader

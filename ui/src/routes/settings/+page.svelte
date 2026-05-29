@@ -261,6 +261,13 @@
                   </dl>
 
                   <div class="ec-state">
+                    {#if e.id === 'llamacpp'}
+                      <p class="ec-variant-hint">
+                        Linux NVIDIA: <code>lmforge init</code> installs <strong>cuda12</strong> by default.
+                        Opt-in: <code>lmforge engine install llamacpp --variant cuda13</code>.
+                        Active variant: <code>lmforge doctor</code>.
+                      </p>
+                    {/if}
                     <div class="state-pair">
                       <span class="state-key">Installed</span>
                       <span class="state-val">
@@ -519,10 +526,16 @@
   .cap--on { color: #6ee7a4; border-color: rgba(70, 200, 120, 0.4); }
 
   .ec-state {
-    display: flex; gap: 18px;
+    display: flex; flex-wrap: wrap; gap: 8px 18px;
     padding-top: 6px;
     border-top: 1px dashed var(--border);
   }
+  .ec-variant-hint {
+    flex: 1 1 100%;
+    margin: 0;
+    font-size: 11px; line-height: 1.45; color: var(--text-2);
+  }
+  .ec-variant-hint code { font-size: 10.5px; }
   .state-pair { display: flex; align-items: center; gap: 6px; }
   .state-key  { font-size: 11px; color: var(--text-3); }
   .state-val  { font-size: 11.5px; color: var(--text); display: inline-flex; align-items: center; gap: 5px; }
