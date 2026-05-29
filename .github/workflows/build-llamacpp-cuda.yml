@@ -186,8 +186,21 @@ jobs:
             cp "build/bin/${bin}" "$out/${bin}"
           done
 
+          # Copy all llama.cpp shared libraries the binaries link against.
+          # llama.cpp's default CMake build emits thin (~16 KB) binaries
+          # that dynamically load `libllama-server-impl.so`, `libllama.so`,
+          # `libggml*.so`, etc. from the build's `bin/` dir. Without these
+          # `.so` files in the tarball, the binaries fail to resolve their
+          # NEEDED entries at runtime — the variant is unusable.
+          # We bundle them under `lib/` (same dir we use for CUDA runtime
+          # libs) and rely on RUNPATH=$ORIGIN/lib to find them.
+          for so in build/bin/*.so build/bin/*.so.*; do
+            [ -f "$so" ] || continue
+            cp -L "$so" "$out/lib/$(basename "$so")"
+          done
+
           # Strip BEFORE patchelf — strip can wipe RPATH on some toolchains.
-          strip "$out"/llama-*
+          strip "$out"/llama-* "$out"/lib/*.so* 2>/dev/null || true
 
           # Bundle CUDA runtime libs (real file, not symlink).
           # NOTE: `find -L` is critical — modern NVIDIA images make
@@ -219,8 +232,18 @@ jobs:
           done
 
           # Set RPATH so binaries find $ORIGIN/lib/libcudart.so.* at runtime.
+          # Also set RPATH on the bundled .so files themselves — when
+          # `libllama-server-impl.so` loads `libllama.so`, the loader
+          # consults that .so's RUNPATH, not the binary's. Without this,
+          # cross-library lookup falls back to system paths (or fails).
           for bin in llama-server llama-cli llama-bench llama-quantize; do
             patchelf --set-rpath '$ORIGIN/lib' "$out/$bin"
+          done
+          for so in "$out"/lib/*.so "$out"/lib/*.so.*; do
+            [ -f "$so" ] || continue
+            # `$ORIGIN` here resolves to $out/lib/, so RPATH=$ORIGIN means
+            # lib-to-lib lookup stays within the bundle.
+            patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true
           done
 
           # VERSION manifest for runtime + lmforge doctor.
@@ -232,10 +255,27 @@ jobs:
           variant=${variant}
           EOF
 
-          # Audit: ensure libcuda.so.1 is the ONLY external CUDA dep.
-          if ldd "$out/llama-server" | grep -E 'libcublas|libcudart' >/dev/null; then
-            echo "::error::llama-server still has external libcudart/libcublas deps"
-            ldd "$out/llama-server"
+          # Audit 1: every NEEDED entry on the binary must resolve, with
+          # `libcuda.so.1` (the driver, supplied by the user's NVIDIA
+          # install) as the ONLY allowed external dep. Catches both
+          # missing-bundle issues (e.g. libllama.so not copied) AND any
+          # accidental leaked system deps.
+          missing="$(LD_LIBRARY_PATH="$out/lib" ldd "$out/llama-server" | grep 'not found' || true)"
+          if [ -n "$missing" ]; then
+            echo "::error::llama-server has unresolved NEEDED entries:"
+            echo "$missing"
+            echo "::group::full ldd output"
+            LD_LIBRARY_PATH="$out/lib" ldd "$out/llama-server"
+            echo "::endgroup::"
+            exit 1
+          fi
+
+          # Audit 2: ensure libcuda.so.1 is the ONLY external CUDA dep.
+          # Bundled cudart/cublas must resolve via $ORIGIN/lib, not /usr/local.
+          if LD_LIBRARY_PATH="$out/lib" ldd "$out/llama-server" \
+              | grep -E '/(usr|opt)/.*lib(cublas|cudart)' >/dev/null; then
+            echo "::error::llama-server still resolves cudart/cublas via system paths — RPATH or bundling is broken"
+            LD_LIBRARY_PATH="$out/lib" ldd "$out/llama-server"
             exit 1
           fi
 
