@@ -1347,18 +1347,22 @@ pub async fn install_variant(
         });
     }
 
+    let download_url = entry
+        .download_url(manifest.cdn_base.as_deref())
+        .with_context(|| format!("Cannot resolve download URL for variant `{variant}`"))?;
+
     info!(
         engine = "llamacpp",
         variant = %variant,
         tag = %manifest.llamacpp_tag,
-        url = %entry.url,
+        url = %download_url,
         "Downloading llama.cpp variant"
     );
     println!(
         "  ⚙ Downloading llama.cpp {} ({})",
         variant, manifest.llamacpp_tag
     );
-    println!("    {}", entry.url);
+    println!("    {}", download_url);
 
     // Stage download in a tmp dir, hash on the fly, then atomically move
     // the extracted payload into place. Failure leaves the existing
@@ -1368,7 +1372,7 @@ pub async fn install_variant(
         .context("Failed to create variant staging directory")?;
     let archive_path = staging_root.join(format!("{}.tar.gz", variant.as_str()));
 
-    download_with_sha256(&entry.url, &archive_path, &entry.sha256).await?;
+    download_with_sha256(&download_url, &archive_path, &entry.sha256).await?;
 
     let extract_root = staging_root.join(format!("{}-extract", variant.as_str()));
     let _ = std::fs::remove_dir_all(&extract_root);
@@ -1556,6 +1560,7 @@ async fn download_with_sha256(
     use std::io::Write;
 
     let client = reqwest::Client::builder()
+        .user_agent(format!("lmforge/{}", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(1800))
         .build()?;
 

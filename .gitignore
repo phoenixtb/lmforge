@@ -41,6 +41,7 @@ ui/src-tauri/target/
 .env
 .env.*
 !.env.example
+scripts/llamacpp-cuda/config.env
 *.pem
 *.key
 *.token

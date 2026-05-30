@@ -29,7 +29,7 @@ versions and bundled runtime libraries.
 5. **Driver floors:** cuda12 ≥ r570.26; cuda13 ≥ r590.44.01. Below floor →
    Vulkan fallback, upgrade hint in `lmforge doctor`.
 
-6. **Release namespace:** `llamacpp-bXXXX` tags decoupled from LMForge semver.
+6. **Object storage:** Cloudflare R2 bucket `lmforge-engine-assets`, public via CDN subdomain (`cdn_base` in manifest). Decoupled from LMForge semver. See [R2-ENGINE-ASSETS.md](../engineering/R2-ENGINE-ASSETS.md).
 
 ## Consequences
 

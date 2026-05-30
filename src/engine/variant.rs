@@ -400,7 +400,11 @@ pub fn refuse_reason(variant: LlamaVariant, profile: &HardwareProfile) -> Result
 #[derive(Debug, Clone, Deserialize)]
 pub struct Manifest {
     pub llamacpp_tag: String,
+    #[serde(default)]
     pub release_tag: String,
+    /// Public CDN origin for `object_key` paths (Cloudflare R2 custom domain).
+    #[serde(default)]
+    pub cdn_base: Option<String>,
     pub variants: Vec<ManifestEntry>,
     #[serde(default, rename = "_comment")]
     pub _comment: Option<String>,
@@ -413,10 +417,41 @@ pub struct ManifestEntry {
     pub driver_min: String,
     pub cap_min: f32,
     pub platform: String,
-    pub url: String,
+    /// Legacy GitHub release URL — used when `cdn_base` + `object_key` are unset.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// R2 object key, e.g. `llamacpp/b9351/lmforge-llamacpp-b9351-cuda12-linux-x64.tar.gz`.
+    #[serde(default)]
+    pub object_key: Option<String>,
     pub sha256: String,
     #[serde(default)]
     pub opt_in_only: bool,
+}
+
+impl ManifestEntry {
+    /// Resolve the download URL for this variant entry.
+    pub fn download_url(&self, cdn_base: Option<&str>) -> anyhow::Result<String> {
+        if let (Some(base), Some(key)) = (cdn_base.filter(|b| is_usable_cdn_base(b)), self.object_key.as_deref())
+        {
+            let base = base.trim_end_matches('/');
+            let key = key.trim_start_matches('/');
+            return Ok(format!("{base}/{key}"));
+        }
+        if let Some(url) = &self.url {
+            return Ok(url.clone());
+        }
+        anyhow::bail!(
+            "variant `{}` has no download URL (set cdn_base+object_key or legacy url)",
+            self.id
+        )
+    }
+}
+
+fn is_usable_cdn_base(base: &str) -> bool {
+    let b = base.trim();
+    !b.is_empty()
+        && (b.starts_with("https://") || b.starts_with("http://"))
+        && !b.contains("YOURDOMAIN")
 }
 
 const BUNDLED_MANIFEST: &str =
@@ -815,6 +850,52 @@ mod tests {
         }"#;
         let m: Manifest = serde_json::from_str(json).unwrap();
         assert!(!m.is_ready(), "empty sha → not ready");
+    }
+
+    #[test]
+    fn manifest_resolves_r2_object_key_url() {
+        let json = r#"{
+            "llamacpp_tag": "b9351",
+            "cdn_base": "https://engines.example.com",
+            "variants": [{
+                "id": "cuda12",
+                "cuda": "12.8.1",
+                "driver_min": "570.26",
+                "cap_min": 8.6,
+                "platform": "linux-x64",
+                "object_key": "llamacpp/b9351/lmforge-llamacpp-b9351-cuda12-linux-x64.tar.gz",
+                "sha256": "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00"
+            }]
+        }"#;
+        let m: Manifest = serde_json::from_str(json).unwrap();
+        let e = m.find("cuda12").unwrap();
+        assert_eq!(
+            e.download_url(m.cdn_base.as_deref()).unwrap(),
+            "https://engines.example.com/llamacpp/b9351/lmforge-llamacpp-b9351-cuda12-linux-x64.tar.gz"
+        );
+    }
+
+    #[test]
+    fn manifest_falls_back_to_legacy_url_when_cdn_unset() {
+        let json = r#"{
+            "llamacpp_tag": "b9351",
+            "variants": [{
+                "id": "cuda12",
+                "cuda": "12.8.1",
+                "driver_min": "570.26",
+                "cap_min": 8.6,
+                "platform": "linux-x64",
+                "url": "https://github.com/example/x.tar.gz",
+                "object_key": "llamacpp/b9351/x.tar.gz",
+                "sha256": "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00"
+            }]
+        }"#;
+        let m: Manifest = serde_json::from_str(json).unwrap();
+        let e = m.find("cuda12").unwrap();
+        assert_eq!(
+            e.download_url(m.cdn_base.as_deref()).unwrap(),
+            "https://github.com/example/x.tar.gz"
+        );
     }
 
     #[test]

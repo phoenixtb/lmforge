@@ -1,7 +1,13 @@
 {
-  "_comment": "Manifest of llama.cpp CUDA tarballs that LMForge can download at init / engine install time. Built by .github/workflows/build-llamacpp-cuda.yml; sha256 values are filled in manually from each release's <tarball>.tar.gz.sha256 companion after the workflow runs (CI publishes the .sha256 file alongside the tarball). Embedded into the lmforge binary via include_str! in src/engine/variant.rs.",
+  "_comment": "CUDA variant tarballs live on Cloudflare R2 (cdn_base + object_key). Legacy GitHub release URLs remain as fallback until R2 CDN is configured. sha256 values must match the bytes at the resolved download URL. Maintainer flow: scripts/llamacpp-cuda/build-local.sh → publish-r2.sh → cargo build --release.",
+  "cdn_base": "",
   "llamacpp_tag": "b9351",
   "release_tag": "llamacpp-b9351",
+  "storage": {
+    "provider": "r2",
+    "bucket": "lmforge-engine-assets",
+    "endpoint": "https://b6d9a834cd87e72e474ed65bd4f3c2e9.r2.cloudflarestorage.com"
+  },
   "variants": [
     {
       "id": "cuda12",
@@ -9,6 +15,7 @@
       "driver_min": "570.26",
       "cap_min": 8.6,
       "platform": "linux-x64",
+      "object_key": "llamacpp/b9351/lmforge-llamacpp-b9351-cuda12-linux-x64.tar.gz",
       "url": "https://github.com/phoenixtb/lmforge/releases/download/llamacpp-b9351/lmforge-llamacpp-b9351-cuda12-linux-x64.tar.gz",
       "sha256": "762c78025a0e3a7a75c949e2b8c9945292303f5239bf6f69c79b6b51d596af3b"
     },
@@ -19,6 +26,7 @@
       "cap_min": 8.6,
       "platform": "linux-x64",
       "opt_in_only": true,
+      "object_key": "llamacpp/b9351/lmforge-llamacpp-b9351-cuda13-linux-x64.tar.gz",
       "url": "https://github.com/phoenixtb/lmforge/releases/download/llamacpp-b9351/lmforge-llamacpp-b9351-cuda13-linux-x64.tar.gz",
       "sha256": "f1c0d35e71672e82340bdc0743c0bd71cc43edcbaf2c608334bee9a29f77e48d"
     }
