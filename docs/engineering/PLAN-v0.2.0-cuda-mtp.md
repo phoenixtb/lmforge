@@ -37,6 +37,7 @@ This is the working tracker for v0.2.0. Check items off as they complete. Update
 | S-3 — Draft-model pairs | ✅ | agent | `draft_pairs.toml` + lookup/cache + auto resolution in `speculative::resolve` (qwen3.x → qwen3:0.6b:4bit; llama/qwen2.5 pairs commented pending catalog entries) |
 | Polish — docs + UI + ADRs | ✅ | | |
 | Post-tarball live matrix | ⏳ | user | See [TEST-v0.2.0-post-tarball.md](./TEST-v0.2.0-post-tarball.md) — blocked on NCCL-fixed cuda12 + cuda13 tarball rebuild |
+| VLM + MTP (cuda13) | 📋 | | See [PLAN-v0.2.1-vlm-mtp-cuda13.md](./PLAN-v0.2.1-vlm-mtp-cuda13.md) — VLM vision fix v0.2.1; VLM+MTP blocked upstream (`--mmproj` + `draft-mtp`) |
 
 ---
 
