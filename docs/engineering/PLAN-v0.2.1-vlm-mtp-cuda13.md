@@ -43,10 +43,10 @@ LMForge always passes `--mmproj` for VLMs and may use `n_parallel > 1`. Enabling
 
 ### Tasks
 
-- [ ] **V-1.1** After `select_gguf_files()`, if resolved model is VLM (catalog `:vl:` hint or repo name), append all `mmproj-*.gguf` siblings from HF repo to download list (`resolver.rs` + test).
-- [ ] **V-1.2** Re-run `detect_capabilities` post-pull so `mmproj_path` is populated (`pull.rs` / index).
-- [ ] **V-1.3** Spawn path already wires `--mmproj` when sidecar exists (`llamacpp.rs`) — verify on cuda13 with `qwen2.5-vl:3b:4bit`.
-- [ ] **V-1.4** Live: image chat (1×1 PNG base64) returns non-empty response; TEST plan V-4 passes.
+- [x] **V-1.1** After `select_gguf_files()`, if resolved model is VLM (catalog `:vl:` hint or repo name), append all `mmproj-*.gguf` siblings from HF repo to download list (`resolver.rs` + test).
+- [x] **V-1.2** Re-run `detect_capabilities` post-pull so `mmproj_path` is populated (`pull.rs` / index).
+- [x] **V-1.3** Spawn path already wires `--mmproj` when sidecar exists (`llamacpp.rs`) — verify on cuda13 with `qwen2.5-vl:3b:4bit`.
+- [x] **V-1.4** Live: image chat (1×1 PNG base64) returns non-empty response; TEST plan V-4 passes.
 
 ### Acceptance
 
