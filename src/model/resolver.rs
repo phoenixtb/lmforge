@@ -49,7 +49,7 @@ pub async fn resolve(
     // HuggingFace repo
     if input.contains('/') && !input.contains("://") {
         // Direct HF repo — no quant hint available
-        let mut rm = resolve_hf_repo(input, engine_format, None).await?;
+        let mut rm = resolve_hf_repo(input, engine_format, None, None).await?;
         rm.id = input.to_string();
         return Ok(rm);
     }
@@ -95,6 +95,7 @@ async fn resolve_hf_repo(
     repo: &str,
     _engine_format: &str,
     quant_hint: Option<&str>,
+    catalog_shortcut: Option<&str>,
 ) -> Result<ResolvedModel> {
     // Support `repo@revision` syntax for engines whose ecosystems store
     // model weights on non-`main` branches. Canonical use case: EXL3 repos
@@ -176,9 +177,9 @@ async fn resolve_hf_repo(
         .collect();
 
     let files = if format == ModelFormat::Gguf {
-        // For GGUF repos, select only the files matching the requested quantization.
-        // This prevents downloading f16 + Q8 + Q4 all at once.
-        select_gguf_files(&all_format_files, quant_hint)
+        let mut selected = select_gguf_files(&all_format_files, quant_hint);
+        append_vlm_sidecars(&all_format_files, &mut selected, catalog_shortcut, &repo_base);
+        selected
     } else {
         all_format_files
     };
@@ -255,7 +256,7 @@ async fn resolve_logical_name(
             catalog_mtp = ?catalog_mtp,
             "Resolved repo from catalog, querying HF API"
         );
-        let mut rm = resolve_hf_repo(&repo, engine_format, quant_hint).await?;
+        let mut rm = resolve_hf_repo(&repo, engine_format, quant_hint, Some(name)).await?;
         rm.id = name.to_string();
         rm.mtp = catalog_mtp;
         return Ok(rm);
@@ -326,6 +327,70 @@ fn gguf_patterns_for_quant(quant: &str) -> &'static [&'static str] {
     }
 }
 
+/// Basename of a HF sibling path (`org/repo/file.gguf` → `file.gguf`).
+fn gguf_basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// Multimodal projector sidecar shipped alongside VLM weights.
+fn is_mmproj_sidecar(filename: &str) -> bool {
+    gguf_basename(filename).starts_with("mmproj-")
+}
+
+/// Heuristic: this pull target is a vision-language model.
+fn is_vlm_target(catalog_shortcut: Option<&str>, repo: &str) -> bool {
+    if let Some(id) = catalog_shortcut {
+        let h = id.to_ascii_lowercase();
+        if h.contains(":vl:") || h.contains("-vl-") || h.contains("vision") {
+            return true;
+        }
+    }
+    let r = repo.to_ascii_lowercase();
+    r.contains("-vl-")
+        || r.contains("-vl")
+        || r.contains("vl-instruct")
+        || r.contains("qwen2.5-vl")
+        || r.contains("qwen3-vl")
+        || r.contains("minicpm-v")
+}
+
+/// Pick one `mmproj-*.gguf` from a repo listing. Prefer F16 → BF16 → F32.
+fn select_mmproj_sidecar(all_gguf: &[String]) -> Option<String> {
+    let mmprojs: Vec<&String> = all_gguf.iter().filter(|f| is_mmproj_sidecar(f)).collect();
+    if mmprojs.is_empty() {
+        return None;
+    }
+    for tag in ["F16", "BF16", "F32"] {
+        if let Some(f) = mmprojs.iter().find(|f| mmproj_matches_quant_tag(f, tag)) {
+            return Some((*f).clone());
+        }
+    }
+    Some(mmprojs[0].clone())
+}
+
+fn mmproj_matches_quant_tag(filename: &str, tag: &str) -> bool {
+    let base = gguf_basename(filename).to_ascii_uppercase();
+    base.contains(&format!("-{tag}.")) || base.ends_with(&format!("-{tag}"))
+}
+
+/// Append VLM sidecars (mmproj) to the download list when resolving a VL repo.
+fn append_vlm_sidecars(
+    all_gguf: &[String],
+    files: &mut Vec<String>,
+    catalog_shortcut: Option<&str>,
+    repo: &str,
+) {
+    if !is_vlm_target(catalog_shortcut, repo) {
+        return;
+    }
+    if let Some(mmproj) = select_mmproj_sidecar(all_gguf) {
+        if !files.contains(&mmproj) {
+            debug!(mmproj = %mmproj, "Appending VLM mmproj sidecar to download list");
+            files.push(mmproj);
+        }
+    }
+}
+
 /// Select the right GGUF files given a quant hint.
 ///
 /// - If a quant hint is present, tries each pattern in priority order and
@@ -335,6 +400,14 @@ fn gguf_patterns_for_quant(quant: &str) -> &'static [&'static str] {
 /// - If no hint (direct HF repo pull), defaults to Q4_K_S → Q4_K_M to
 ///   avoid downloading every quant in the repo.
 fn select_gguf_files(all_gguf: &[String], quant_hint: Option<&str>) -> Vec<String> {
+    // Never treat mmproj sidecars as main model weights — a `:f16` pull on a
+    // VLM repo would otherwise match `mmproj-F16.gguf` instead of the backbone.
+    let weights: Vec<String> = all_gguf
+        .iter()
+        .filter(|f| !is_mmproj_sidecar(f))
+        .cloned()
+        .collect();
+
     // Helper: find all files containing a case-insensitive pattern
     let matches_pattern = |files: &[String], pat: &str| -> Vec<String> {
         let pat_up = pat.to_uppercase();
@@ -351,7 +424,7 @@ fn select_gguf_files(all_gguf: &[String], quant_hint: Option<&str>) -> Vec<Strin
         .unwrap_or(&["Q4_K_S", "Q4_K_M"]); // default for bare HF repo pulls
 
     for &pat in requested_patterns {
-        let found = matches_pattern(all_gguf, pat);
+        let found = matches_pattern(&weights, pat);
         if !found.is_empty() {
             return found;
         }
@@ -362,7 +435,7 @@ fn select_gguf_files(all_gguf: &[String], quant_hint: Option<&str>) -> Vec<Strin
         eprintln!("\n  ⚠  Quantization '{}' not available in this repo.", q);
         eprintln!("     Attempting fallback (Q4_K_S → Q4_K_M → Q8_0) …");
         for &pat in &["Q4_K_S", "Q4_K_M", "Q8_0"] {
-            let found = matches_pattern(all_gguf, pat);
+            let found = matches_pattern(&weights, pat);
             if !found.is_empty() {
                 eprintln!("     Using: {:?}", found);
                 return found;
@@ -372,7 +445,7 @@ fn select_gguf_files(all_gguf: &[String], quant_hint: Option<&str>) -> Vec<Strin
 
     // Last resort: return everything (repo has unusual naming)
     eprintln!("  ⚠  Could not identify a specific quantization file. Downloading all GGUF files.");
-    all_gguf.to_vec()
+    weights
 }
 
 /// Determine which files to download.
@@ -604,5 +677,55 @@ mod tests {
             selected.iter().any(|f| f.contains("Q4_K_S")),
             "Must download Q4_K_S for 4bit"
         );
+    }
+
+    #[test]
+    fn select_gguf_f16_on_vlm_repo_skips_mmproj_sidecar() {
+        let files = vec![
+            "Qwen2.5-VL-3B-Instruct-UD-Q4_K_XL.gguf".to_string(),
+            "mmproj-F16.gguf".to_string(),
+            "mmproj-BF16.gguf".to_string(),
+        ];
+        let selected = select_gguf_files(&files, Some("f16"));
+        assert_eq!(
+            selected,
+            vec!["Qwen2.5-VL-3B-Instruct-UD-Q4_K_XL.gguf"],
+            "f16 quant must not pick mmproj-F16 as backbone"
+        );
+    }
+
+    #[test]
+    fn append_vlm_sidecars_adds_preferred_mmproj() {
+        let all = vec![
+            "Qwen2.5-VL-3B-Instruct-UD-Q4_K_XL.gguf".to_string(),
+            "mmproj-BF16.gguf".to_string(),
+            "mmproj-F16.gguf".to_string(),
+        ];
+        let mut selected = select_gguf_files(&all, Some("4bit"));
+        append_vlm_sidecars(
+            &all,
+            &mut selected,
+            Some("qwen2.5-vl:3b:4bit"),
+            "unsloth/Qwen2.5-VL-3B-Instruct-GGUF",
+        );
+        assert_eq!(selected.len(), 2);
+        assert!(selected.iter().any(|f| f.contains("UD-Q4_K_XL")));
+        assert!(selected.contains(&"mmproj-F16.gguf".to_string()));
+    }
+
+    #[test]
+    fn append_vlm_sidecars_skips_non_vlm_repo() {
+        let all = vec![
+            "Qwen3.5-4B-UD-Q4_K_XL.gguf".to_string(),
+            "mmproj-F16.gguf".to_string(),
+        ];
+        let mut selected = vec!["Qwen3.5-4B-UD-Q4_K_XL.gguf".to_string()];
+        append_vlm_sidecars(
+            &all,
+            &mut selected,
+            Some("qwen3.5:4b:4bit"),
+            "unsloth/Qwen3.5-4B-GGUF",
+        );
+        assert_eq!(selected.len(), 1);
     }
 }

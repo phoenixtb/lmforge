@@ -59,6 +59,37 @@ pub async fn run(
     let mut idx = index::ModelIndex::load(&data_dir)?;
 
     if let Some(existing) = idx.get(&resolved.id) {
+        // VLM repos ship an mmproj sidecar alongside the main quant. Older
+        // pulls only downloaded the backbone — backfill any resolved files
+        // that are still missing on disk without forcing a full re-download.
+        if download_missing_files(&resolved, &model_dir).await? {
+            let caps = detect_and_print_capabilities(
+                &model_dir,
+                &resolved.id,
+                &resolved.hf_repo,
+                &resolved.format,
+                resolved.mtp,
+            );
+            let entry = index::ModelEntry {
+                id: resolved.id.clone(),
+                path: existing.path.clone(),
+                format: resolved.format.to_string(),
+                engine: engine_format.clone(),
+                hf_repo: Some(resolved.hf_repo.clone()),
+                size_bytes: index::dir_size(&model_dir),
+                capabilities: caps,
+                added_at: existing.added_at.clone(),
+            };
+            idx.add(entry);
+            idx.save(&data_dir)?;
+            println!(
+                "\n✓ Model '{}' sidecar(s) fetched. Start with:",
+                resolved.id
+            );
+            println!("  lmforge start --model {}", resolved.id);
+            return Ok(());
+        }
+
         if refresh {
             // Re-evaluate capabilities for an already-downloaded model.
             // Same detection pipeline as a fresh pull (incl. layered MTP),
@@ -69,28 +100,13 @@ pub async fn run(
                 resolved.id, existing.path
             );
 
-            let mut caps = index::detect_capabilities(
+            let caps = detect_and_print_capabilities(
                 &model_dir,
-                Some(&resolved.id),
-                Some(&resolved.hf_repo),
+                &resolved.id,
+                &resolved.hf_repo,
+                &resolved.format,
+                resolved.mtp,
             );
-            if matches!(resolved.format, resolver::ModelFormat::Gguf) {
-                caps.mtp =
-                    crate::model::gguf_inspect::resolve_mtp_for_model(&model_dir, resolved.mtp);
-            }
-            println!(
-                "  Capabilities: chat={} embeddings={} reranking={} thinking={} vision={} dims={:?} mtp={:?}",
-                caps.chat,
-                caps.embeddings,
-                caps.reranking,
-                caps.thinking,
-                caps.vision,
-                caps.embedding_dims,
-                caps.mtp,
-            );
-            if let Some(mmproj) = caps.mmproj_path.as_deref() {
-                println!("  mmproj:       {}", mmproj);
-            }
 
             let entry = index::ModelEntry {
                 id: resolved.id.clone(),
@@ -202,27 +218,13 @@ pub async fn run(
     println!("\n  ✓ Downloaded {} MB", size_mb);
 
     // Detect capabilities
-    let mut caps =
-        index::detect_capabilities(&model_dir, Some(&resolved.id), Some(&resolved.hf_repo));
-    // Layered MTP detection (S-1.7): catalog flag wins, GGUF probe fills
-    // the blank, None when both are silent. Only meaningful for GGUF;
-    // safetensors / MLX engines don't consume this signal today.
-    if matches!(resolved.format, resolver::ModelFormat::Gguf) {
-        caps.mtp = crate::model::gguf_inspect::resolve_mtp_for_model(&model_dir, resolved.mtp);
-    }
-    println!(
-        "  Capabilities: chat={} embeddings={} reranking={} thinking={} vision={} dims={:?} mtp={:?}",
-        caps.chat,
-        caps.embeddings,
-        caps.reranking,
-        caps.thinking,
-        caps.vision,
-        caps.embedding_dims,
-        caps.mtp,
+    let caps = detect_and_print_capabilities(
+        &model_dir,
+        &resolved.id,
+        &resolved.hf_repo,
+        &resolved.format,
+        resolved.mtp,
     );
-    if let Some(mmproj) = caps.mmproj_path.as_deref() {
-        println!("  mmproj:       {}", mmproj);
-    }
 
     // Add to index
     let entry = index::ModelEntry {
@@ -243,6 +245,67 @@ pub async fn run(
     println!("  lmforge start --model {}", resolved.id);
 
     Ok(())
+}
+
+/// Download any resolved files that are not yet present under `model_dir`.
+/// Returns `true` when at least one file was fetched (sidecar backfill).
+async fn download_missing_files(
+    resolved: &resolver::ResolvedModel,
+    model_dir: &std::path::Path,
+) -> Result<bool> {
+    let missing: Vec<String> = resolved
+        .files
+        .iter()
+        .filter(|f| {
+            let name = f.rsplit('/').next().unwrap_or(f.as_str());
+            !model_dir.join(name).exists()
+        })
+        .cloned()
+        .collect();
+
+    if missing.is_empty() {
+        return Ok(false);
+    }
+
+    println!(
+        "  Missing {} file(s) on disk — downloading sidecar(s)…",
+        missing.len()
+    );
+    for f in &missing {
+        println!("    • {}", f);
+    }
+
+    let bytes = downloader::download_model(&resolved.hf_repo, &missing, model_dir, None).await?;
+    let size_mb = bytes / (1024 * 1024);
+    println!("  ✓ Fetched {} MB of sidecar data", size_mb);
+    Ok(true)
+}
+
+fn detect_and_print_capabilities(
+    model_dir: &std::path::Path,
+    model_id: &str,
+    hf_repo: &str,
+    format: &resolver::ModelFormat,
+    catalog_mtp: Option<bool>,
+) -> index::ModelCapabilities {
+    let mut caps = index::detect_capabilities(model_dir, Some(model_id), Some(hf_repo));
+    if matches!(format, resolver::ModelFormat::Gguf) {
+        caps.mtp = crate::model::gguf_inspect::resolve_mtp_for_model(model_dir, catalog_mtp);
+    }
+    println!(
+        "  Capabilities: chat={} embeddings={} reranking={} thinking={} vision={} dims={:?} mtp={:?}",
+        caps.chat,
+        caps.embeddings,
+        caps.reranking,
+        caps.thinking,
+        caps.vision,
+        caps.embedding_dims,
+        caps.mtp,
+    );
+    if let Some(mmproj) = caps.mmproj_path.as_deref() {
+        println!("  mmproj:       {}", mmproj);
+    }
+    caps
 }
 
 // `detect_engine_format` lives in `crate::model::catalog` so pull / run /
