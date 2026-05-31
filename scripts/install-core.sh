@@ -26,7 +26,21 @@ warn()    { echo -e "${YELLOW}  ⚠${NC} $*"; }
 error()   { echo -e "${RED}  ✗${NC} $*" >&2; exit 1; }
 section() { echo -e "\n${BOLD}$*${NC}"; }
 
-# ── Detect platform ───────────────────────────────────────────────────────────
+# Stop daemon/service so we can overwrite the binary (ETXTBSY / "Text file busy").
+stop_running_lmforge_for_install() {
+    export PATH="$INSTALL_DIR:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+    if command -v "$BINARY_NAME" &>/dev/null; then
+        "$BINARY_NAME" service stop 2>/dev/null || true
+        "$BINARY_NAME" stop 2>/dev/null || true
+    fi
+    systemctl --user stop lmforge.service 2>/dev/null || true
+    curl -sf -X POST --max-time 3 http://127.0.0.1:11430/lf/shutdown 2>/dev/null || true
+    sleep 1
+    pkill -x "$BINARY_NAME" 2>/dev/null || true
+    sleep 1
+}
+
+TARGET_BIN="$INSTALL_DIR/$BINARY_NAME"
 detect_asset() {
     local os arch
     os=$(uname -s)
@@ -70,12 +84,18 @@ echo    "  Install: $INSTALL_DIR/$BINARY_NAME"
 echo ""
 
 # ── Idempotency check ─────────────────────────────────────────────────────────
-if command -v "$BINARY_NAME" &>/dev/null; then
-    INSTALLED_VER=$("$BINARY_NAME" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
-    warn "lmforge $INSTALLED_VER is already installed at $(command -v $BINARY_NAME)"
+export PATH="$INSTALL_DIR:$HOME/.local/bin:$PATH"
+if [[ -x "$TARGET_BIN" ]] && [[ "${LMFORGE_UPGRADE:-0}" != "1" ]]; then
+    INSTALLED_VER=$("$TARGET_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+    warn "lmforge $INSTALLED_VER is already installed at $TARGET_BIN"
     warn "Use 'lmforge service status' to check the daemon."
-    warn "To reinstall, run: bash <(curl -fsSL https://github.com/$REPO/releases/latest/download/uninstall-core.sh)"
+    warn "To upgrade in place: LMFORGE_UPGRADE=1 curl -fsSL .../install-core.sh | bash"
+    warn "To reinstall clean: bash <(curl -fsSL https://github.com/$REPO/releases/latest/download/uninstall-core.sh)"
     exit 0
+fi
+if [[ -x "$TARGET_BIN" ]] && [[ "${LMFORGE_UPGRADE:-0}" == "1" ]]; then
+    section "Upgrading lmforge..."
+    stop_running_lmforge_for_install
 fi
 
 # ── Prerequisites ─────────────────────────────────────────────────────────────
@@ -117,8 +137,11 @@ info "Downloaded $ASSET"
 section "Installing..."
 
 chmod +x "$TMP_BIN"
-cp "$TMP_BIN" "$INSTALL_DIR/$BINARY_NAME"
-info "Installed $INSTALL_DIR/$BINARY_NAME"
+if [[ -e "$TARGET_BIN" ]] || pgrep -x "$BINARY_NAME" &>/dev/null; then
+    stop_running_lmforge_for_install
+fi
+cp "$TMP_BIN" "$TARGET_BIN"
+info "Installed $TARGET_BIN"
 
 # ── PATH injection ────────────────────────────────────────────────────────────
 # Add INSTALL_DIR to PATH in every shell config if not already present.
