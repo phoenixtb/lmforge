@@ -254,6 +254,11 @@ main() {
   command -v jq >/dev/null || { fail "jq required"; exit 2; }
   command -v curl >/dev/null || { fail "curl required"; exit 2; }
 
+  # Avoid fighting systemd user service during daemon stop/start cycles.
+  "$LF_BIN" service stop 2>/dev/null || true
+  systemctl --user stop lmforge.service 2>/dev/null || true
+  stop_daemon
+
   echo "=== release_binary_test ==="
   echo "LF_BIN=$LF_BIN"
   echo "VARIANTS=$VARIANTS"
