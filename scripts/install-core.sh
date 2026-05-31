@@ -17,7 +17,7 @@ set -euo pipefail
 REPO="phoenixtb/lmforge"
 BINARY_NAME="lmforge"
 INSTALL_DIR="${LMFORGE_INSTALL_DIR:-$HOME/.local/bin}"
-VERSION="${LMFORGE_VERSION:-latest}"
+LMFORGE_RELEASE="${LMFORGE_VERSION:-latest}"
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BOLD='\033[1m'; NC='\033[0m'
@@ -53,10 +53,10 @@ detect_asset() {
 # ── Resolve download URL ──────────────────────────────────────────────────────
 resolve_url() {
     local asset="$1"
-    if [[ "$VERSION" == "latest" ]]; then
+    if [[ "$LMFORGE_RELEASE" == "latest" ]]; then
         echo "https://github.com/${REPO}/releases/latest/download/${asset}"
     else
-        echo "https://github.com/${REPO}/releases/download/${VERSION}/${asset}"
+        echo "https://github.com/${REPO}/releases/download/${LMFORGE_RELEASE}/${asset}"
     fi
 }
 
@@ -65,7 +65,7 @@ echo ""
 echo -e "${BOLD}  LMForge Core — Installer${NC}"
 echo    "  ─────────────────────────────────────────"
 echo    "  Repo   : https://github.com/$REPO"
-echo    "  Version: $VERSION"
+echo    "  Version: $LMFORGE_RELEASE"
 echo    "  Install: $INSTALL_DIR/$BINARY_NAME"
 echo ""
 

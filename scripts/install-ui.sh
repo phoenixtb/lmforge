@@ -13,7 +13,7 @@
 set -euo pipefail
 
 REPO="phoenixtb/lmforge"
-VERSION="${LMFORGE_VERSION:-latest}"
+LMFORGE_RELEASE="${LMFORGE_VERSION:-latest}"
 MIN_CORE_VERSION="0.1.0"
 
 # macOS — install to user Applications (no sudo required)
@@ -51,10 +51,10 @@ detect_ui_asset() {
 
 resolve_url() {
     local asset="$1"
-    if [[ "$VERSION" == "latest" ]]; then
+    if [[ "$LMFORGE_RELEASE" == "latest" ]]; then
         echo "https://github.com/${REPO}/releases/latest/download/${asset}"
     else
-        echo "https://github.com/${REPO}/releases/download/${VERSION}/${asset}"
+        echo "https://github.com/${REPO}/releases/download/${LMFORGE_RELEASE}/${asset}"
     fi
 }
 
@@ -63,7 +63,7 @@ echo ""
 echo -e "${BOLD}  LMForge UI — Installer${NC}"
 echo    "  ─────────────────────────────────────────"
 echo    "  Repo   : https://github.com/$REPO"
-echo    "  Version: $VERSION"
+echo    "  Version: $LMFORGE_RELEASE"
 echo    "  OS/Arch: $OS/$ARCH"
 echo ""
 
