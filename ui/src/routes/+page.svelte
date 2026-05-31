@@ -62,6 +62,7 @@
     if (!stats || stats.samples === 0) return '—';
     return `${Math.round(stats.cumulative_accept_rate * 100)}%`;
   }
+  function fmtRelative(iso: string): string {
     try {
       const d = new Date(iso);
       const now = Date.now();
