@@ -448,6 +448,110 @@ export function fmtBytes(bytes: number): string {
 }
 
 /**
+ * Fetch HuggingFace repo siblings (filenames + sizes).
+ */
+async function fetchHfSiblings(
+  hfRepo: string,
+): Promise<{ rfilename?: string; size?: number }[] | null> {
+  try {
+    const res = await fetch(`https://huggingface.co/api/models/${hfRepo}?blobs=true`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.siblings ?? [];
+  } catch {
+    return null;
+  }
+}
+
+function ggufBasename(path: string): string {
+  return path.split('/').pop() ?? path;
+}
+
+function isMmprojSidecar(filename: string): boolean {
+  return ggufBasename(filename).startsWith('mmproj-');
+}
+
+/** Mirrors `gguf_patterns_for_quant` in src/model/resolver.rs. */
+function ggufPatternsForQuant(quant: string): string[] {
+  switch (quant.toLowerCase()) {
+    case '4bit':
+    case 'q4':
+      return ['UD-Q4_K_XL', 'Q4_K_M', 'Q4_K_S', 'Q4_K'];
+    case '5bit':
+    case 'q5':
+      return ['UD-Q5_K_XL', 'Q5_K_M', 'Q5_K_S', 'Q5_K'];
+    case '6bit':
+    case 'q6':
+      return ['UD-Q6_K_XL', 'Q6_K'];
+    case '8bit':
+    case 'q8':
+      return ['UD-Q8_K_XL', 'Q8_0'];
+    case 'f16':
+    case 'bf16':
+      return ['F16', 'BF16', 'f16', 'bf16'];
+    default:
+      return [];
+  }
+}
+
+function matchesGgufPattern(files: string[], pat: string): string[] {
+  const patUp = pat.toUpperCase();
+  return files.filter((f) => f.toUpperCase().includes(patUp));
+}
+
+/** Mirrors `select_gguf_files` in src/model/resolver.rs (size-estimate path). */
+function selectGgufFiles(allGguf: string[], quantHint?: string | null): string[] {
+  const weights = allGguf.filter((f) => !isMmprojSidecar(f));
+  const patterns = quantHint ? ggufPatternsForQuant(quantHint) : ['Q4_K_S', 'Q4_K_M'];
+  for (const pat of patterns) {
+    const found = matchesGgufPattern(weights, pat);
+    if (found.length > 0) return found;
+  }
+  return weights.length > 0 ? [weights[0]] : [];
+}
+
+function isVlmTarget(shortcut: string, repo: string): boolean {
+  const h = shortcut.toLowerCase();
+  if (h.includes(':vl:') || h.includes('-vl-') || h.includes('vision')) return true;
+  const r = repo.toLowerCase();
+  return (
+    r.includes('-vl-') ||
+    r.includes('-vl') ||
+    r.includes('vl-instruct') ||
+    r.includes('qwen2.5-vl') ||
+    r.includes('qwen3-vl') ||
+    r.includes('minicpm-v')
+  );
+}
+
+function selectMmprojSidecar(allGguf: string[]): string | null {
+  const mmprojs = allGguf.filter(isMmprojSidecar);
+  if (mmprojs.length === 0) return null;
+  for (const tag of ['F16', 'BF16', 'F32']) {
+    const hit = mmprojs.find((f) => {
+      const base = ggufBasename(f).toUpperCase();
+      return base.includes(`-${tag}.`) || base.endsWith(`-${tag}`);
+    });
+    if (hit) return hit;
+  }
+  return mmprojs[0];
+}
+
+function sumSiblingSizes(
+  siblings: { rfilename?: string; size?: number }[],
+  filenames: string[],
+): number {
+  let total = 0;
+  for (const fname of filenames) {
+    const match = siblings.find((s) => s.rfilename === fname);
+    if (match?.size && match.size > 0) total += match.size;
+  }
+  return total;
+}
+
+/**
  * Fetch the disk size (in bytes) for a HuggingFace model repo.
  *
  * - When `fileName` is provided (GGUF entries), returns the size of just
@@ -465,50 +569,77 @@ export async function fetchHfModelSize(
   hfRepo: string,
   fileName?: string | null,
 ): Promise<number | null> {
-  try {
-    const res = await fetch(`https://huggingface.co/api/models/${hfRepo}?blobs=true`, {
-      headers: { Accept: 'application/json' },
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const siblings: { rfilename?: string; size?: number }[] = data.siblings ?? [];
-    if (fileName) {
-      const match = siblings.find((s) => s.rfilename === fileName);
-      return match?.size && match.size > 0 ? match.size : null;
-    }
-    const total = siblings.reduce((sum, s) => sum + (s.size ?? 0), 0);
-    return total > 0 ? total : null;
-  } catch {
-    return null;
+  const siblings = await fetchHfSiblings(hfRepo);
+  if (!siblings) return null;
+  if (fileName) {
+    const match = siblings.find((s) => s.rfilename === fileName);
+    return match?.size && match.size > 0 ? match.size : null;
   }
+  const total = siblings.reduce((sum, s) => sum + (s.size ?? 0), 0);
+  return total > 0 ? total : null;
 }
 
-/** A repo + optional GGUF filename to size, keyed by repo in the result. */
+/** Size lookup input. `key` is the map key in the batch result (use catalog shortcut). */
 export interface HfSizeQuery {
+  key: string;
   repo: string;
   file?: string | null;
+  format?: string;
+  /** Last `:segment` of the shortcut, e.g. `4bit` / `f16`. */
+  quant?: string | null;
+  shortcut?: string;
 }
 
 /**
- * Batch-fetch HF model sizes for a list of repos in parallel.
- * Returns a map of hfRepo → bytes. Failed lookups are silently omitted.
- * For GGUF entries pass `{ repo, file }` so the size reflects just that quant.
+ * Batch-fetch HF model sizes.
+ * Returns a map of `key` → bytes. Failed lookups are silently omitted.
+ * For GGUF catalog entries pass `{ format: 'gguf', quant, shortcut }` so the
+ * size reflects the quant-specific `.gguf` (+ mmproj for VLMs), not the whole repo.
  */
 export async function fetchHfSizesBatch(
   queries: HfSizeQuery[],
 ): Promise<Record<string, number>> {
-  const results = await Promise.allSettled(
-    queries.map(async ({ repo, file }) => {
-      const bytes = await fetchHfModelSize(repo, file);
-      return { repo, bytes };
+  const siblingsCache = new Map<string, { rfilename?: string; size?: number }[] | null>();
+
+  async function siblingsFor(repo: string) {
+    if (!siblingsCache.has(repo)) {
+      siblingsCache.set(repo, await fetchHfSiblings(repo));
+    }
+    return siblingsCache.get(repo) ?? null;
+  }
+
+  const map: Record<string, number> = {};
+
+  await Promise.all(
+    queries.map(async ({ key, repo, file, format, quant, shortcut }) => {
+      const siblings = await siblingsFor(repo);
+      if (!siblings) return;
+
+      if (file) {
+        const bytes = sumSiblingSizes(siblings, [file]);
+        if (bytes > 0) map[key] = bytes;
+        return;
+      }
+
+      if (format === 'gguf' && quant) {
+        const allGguf = siblings
+          .map((s) => s.rfilename)
+          .filter((f): f is string => !!f && f.endsWith('.gguf'));
+        let files = selectGgufFiles(allGguf, quant);
+        if (shortcut && isVlmTarget(shortcut, repo)) {
+          const mmproj = selectMmprojSidecar(allGguf);
+          if (mmproj && !files.includes(mmproj)) files = [...files, mmproj];
+        }
+        const bytes = sumSiblingSizes(siblings, files);
+        if (bytes > 0) map[key] = bytes;
+        return;
+      }
+
+      const total = siblings.reduce((sum, s) => sum + (s.size ?? 0), 0);
+      if (total > 0) map[key] = total;
     }),
   );
-  const map: Record<string, number> = {};
-  for (const r of results) {
-    if (r.status === 'fulfilled' && r.value.bytes != null) {
-      map[r.value.repo] = r.value.bytes;
-    }
-  }
+
   return map;
 }
 

@@ -27,6 +27,69 @@ warn()    { echo -e "${YELLOW}  ⚠${NC} $*"; }
 error()   { echo -e "${RED}  ✗${NC} $*" >&2; exit 1; }
 section() { echo -e "\n${BOLD}$*${NC}"; }
 
+# shellcheck source=banner.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/banner.sh" 2>/dev/null || true
+if ! declare -F print_lmforge_banner &>/dev/null; then
+    print_lmforge_banner() {
+        echo ""
+        echo "  ██╗     ███╗   ███╗███████╗ ██████╗ ██████╗  ██████╗ ███████╗"
+        echo "  ██║     ████╗ ████║██╔════╝██╔═══██╗██╔══██╗██╔════╝ ██╔════╝"
+        echo "  ██║     ██╔████╔██║█████╗  ██║   ██║██████╔╝██║  ███╗█████╗  "
+        echo "  ██║     ██║╚██╔╝██║██╔══╝  ██║   ██║██╔══██╗██║   ██║██╔══╝  "
+        echo "  ███████╗██║ ╚═╝ ██║██║     ╚██████╔╝██║  ██║╚██████╔╝███████╗"
+        echo "  ╚══════╝╚═╝     ╚═╝╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝"
+        echo ""
+        echo "  ${1:-Hardware-aware LLM inference orchestrator}"
+        echo ""
+    }
+fi
+
+# Install hicolor icons + .desktop entry for the AppImage (matches Tauri bundle).
+install_linux_ui_launcher() {
+    local appimage_path="$1"
+    local desktop_dir="${HOME}/.local/share/applications"
+    local icon_theme="${HOME}/.local/share/icons/hicolor"
+    local extract_dir icon_src size name
+
+    extract_dir=$(mktemp -d)
+    (
+        cd "$extract_dir"
+        "$appimage_path" --appimage-extract usr/share/icons >/dev/null 2>&1 \
+            || "$appimage_path" --appimage-extract >/dev/null 2>&1
+    )
+
+    if [[ -d "$extract_dir/squashfs-root/usr/share/icons/hicolor" ]]; then
+        while IFS= read -r -d '' icon_src; do
+            size=$(basename "$(dirname "$(dirname "$icon_src")")")
+            name=$(basename "$icon_src")
+            mkdir -p "$icon_theme/$size/apps"
+            cp "$icon_src" "$icon_theme/$size/apps/$name"
+        done < <(find "$extract_dir/squashfs-root/usr/share/icons/hicolor" -path '*/apps/*.png' -print0)
+        if command -v gtk-update-icon-cache &>/dev/null; then
+            gtk-update-icon-cache -f -t "$icon_theme" 2>/dev/null || true
+        fi
+        info "Icons installed to $icon_theme"
+    else
+        warn "Could not extract icons from AppImage; launcher may show a generic icon."
+    fi
+    rm -rf "$extract_dir"
+
+    mkdir -p "$desktop_dir"
+    cat > "$desktop_dir/lmforge.desktop" <<EOF
+[Desktop Entry]
+Name=LMForge
+Comment=LMForge — Local LLM Orchestrator UI
+Exec=$appimage_path %u
+Icon=lmforge-ui
+StartupWMClass=lmforge-ui
+Terminal=false
+Type=Application
+Categories=Development;AI;
+EOF
+    update-desktop-database "$desktop_dir" 2>/dev/null || true
+    info "Desktop entry created"
+}
+
 # ── Detect platform ───────────────────────────────────────────────────────────
 OS=$(uname -s)
 ARCH=$(uname -m)
@@ -59,9 +122,7 @@ resolve_url() {
 }
 
 # ── Banner ────────────────────────────────────────────────────────────────────
-echo ""
-echo -e "${BOLD}  LMForge UI — Installer${NC}"
-echo    "  ─────────────────────────────────────────"
+print_lmforge_banner "LMForge UI — Installer"
 echo    "  Repo   : https://github.com/$REPO"
 echo    "  Version: $LMFORGE_RELEASE"
 echo    "  OS/Arch: $OS/$ARCH"
@@ -316,20 +377,7 @@ if [[ "$OS" == "Linux" ]]; then
     cp "$TMP_FILE" "$APPIMAGE_PATH"
     info "Installed: $APPIMAGE_PATH"
 
-    # Create .desktop entry
-    DESKTOP_DIR="${HOME}/.local/share/applications"
-    mkdir -p "$DESKTOP_DIR"
-    cat > "$DESKTOP_DIR/lmforge.desktop" <<EOF
-[Desktop Entry]
-Name=LMForge
-Comment=Local LLM Orchestrator
-Exec=$APPIMAGE_PATH %u
-Icon=lmforge
-Terminal=false
-Type=Application
-Categories=Development;AI;
-EOF
-    info "Desktop entry created"
+    install_linux_ui_launcher "$APPIMAGE_PATH"
 
     echo ""
     echo    "  Launch: $APPIMAGE_PATH"

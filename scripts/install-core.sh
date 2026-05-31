@@ -26,6 +26,23 @@ warn()    { echo -e "${YELLOW}  ⚠${NC} $*"; }
 error()   { echo -e "${RED}  ✗${NC} $*" >&2; exit 1; }
 section() { echo -e "\n${BOLD}$*${NC}"; }
 
+# shellcheck source=banner.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/banner.sh" 2>/dev/null || true
+if ! declare -F print_lmforge_banner &>/dev/null; then
+    print_lmforge_banner() {
+        echo ""
+        echo "  ██╗     ███╗   ███╗███████╗ ██████╗ ██████╗  ██████╗ ███████╗"
+        echo "  ██║     ████╗ ████║██╔════╝██╔═══██╗██╔══██╗██╔════╝ ██╔════╝"
+        echo "  ██║     ██╔████╔██║█████╗  ██║   ██║██████╔╝██║  ███╗█████╗  "
+        echo "  ██║     ██║╚██╔╝██║██╔══╝  ██║   ██║██╔══██╗██║   ██║██╔══╝  "
+        echo "  ███████╗██║ ╚═╝ ██║██║     ╚██████╔╝██║  ██║╚██████╔╝███████╗"
+        echo "  ╚══════╝╚═╝     ╚═╝╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝"
+        echo ""
+        echo "  ${1:-Hardware-aware LLM inference orchestrator}"
+        echo ""
+    }
+fi
+
 # Stop daemon/service so we can overwrite the binary (ETXTBSY / "Text file busy").
 stop_running_lmforge_for_install() {
     export PATH="$INSTALL_DIR:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
@@ -75,9 +92,7 @@ resolve_url() {
 }
 
 # ── Banner ────────────────────────────────────────────────────────────────────
-echo ""
-echo -e "${BOLD}  LMForge Core — Installer${NC}"
-echo    "  ─────────────────────────────────────────"
+print_lmforge_banner "LMForge Core — Installer"
 echo    "  Repo   : https://github.com/$REPO"
 echo    "  Version: $LMFORGE_RELEASE"
 echo    "  Install: $INSTALL_DIR/$BINARY_NAME"
