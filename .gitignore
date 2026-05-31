@@ -53,6 +53,7 @@ scripts/llamacpp-cuda/config.env
 *.swo
 /tmp/
 scratch/
+.build/
 
 # ── Tauri / Frontend build ────────────────────────────────────────────────────
 ui/node_modules/

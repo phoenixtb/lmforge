@@ -29,6 +29,31 @@ export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
 export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
 export AWS_DEFAULT_REGION=auto
 
+verify_r2_write_access() {
+  local probe_key="llamacpp/_lmforge_upload_probe_$$"
+  if ! echo "lmforge-r2-probe" | aws s3 cp - "s3://${R2_BUCKET}/${probe_key}" \
+      --endpoint-url "$R2_ENDPOINT" >/dev/null 2>&1; then
+    cat >&2 <<EOF
+R2 upload preflight failed (AccessDenied on PutObject).
+
+Your token can reach the bucket but cannot write. Fix in Cloudflare:
+
+  R2 → Manage R2 API Tokens → Create API token
+    Permission:  Object Read & Write  (NOT read-only)
+    Scope:       Apply to specific buckets → lmforge-engine-assets
+
+Paste the new Access Key ID + Secret into scripts/llamacpp-cuda/config.env
+(R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY), then re-run this script.
+
+Docs: docs/engineering/R2-ENGINE-ASSETS.md § "R2 API token"
+EOF
+    exit 1
+  fi
+  aws s3 rm "s3://${R2_BUCKET}/${probe_key}" --endpoint-url "$R2_ENDPOINT" >/dev/null 2>&1 || true
+}
+
+verify_r2_write_access
+
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 <tarball> [tarball ...]" >&2
   exit 2

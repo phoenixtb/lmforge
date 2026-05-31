@@ -117,9 +117,8 @@ pub async fn run(
         None => registry.select(&profile)?.clone(),
     };
 
-    // 5. Check engine is installed
-    let engine_cmd = resolve_engine_cmd(&engine_config, &data_dir);
-    if !command_exists(&engine_cmd) {
+    // 5. Check engine is installed (variant tree for llamacpp, legacy path otherwise)
+    if !engine_is_ready(&engine_config, &profile, &data_dir) {
         println!("⚙ Engine not installed, running installer...");
         engine::installer::install(&engine_config, &profile, &data_dir).await?;
     }
@@ -639,6 +638,29 @@ fn is_stdin_tty() -> bool {
     // winapi crate. For the CLI we just refuse non-interactive opt-in on
     // Windows; cheap and safe.
     true
+}
+
+/// True when the selected engine has a runnable install on disk.
+fn engine_is_ready(
+    engine: &engine::EngineConfig,
+    profile: &crate::hardware::probe::HardwareProfile,
+    data_dir: &std::path::Path,
+) -> bool {
+    if engine.id == "llamacpp" {
+        let legacy = data_dir.join("engines").join("llama-server");
+        if legacy.is_file() {
+            return true;
+        }
+        let state = engine::installer::scan_variant_state(data_dir, profile);
+        let active = engine::variant::select(profile, &state);
+        return engine::installer::variant_installed(data_dir, active, profile);
+    }
+
+    let cmd = resolve_engine_cmd(engine, data_dir);
+    if std::path::Path::new(&cmd).is_file() {
+        return true;
+    }
+    command_exists(&cmd)
 }
 
 /// Resolve the engine command path

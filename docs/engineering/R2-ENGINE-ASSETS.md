@@ -48,10 +48,23 @@ End users **must** download without credentials (same as GitHub releases). Prote
 
 ### R2 API token (upload only)
 
-Create token with **minimum scope**:
+Create an **R2 API token** (not a generic Account API token):
 
-- Permission: **Object Read & Write**
-- Scope: **this bucket only** (`lmforge-engine-assets`)
+1. Cloudflare dashboard → **R2** → **Manage R2 API Tokens** → **Create API token**
+2. Permission: **Object Read & Write** — *not* "Object Read" or "Admin Read only"
+3. Scope: **Apply to specific buckets** → select `lmforge-engine-assets`
+4. Copy **Access Key ID** → `R2_ACCESS_KEY_ID` and **Secret Access Key** → `R2_SECRET_ACCESS_KEY`
+
+Preflight check (should exit 0):
+
+```bash
+source scripts/llamacpp-cuda/config.env
+export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY" AWS_DEFAULT_REGION=auto
+echo test | aws s3 cp - "s3://${R2_BUCKET}/llamacpp/_probe.txt" --endpoint-url "$R2_ENDPOINT"
+aws s3 rm "s3://${R2_BUCKET}/llamacpp/_probe.txt" --endpoint-url "$R2_ENDPOINT"
+```
+
+If `aws s3 ls` works but `cp` returns **AccessDenied**, the token is read-only — recreate with **Object Read & Write**.
 
 Never commit keys. Store in:
 
@@ -158,6 +171,7 @@ Until `cdn_base` is set in the manifest, installs fall back to legacy `url` (Git
 | Symptom | Fix |
 |---------|-----|
 | HTTP 403 on CDN URL | Custom domain not connected; or WAF too aggressive |
+| `AccessDenied` on upload | R2 token is read-only — recreate with **Object Read & Write** on `lmforge-engine-assets` |
 | sha256 mismatch after upload | Rebuilt tarball without updating manifest — rerun `update-manifest.sh` + rebuild `lmforge` |
 | `YOURDOMAIN` in cdn_base | Replace in `config.env`; placeholder is ignored, falls back to GitHub `url` |
 | Docker OOM during build | `LMFORGE_BUILD_JOBS=4` (default in build-local.sh) |

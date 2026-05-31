@@ -1,6 +1,6 @@
 {
   "_comment": "CUDA variant tarballs live on Cloudflare R2 (cdn_base + object_key). Legacy GitHub release URLs remain as fallback until R2 CDN is configured. sha256 values must match the bytes at the resolved download URL. Maintainer flow: scripts/llamacpp-cuda/build-local.sh → publish-r2.sh → cargo build --release.",
-  "cdn_base": "",
+  "cdn_base": "https://engines.lmforge.titasbiswas.com",
   "llamacpp_tag": "b9351",
   "release_tag": "llamacpp-b9351",
   "storage": {
@@ -16,8 +16,7 @@
       "cap_min": 8.6,
       "platform": "linux-x64",
       "object_key": "llamacpp/b9351/lmforge-llamacpp-b9351-cuda12-linux-x64.tar.gz",
-      "url": "https://github.com/phoenixtb/lmforge/releases/download/llamacpp-b9351/lmforge-llamacpp-b9351-cuda12-linux-x64.tar.gz",
-      "sha256": "762c78025a0e3a7a75c949e2b8c9945292303f5239bf6f69c79b6b51d596af3b"
+      "sha256": "fe7f962b94150d7c9eafb8b4107f6cbaf35631f2693c4500ee0f8446505053f5"
     },
     {
       "id": "cuda13",
@@ -27,8 +26,7 @@
       "platform": "linux-x64",
       "opt_in_only": true,
       "object_key": "llamacpp/b9351/lmforge-llamacpp-b9351-cuda13-linux-x64.tar.gz",
-      "url": "https://github.com/phoenixtb/lmforge/releases/download/llamacpp-b9351/lmforge-llamacpp-b9351-cuda13-linux-x64.tar.gz",
-      "sha256": "f1c0d35e71672e82340bdc0743c0bd71cc43edcbaf2c608334bee9a29f77e48d"
+      "sha256": "d238609474598eaf3986cc88211a371ffa5ce200d364a5cd45e4f58b1b3f6f99"
     }
   ]
 }
