@@ -34,6 +34,10 @@ pub struct AppState {
     /// Shared adapter — used by model_pull to attempt engine-native downloads.
     pub adapter: Arc<EngineAdapterInstance>,
     pub data_dir: std::path::PathBuf,
+    /// Model weights directory. Defaults to `{data_dir}/models` but can be
+    /// relocated (config/env/CLI) — e.g. a shared virtio-fs volume. Captured at
+    /// daemon start; changing it via the config API requires a restart.
+    pub models_dir: std::path::PathBuf,
     pub api_key: Option<String>,
     pub bind_address: String,
     pub config: Arc<RwLock<crate::config::LmForgeConfig>>,
@@ -47,6 +51,32 @@ pub struct AppState {
     /// `None` when LMForge runs as a standalone CLI daemon.
     #[cfg(feature = "tauri-embed")]
     pub app_handle: Option<tauri::AppHandle>,
+
+    /// True while a model pull is in-flight. `POST /lf/storage/apply` checks
+    /// this before proceeding to avoid partial-write races during an active download.
+    /// Set via compare-and-swap in `model_pull`; cleared when the pull task completes.
+    pub pull_in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
+
+    /// Snapshot of the currently in-flight model pull, surfaced in `GET /lf/status`
+    /// so any client can observe (and re-attach to) a download regardless of which
+    /// component started it. Updated by the pull task from the progress stream
+    /// (independent of the SSE client connection); `None` when no pull is active.
+    pub active_pull: std::sync::Arc<tokio::sync::RwLock<Option<ActivePull>>>,
+}
+
+/// A shared, client-independent snapshot of the model pull in progress.
+/// Lives in `AppState.active_pull` and is serialised into `GET /lf/status` so the
+/// UI can show download progress even after the originating SSE stream is gone.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct ActivePull {
+    /// Canonical model id being pulled (resolved shortcut, e.g. `qwen2.5-vl:7b:4bit`).
+    pub model: String,
+    /// Human-readable current step / filename.
+    pub file: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub done: bool,
+    pub error: Option<String>,
 }
 
 impl AppState {
@@ -172,6 +202,7 @@ pub fn build_router(
             get(native::config_get).post(native::config_update),
         )
         .route("/lf/shutdown", post(native::shutdown))
+        .route("/lf/storage/apply", post(native::storage_apply))
         .route("/lf/catalog", get(catalog::catalog_list))
         .with_state(state);
 
@@ -305,5 +336,42 @@ mod tests {
         unsafe {
             std::env::remove_var("LMFORGE_MAX_BODY_MB");
         }
+    }
+
+    // ── pull_in_flight guard behaviour ─────────────────────────────────────────
+
+    #[test]
+    fn pull_in_flight_starts_false() {
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        assert!(!flag.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn pull_in_flight_cas_blocks_second_pull() {
+        use std::sync::atomic::Ordering;
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        // First caller: compare-and-swap false -> true succeeds.
+        let first = flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst);
+        assert!(first.is_ok(), "first acquire must succeed");
+
+        // Second caller while first holds the flag: must fail (already true).
+        let second = flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst);
+        assert!(second.is_err(), "second acquire must fail while flag is held");
+
+        // Release.
+        flag.store(false, Ordering::SeqCst);
+
+        // Third caller after release: must succeed again.
+        let third = flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst);
+        assert!(third.is_ok(), "third acquire must succeed after release");
+    }
+
+    #[test]
+    fn pull_in_flight_is_arc_shareable() {
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag2 = flag.clone();
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(flag2.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

@@ -21,7 +21,8 @@ pub async fn run(
     refresh: bool,
 ) -> Result<()> {
     let data_dir = config.data_dir();
-    std::fs::create_dir_all(data_dir.join("models"))?;
+    let models_dir = config.models_dir();
+    std::fs::create_dir_all(&models_dir)?;
 
     // Determine the engine format. Shared with `run`, `catalog`, and the UI
     // so a fresh-pull / fresh-run / fresh-list never disagree — UNLESS the
@@ -55,8 +56,8 @@ pub async fn run(
     }
 
     // Check if already downloaded
-    let model_dir = data_dir.join("models").join(&resolved.dir_name);
-    let mut idx = index::ModelIndex::load(&data_dir)?;
+    let model_dir = models_dir.join(&resolved.dir_name);
+    let mut idx = index::ModelIndex::load(&data_dir, &models_dir)?;
 
     if let Some(existing) = idx.get(&resolved.id) {
         // VLM repos ship an mmproj sidecar alongside the main quant. Older
@@ -81,7 +82,7 @@ pub async fn run(
                 added_at: existing.added_at.clone(),
             };
             idx.add(entry);
-            idx.save(&data_dir)?;
+            idx.save(&data_dir, &models_dir)?;
             println!(
                 "\n✓ Model '{}' sidecar(s) fetched. Start with:",
                 resolved.id
@@ -119,7 +120,7 @@ pub async fn run(
                 added_at: existing.added_at.clone(),
             };
             idx.add(entry);
-            idx.save(&data_dir)?;
+            idx.save(&data_dir, &models_dir)?;
 
             println!("\n✓ Model '{}' capabilities refreshed.", resolved.id);
             return Ok(());
@@ -239,7 +240,7 @@ pub async fn run(
     };
 
     idx.add(entry);
-    idx.save(&data_dir)?;
+    idx.save(&data_dir, &models_dir)?;
 
     println!("\n✓ Model '{}' is ready. Start with:", resolved.id);
     println!("  lmforge start --model {}", resolved.id);

@@ -11,8 +11,11 @@ use super::proxy;
 use super::thinking;
 
 /// Load the model index, returning an empty index on failure.
-fn load_index(data_dir: &std::path::Path) -> crate::model::index::ModelIndex {
-    crate::model::index::ModelIndex::load(data_dir).unwrap_or_else(|_| {
+fn load_index(
+    data_dir: &std::path::Path,
+    models_dir: &std::path::Path,
+) -> crate::model::index::ModelIndex {
+    crate::model::index::ModelIndex::load(data_dir, models_dir).unwrap_or_else(|_| {
         crate::model::index::ModelIndex {
             schema_version: 1,
             models: vec![],
@@ -159,7 +162,7 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
         .to_string();
 
     // Load the model index early — needed for model capabilities before think translation.
-    let index = load_index(&state.data_dir);
+    let index = load_index(&state.data_dir, &state.models_dir);
 
     // Engine-aware think translation:
     // oMLX  → strip enable_thinking flag; translate penalties; inject enable_thinking:false for think:false
@@ -461,7 +464,7 @@ pub async fn completions(State(state): State<AppState>, body: Bytes) -> impl Int
         Err(resp) => return resp.into_response(),
     };
 
-    let index = crate::model::index::ModelIndex::load(&state.data_dir).unwrap_or_else(|_| {
+    let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir).unwrap_or_else(|_| {
         crate::model::index::ModelIndex {
             schema_version: 1,
             models: vec![],
@@ -531,7 +534,7 @@ pub async fn embeddings(State(state): State<AppState>, body: Bytes) -> impl Into
     }
 
     // Model-level gate: does this specific model support embeddings?
-    let index = load_index(&state.data_dir);
+    let index = load_index(&state.data_dir, &state.models_dir);
     if let Err(resp) = check_model_role(&index, &model_id, false, true) {
         return resp.into_response();
     }
@@ -583,10 +586,11 @@ pub async fn embeddings(State(state): State<AppState>, body: Bytes) -> impl Into
         Ok((status, text)) => {
             // --- Dim auto-detection (fire-and-forget background task) ---
             let data_dir = state.data_dir.clone();
+            let models_dir = state.models_dir.clone();
             let mid = model_id.clone();
             let t = text.clone();
             tokio::spawn(async move {
-                maybe_update_embedding_dims(&data_dir, &mid, &t).await;
+                maybe_update_embedding_dims(&data_dir, &models_dir, &mid, &t).await;
             });
 
             Response::builder()
@@ -686,6 +690,7 @@ async fn proxy_embeddings_batched(
 /// Fire-and-forget background task -- errors are silently ignored.
 async fn maybe_update_embedding_dims(
     data_dir: &std::path::Path,
+    models_dir: &std::path::Path,
     model_id: &str,
     response_text: &str,
 ) {
@@ -707,7 +712,7 @@ async fn maybe_update_embedding_dims(
         None => return,
     };
 
-    let mut index = match crate::model::index::ModelIndex::load(data_dir) {
+    let mut index = match crate::model::index::ModelIndex::load(data_dir, models_dir) {
         Ok(idx) => idx,
         Err(_) => return,
     };
@@ -718,7 +723,7 @@ async fn maybe_update_embedding_dims(
         }
         debug!(model_id, dims, "Auto-detected embedding dims from response");
         entry.capabilities.embedding_dims = Some(dims);
-        let _ = index.save(data_dir);
+        let _ = index.save(data_dir, models_dir);
     }
 }
 
@@ -728,7 +733,7 @@ pub async fn model_get(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
-    let index = crate::model::index::ModelIndex::load(&state.data_dir).unwrap_or_else(|_| {
+    let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir).unwrap_or_else(|_| {
         crate::model::index::ModelIndex {
             schema_version: 1,
             models: vec![],
@@ -775,7 +780,7 @@ pub async fn model_get(
 
 /// `GET /v1/models` — List available models with capability metadata
 pub async fn models(State(state): State<AppState>) -> impl IntoResponse {
-    let index = crate::model::index::ModelIndex::load(&state.data_dir).unwrap_or_else(|_| {
+    let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir).unwrap_or_else(|_| {
         crate::model::index::ModelIndex {
             schema_version: 1,
             models: vec![],

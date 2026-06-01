@@ -120,6 +120,7 @@ pub struct EngineManager {
     adapter: EngineAdapterInstance,
     base_engine_port: u16,
     data_dir: PathBuf,
+    models_dir: PathBuf,
     logs_dir: PathBuf,
     pub state: Arc<RwLock<EngineState>>,
     #[allow(dead_code)] // retained for planned restart-supervision logic
@@ -144,11 +145,13 @@ pub enum ManagerCommand {
 }
 
 impl EngineManager {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: EngineConfig,
         adapter: EngineAdapterInstance,
         base_engine_port: u16,
         data_dir: PathBuf,
+        models_dir: PathBuf,
         global_keep_alive: String,
         max_loaded_models: u32,
         status_tx: tokio::sync::broadcast::Sender<EngineState>,
@@ -168,6 +171,7 @@ impl EngineManager {
             adapter,
             base_engine_port,
             data_dir,
+            models_dir,
             logs_dir,
             state,
             max_restarts: 3,
@@ -463,7 +467,7 @@ impl EngineManager {
         // We need this before the early-return check so we can detect role mismatches on cached slots.
         // Rerank takes priority (cross-encoders may also have chat=true for generative re-rankers).
         // Unknown models (not in index) default to Chat for backward compatibility.
-        let index = match crate::model::index::ModelIndex::load(&self.data_dir) {
+        let index = match crate::model::index::ModelIndex::load(&self.data_dir, &self.models_dir) {
             Ok(idx) => idx,
             Err(e) => {
                 warn!(error = %e, "Failed to load models.json — index will be empty");
@@ -515,8 +519,7 @@ impl EngineManager {
             Some(p) => p,
             None => {
                 let fallback = self
-                    .data_dir
-                    .join("models")
+                    .models_dir
                     .join(model_id)
                     .to_string_lossy()
                     .to_string();
@@ -616,7 +619,7 @@ impl EngineManager {
                 );
 
                 if engine.spec_mode == crate::engine::speculative::SpecMode::DraftModel {
-                    let hf_repo = crate::model::index::ModelIndex::load(&self.data_dir)
+                    let hf_repo = crate::model::index::ModelIndex::load(&self.data_dir, &self.models_dir)
                         .ok()
                         .and_then(|idx| idx.get(model_id).and_then(|e| e.hf_repo.clone()));
                     if let Some(draft_id) = crate::engine::draft_pairs::lookup_draft_pair(

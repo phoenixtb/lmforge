@@ -46,10 +46,16 @@ pub trait EngineAdapter: Send + Sync {
     ///   `Ok(true)`  — engine handled the download (success); caller should update ModelIndex.
     ///   `Ok(false)` — engine deferred; caller must fall back to LMForge Rust downloader.
     ///   `Err(e)`    — engine attempted but failed; caller should surface the error.
+    ///
+    /// `data_dir` is passed explicitly (rather than derived from `dest_dir`)
+    /// because the weights dir can live outside the data dir (e.g. a shared
+    /// virtio-fs volume). Adapters that spawn a managed venv (SGLang, vLLM)
+    /// need the real data dir to resolve their interpreter.
     async fn pull_model(
         &self,
         repo: &str,
         dest_dir: &Path,
+        data_dir: &Path,
         progress_tx: Sender<DownloadProgress>,
     ) -> Result<bool>;
     async fn start(
@@ -79,14 +85,15 @@ impl EngineAdapter for EngineAdapterInstance {
         &self,
         repo: &str,
         dest_dir: &Path,
+        data_dir: &Path,
         progress_tx: Sender<DownloadProgress>,
     ) -> Result<bool> {
         match self {
-            Self::Omlx(ad) => ad.pull_model(repo, dest_dir, progress_tx).await,
-            Self::Sglang(ad) => ad.pull_model(repo, dest_dir, progress_tx).await,
-            Self::Llamacpp(ad) => ad.pull_model(repo, dest_dir, progress_tx).await,
-            Self::Vllm(ad) => ad.pull_model(repo, dest_dir, progress_tx).await,
-            Self::TabbyApi(ad) => ad.pull_model(repo, dest_dir, progress_tx).await,
+            Self::Omlx(ad) => ad.pull_model(repo, dest_dir, data_dir, progress_tx).await,
+            Self::Sglang(ad) => ad.pull_model(repo, dest_dir, data_dir, progress_tx).await,
+            Self::Llamacpp(ad) => ad.pull_model(repo, dest_dir, data_dir, progress_tx).await,
+            Self::Vllm(ad) => ad.pull_model(repo, dest_dir, data_dir, progress_tx).await,
+            Self::TabbyApi(ad) => ad.pull_model(repo, dest_dir, data_dir, progress_tx).await,
         }
     }
 

@@ -287,6 +287,14 @@ pub struct CatalogEntry {
 /// `_comment_*` keys and entries without a '/' in the value are silently skipped.
 /// Results are sorted by shortcut name.
 pub fn list_for_ui(format: &str) -> Vec<CatalogEntry> {
+    list_for_ui_from_dir(format, None)
+}
+
+/// Like [`list_for_ui`] but, when `catalogs_dir` is `Some`, prefers the user's
+/// runtime catalog files (`{catalogs_dir}/{fmt}.json`) over the bundled copy
+/// for each format, falling back to bundled when a file is missing or unreadable.
+/// This keeps the UI "Recommended" tab in sync with a customised `catalogs_dir`.
+pub fn list_for_ui_from_dir(format: &str, catalogs_dir: Option<&std::path::Path>) -> Vec<CatalogEntry> {
     let formats: &[(&str, &str)] = match format.to_lowercase().as_str() {
         "mlx" => &[("mlx", BUNDLED_MLX)],
         "safetensors" => &[("safetensors", BUNDLED_SAFETENSORS)],
@@ -301,7 +309,16 @@ pub fn list_for_ui(format: &str) -> Vec<CatalogEntry> {
 
     let mut entries: Vec<CatalogEntry> = Vec::new();
 
-    for &(fmt, content) in formats {
+    for &(fmt, bundled) in formats {
+        // Prefer the on-disk catalog for this format when a catalogs_dir is set
+        // and the file parses; otherwise use the compiled-in bundled catalog.
+        let runtime = catalogs_dir.and_then(|dir| {
+            let path = dir.join(format!("{fmt}.json"));
+            std::fs::read_to_string(&path)
+                .ok()
+                .filter(|c| serde_json::from_str::<HashMap<String, CatalogValue>>(c).is_ok())
+        });
+        let content: &str = runtime.as_deref().unwrap_or(bundled);
         let map: HashMap<String, CatalogValue> = match serde_json::from_str(content) {
             Ok(m) => m,
             Err(_) => continue,

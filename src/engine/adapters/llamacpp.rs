@@ -33,6 +33,7 @@ impl EngineAdapter for LlamacppAdapter {
         &self,
         _repo: &str,
         _dest_dir: &Path,
+        _data_dir: &Path,
         _progress_tx: Sender<DownloadProgress>,
     ) -> Result<bool> {
         // llama.cpp's `-hf-repo` flag pulls at startup but has no streaming progress API.
@@ -194,9 +195,13 @@ impl EngineAdapter for LlamacppAdapter {
         // attached to `ActiveEngine` for downstream consumers — `/lf/status`
         // surfaces it (S-2.7) and `EngineManager`'s crash-fallback retry
         // policy keys off it (S-2.8: spec on + early crash → retry off).
+        // The requested model lives directly under models_dir, so the parent of
+        // model_dir is the models root — robust even when it's a relocated /
+        // shared volume. Falls back to data_dir only for malformed inputs.
+        let models_dir = model_dir.parent().unwrap_or(data_dir);
         let spec_mode = if matches!(role, ModelRole::Chat) {
             let spec_inputs = ModelSpecInputs {
-                mtp: load_model_mtp(data_dir, model_id),
+                mtp: load_model_mtp(data_dir, models_dir, model_id),
                 is_moe: detect_moe_by_name(model_id),
             };
             let budget = VramBudget {
@@ -205,9 +210,10 @@ impl EngineAdapter for LlamacppAdapter {
                 model_size_gb,
                 mmproj_size_gb,
             };
-            let hf_repo = load_model_hf_repo(data_dir, model_id);
+            let hf_repo = load_model_hf_repo(data_dir, models_dir, model_id);
             let draft_ctx = crate::engine::draft_pairs::build_draft_context(
                 data_dir,
+                models_dir,
                 model_id,
                 hf_repo.as_deref(),
             );
@@ -629,14 +635,14 @@ pub(crate) fn resolve_cache_ram_mib(total_ram_gb: f32) -> u32 {
 /// Returns `None` when the index is missing, unreadable, or the entry
 /// lacks an MTP capability (e.g. pulled with a pre-v0.2.0 binary). The
 /// resolver treats `None` as "unknown" and falls back to spec-dec OFF.
-fn load_model_mtp(data_dir: &Path, model_id: &str) -> Option<bool> {
-    let index = crate::model::index::ModelIndex::load(data_dir).ok()?;
+fn load_model_mtp(data_dir: &Path, models_dir: &Path, model_id: &str) -> Option<bool> {
+    let index = crate::model::index::ModelIndex::load(data_dir, models_dir).ok()?;
     let entry = index.get(model_id)?;
     entry.capabilities.mtp
 }
 
-fn load_model_hf_repo(data_dir: &Path, model_id: &str) -> Option<String> {
-    let index = crate::model::index::ModelIndex::load(data_dir).ok()?;
+fn load_model_hf_repo(data_dir: &Path, models_dir: &Path, model_id: &str) -> Option<String> {
+    let index = crate::model::index::ModelIndex::load(data_dir, models_dir).ok()?;
     index.get(model_id)?.hf_repo.clone()
 }
 

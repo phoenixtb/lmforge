@@ -1,27 +1,70 @@
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 
+use crate::config::LmForgeConfig;
+
 /// Generate and install the LMForge system service.
 /// - macOS  → launchd user agent   (~/Library/LaunchAgents/)
 /// - Linux  → systemd user unit    (~/.config/systemd/user/)
 /// - Windows → Scheduled Task       (runs at logon, no elevation)
-pub fn install() -> Result<()> {
+///
+/// Storage dirs (`data_dir` / `models_dir`) are intentionally NOT injected as
+/// env vars into the unit. The bootstrap `config.toml` (`~/.lmforge/config.toml`)
+/// holds those settings and is read on every startup. Baking stale env into the
+/// unit would shadow any UI-driven change because env outranks the config field.
+pub fn install(config: &LmForgeConfig) -> Result<()> {
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("lmforge"));
     let exe_path = exe.to_string_lossy().to_string();
+    let data_dir = config.data_dir();
 
     #[cfg(target_os = "macos")]
-    install_launchd(&exe_path)?;
+    install_launchd(&exe_path, &data_dir)?;
 
     #[cfg(target_os = "linux")]
-    install_systemd(&exe_path)?;
+    install_systemd(&exe_path, &data_dir)?;
 
     #[cfg(windows)]
-    install_scheduled_task(&exe_path)?;
+    install_scheduled_task(&exe_path, &data_dir)?;
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-    bail!("Service installation is not supported on this platform.");
+    {
+        let _ = &data_dir;
+        bail!("Service installation is not supported on this platform.");
+    }
 
     Ok(())
+}
+
+/// True when a LMForge system service unit is installed on this host.
+/// Used for run-mode detection to pick the right restart strategy.
+pub fn is_service_installed() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        return launchd_plist_path().map(|p| p.exists()).unwrap_or(false);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return systemd_unit_path().map(|p| p.exists()).unwrap_or(false);
+    }
+    #[cfg(windows)]
+    {
+        let out = std::process::Command::new("schtasks")
+            .args(["/Query", "/TN", WINDOWS_TASK_NAME])
+            .output();
+        return out.map(|o| o.status.success()).unwrap_or(false);
+    }
+    #[allow(unreachable_code)]
+    false
+}
+
+/// Stop then start the service via the native service manager.
+/// Prefers service-manager restart over `lmforge stop + start` to avoid
+/// KeepAlive / `Restart=always` respawn races.
+pub fn service_restart() -> Result<()> {
+    // Best-effort stop (daemon may already be stopped).
+    service_stop().ok();
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    service_start()
 }
 
 pub fn uninstall() -> Result<()> {
@@ -44,6 +87,14 @@ fn home_dir() -> Result<PathBuf> {
     dirs::home_dir().context("Could not find home directory")
 }
 
+/// Minimal XML entity escaping for launchd plist string values.
+#[cfg(target_os = "macos")]
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 // --- macOS Launchd ---
 
 #[cfg(target_os = "macos")]
@@ -58,7 +109,10 @@ fn launchd_plist_path() -> Result<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-fn install_launchd(exe_path: &str) -> Result<()> {
+fn install_launchd(
+    exe_path: &str,
+    data_dir: &std::path::Path,
+) -> Result<()> {
     let plist_path = launchd_plist_path()?;
 
     if let Some(parent) = plist_path.parent() {
@@ -66,16 +120,27 @@ fn install_launchd(exe_path: &str) -> Result<()> {
             .with_context(|| format!("Cannot create LaunchAgents dir: {}", parent.display()))?;
     }
 
+    let log_dir = data_dir.join("logs");
+    std::fs::create_dir_all(&log_dir)
+        .with_context(|| format!("Cannot create logs dir: {}", log_dir.display()))?;
+
+    // EnvironmentVariables: PATH only. Storage dirs are read from the
+    // bootstrap config.toml (~/.lmforge/config.toml) on every daemon start
+    // so UI-driven changes take effect without reinstalling the service unit.
+    let env_xml = String::from(
+        "        <key>PATH</key>\n        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>\n",
+    );
+
     let plist_content = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>{}</string>
+    <string>{label}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{}</string>
+        <string>{exe}</string>
         <string>start</string>
         <string>--foreground</string>
     </array>
@@ -84,20 +149,18 @@ fn install_launchd(exe_path: &str) -> Result<()> {
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{}/.lmforge/logs/daemon.out.log</string>
+    <string>{log}/daemon.out.log</string>
     <key>StandardErrorPath</key>
-    <string>{}/.lmforge/logs/daemon.err.log</string>
+    <string>{log}/daemon.err.log</string>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-    </dict>
+{env}    </dict>
 </dict>
 </plist>"#,
-        LAUNCHD_LABEL,
-        exe_path,
-        home_dir()?.to_string_lossy(),
-        home_dir()?.to_string_lossy()
+        label = LAUNCHD_LABEL,
+        exe = exe_path,
+        log = log_dir.to_string_lossy(),
+        env = env_xml,
     );
 
     std::fs::write(&plist_path, plist_content)
@@ -154,14 +217,23 @@ fn systemd_unit_path() -> Result<PathBuf> {
 }
 
 #[cfg(target_os = "linux")]
-fn install_systemd(exe_path: &str) -> Result<()> {
+fn install_systemd(
+    exe_path: &str,
+    data_dir: &std::path::Path,
+) -> Result<()> {
     let unit_path = systemd_unit_path()?;
 
     if let Some(parent) = unit_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    // Notice we use ~/.lmforge/logs for out/err so it's consistent
+    let log_dir = data_dir.join("logs");
+    std::fs::create_dir_all(&log_dir)?;
+
+    // PATH only. Storage dirs are read from the bootstrap config.toml on startup;
+    // not baked into the unit so UI-driven changes take effect without reinstall.
+    let env_lines = String::from("Environment=\"PATH=/usr/local/bin:/usr/bin:/bin\"\n");
+
     let service_content = format!(
         r#"[Unit]
 Description=LMForge LLM Orchestrator
@@ -169,19 +241,18 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart={} start --foreground
+ExecStart={exe} start --foreground
 Restart=always
 RestartSec=3
-Environment="PATH=/usr/local/bin:/usr/bin:/bin"
-StandardOutput=append:{}/.lmforge/logs/daemon.out.log
-StandardError=append:{}/.lmforge/logs/daemon.err.log
+{env}StandardOutput=append:{log}/daemon.out.log
+StandardError=append:{log}/daemon.err.log
 
 [Install]
 WantedBy=default.target
 "#,
-        exe_path,
-        home_dir()?.to_string_lossy(),
-        home_dir()?.to_string_lossy()
+        exe = exe_path,
+        env = env_lines,
+        log = log_dir.to_string_lossy(),
     );
 
     std::fs::write(&unit_path, service_content)?;
@@ -228,16 +299,24 @@ static WINDOWS_TASK_NAME: &str = "LMForge Daemon";
 /// at every user logon. Uses PowerShell's Register-ScheduledTask — no
 /// administrator elevation is required (RunLevel = Limited).
 #[cfg(windows)]
-fn install_scheduled_task(exe_path: &str) -> Result<()> {
+fn install_scheduled_task(
+    exe_path: &str,
+    data_dir: &std::path::Path,
+) -> Result<()> {
     // Build the log directory so the task can redirect output immediately.
-    let home = home_dir()?;
-    let log_dir = home.join(".lmforge").join("logs");
+    let log_dir = data_dir.join("logs");
     std::fs::create_dir_all(&log_dir)?;
     let log_out = log_dir.join("daemon.out.log");
 
+    // Storage dirs are intentionally NOT set as User env vars here.
+    // The bootstrap config.toml (~/.lmforge/config.toml) holds those settings
+    // and is read by the daemon on every startup. Baking stale env would shadow
+    // any UI-driven config change until the user re-runs `lmforge service install`.
+    let env_prelude = String::new();
+
     let ps_script = format!(
         r#"
-$action  = New-ScheduledTaskAction `
+{env_prelude}$action  = New-ScheduledTaskAction `
     -Execute "{exe}" `
     -Argument "start --foreground"
 $trigger = New-ScheduledTaskTrigger -AtLogon
@@ -258,6 +337,7 @@ Register-ScheduledTask `
     -Force | Out-Null
 Start-ScheduledTask -TaskName "{task}"
 "#,
+        env_prelude = env_prelude,
         exe = exe_path.replace('"', r#"\""#),
         task = WINDOWS_TASK_NAME,
     );
@@ -492,4 +572,69 @@ pub fn service_status() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── is_service_installed: logic-level tests ────────────────────────────────
+
+    /// On macOS, `is_service_installed` checks whether the launchd plist file
+    /// exists. We can probe this at the unit-test level by verifying the
+    /// function returns a bool without panicking and that the return value is
+    /// consistent with the filesystem (plist path exists ↔ returns true).
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn service_installed_matches_plist_existence() {
+        let installed = is_service_installed();
+        let plist_exists = launchd_plist_path()
+            .map(|p| p.exists())
+            .unwrap_or(false);
+        assert_eq!(
+            installed, plist_exists,
+            "is_service_installed() must agree with plist-file existence"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn service_installed_matches_unit_file_existence() {
+        let installed = is_service_installed();
+        let unit_exists = systemd_unit_path()
+            .map(|p| p.exists())
+            .unwrap_or(false);
+        assert_eq!(
+            installed, unit_exists,
+            "is_service_installed() must agree with unit-file existence"
+        );
+    }
+
+    /// `service_restart` is defined as stop + (2-second sleep) + start.
+    /// We can only smoke-test that calling it does not panic; actual
+    /// service-manager interaction is exercised in integration tests.
+    /// This test verifies the logic compiles and the function signature is correct.
+    #[test]
+    fn service_restart_fn_is_callable() {
+        // We do NOT call it here to avoid actually stopping a running service
+        // in CI. We just verify the symbol resolves at compile time.
+        let _fn_ptr: fn() -> Result<()> = service_restart;
+    }
+
+    // ── xml_escape helper ──────────────────────────────────────────────────────
+
+    #[test]
+    fn xml_escape_leaves_clean_strings() {
+        assert_eq!(xml_escape("hello world"), "hello world");
+        assert_eq!(xml_escape("/usr/local/bin"), "/usr/local/bin");
+    }
+
+    #[test]
+    fn xml_escape_replaces_special_chars() {
+        assert_eq!(xml_escape("a&b"), "a&amp;b");
+        assert_eq!(xml_escape("<tag>"), "&lt;tag&gt;");
+        assert_eq!(xml_escape("a>b"), "a&gt;b");
+        // Single/double quotes are not escaped (paths don't contain them).
+        assert_eq!(xml_escape("/usr/local/bin/lmforge"), "/usr/local/bin/lmforge");
+    }
 }

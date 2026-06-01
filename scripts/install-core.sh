@@ -162,15 +162,24 @@ info "Installed $TARGET_BIN"
 # Add INSTALL_DIR to PATH in every shell config if not already present.
 add_to_path() {
     local profile_file="$1"
+    local begin="# >>> LMForge >>>"
+    local end="# <<< LMForge <<<"
     local export_line="export PATH=\"$INSTALL_DIR:\$PATH\""
-    if [[ -f "$profile_file" ]] && grep -qF "$INSTALL_DIR" "$profile_file"; then
-        return  # already present
+    # Idempotent: skip if our managed block (sentinel or legacy comment) is
+    # already present. We intentionally do NOT skip merely because INSTALL_DIR
+    # appears elsewhere (e.g. the stock ~/.profile "$HOME/.local/bin" line) —
+    # that line is the user's, not ours, and must be left untouched.
+    if [[ -f "$profile_file" ]] && grep -qE "^# >>> LMForge >>>$|^# LMForge$" "$profile_file"; then
+        return
     fi
     # Only write to files that exist OR the primary shell rc
     if [[ -f "$profile_file" ]] || [[ "$profile_file" == "$HOME/.zshrc" ]] || [[ "$profile_file" == "$HOME/.bashrc" ]]; then
-        echo "" >> "$profile_file"
-        echo "# LMForge" >> "$profile_file"
-        echo "$export_line" >> "$profile_file"
+        {
+            echo ""
+            echo "$begin"
+            echo "$export_line"
+            echo "$end"
+        } >> "$profile_file"
         info "Added $INSTALL_DIR to PATH in $profile_file"
     fi
 }

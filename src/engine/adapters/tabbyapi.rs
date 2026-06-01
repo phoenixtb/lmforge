@@ -92,12 +92,6 @@ impl TabbyApiAdapter {
         data_dir.join("engines").join("tabbyapi").join("source")
     }
 
-    /// Mirrors vLLM's helper — `dest_dir` is always shaped
-    /// `<data_dir>/models/<...>/`.
-    fn data_dir_from_model_dir(model_dir: &Path) -> Option<&Path> {
-        model_dir.parent().and_then(|p| p.parent())
-    }
-
     fn cache_mode() -> String {
         std::env::var(ENV_CACHE_MODE)
             .ok()
@@ -123,6 +117,7 @@ impl EngineAdapter for TabbyApiAdapter {
         &self,
         repo: &str,
         dest_dir: &Path,
+        data_dir: &Path,
         progress_tx: Sender<DownloadProgress>,
     ) -> Result<bool> {
         std::fs::create_dir_all(dest_dir)
@@ -162,9 +157,7 @@ impl EngineAdapter for TabbyApiAdapter {
             rev = revision_arg,
         );
 
-        let python = Self::data_dir_from_model_dir(dest_dir)
-            .map(|d| self.resolve_python(d))
-            .unwrap_or_else(|| PathBuf::from("python3"));
+        let python = self.resolve_python(data_dir);
         debug!(python = %python.display(), "TabbyAPI pull: using interpreter");
 
         let output = Command::new(&python)

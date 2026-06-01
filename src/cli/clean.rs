@@ -23,6 +23,7 @@ pub struct CleanOptions {
 /// `lmforge clean` — Disk usage audit and cleanup
 pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
     let data_dir = config.data_dir();
+    let models_dir = config.models_dir();
     let do_all = opts.all;
 
     // ── Audit phase ──────────────────────────────────────────────────────────
@@ -30,7 +31,7 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
     println!("Auditing disk usage...\n");
 
     // 1. Indexed models
-    let idx = ModelIndex::load(&data_dir)?;
+    let idx = ModelIndex::load(&data_dir, &models_dir)?;
     let indexed: Vec<_> = idx
         .list()
         .iter()
@@ -46,7 +47,6 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
 
     // 2. Orphaned model directories — on disk but not in index
     //    These are most commonly partial/interrupted downloads.
-    let models_dir = data_dir.join("models");
     let indexed_paths: std::collections::HashSet<String> =
         indexed.iter().map(|(_, p, _)| p.clone()).collect();
 
@@ -260,12 +260,12 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
 
     // Stale index entries
     if !stale.is_empty() {
-        let mut idx2 = ModelIndex::load(&data_dir)?;
+        let mut idx2 = ModelIndex::load(&data_dir, &models_dir)?;
         for id in &stale {
             idx2.remove(id);
             println!("  ✓ Removed stale index entry '{}'", id);
         }
-        idx2.save(&data_dir)?;
+        idx2.save(&data_dir, &models_dir)?;
     }
 
     // Engine installs — opt-in via `--engines` (or implied by `--all`).

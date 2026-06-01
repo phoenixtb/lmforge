@@ -1310,8 +1310,12 @@ Run this whenever you add or change a catalog entry.
 |---|---|---|
 | `RUST_LOG` | `info` | Log verbosity: `error`, `warn`, `info`, `debug`, `trace` |
 | `LMFORGE_CONFIG` | `~/.lmforge/config.toml` | Override config file path |
-| `LMFORGE_DATA_DIR` | `~/.lmforge` | Override the entire data directory |
+| `LMFORGE_DATA_DIR` | `~/.lmforge` | Override the data directory (engines, logs, `models.json`). Also settable via `--data-dir` or `data_dir` in config.toml. |
+| `LMFORGE_MODELS_DIR` | `{data_dir}/models` | Override the model **weights** directory only. Also settable via `--models-dir` or `models_dir` in config.toml. Point this at a shared volume to reuse one weights library across machines. |
 | `LMFORGE_PORT` | `11430` | Override the API port |
+
+Precedence for the storage dirs: CLI flag > env var > config.toml > default.
+Changing them via the UI / `POST /lf/config` is persisted but takes effect on the next daemon restart.
 
 ---
 
@@ -1335,6 +1339,26 @@ Everything LMForge writes at runtime lives in `~/.lmforge/`:
 └── logs/                # Daemon log files
     └── lmforge.log
 ```
+
+`models/` can be relocated independently of the data root via `models_dir`
+(`LMFORGE_MODELS_DIR` / `--models-dir` / config). The rest of the layout stays
+under `data_dir`.
+
+#### Sharing a weights library across VMs (virtio-fs)
+
+Keep `data_dir` local per machine (engines, venvs, logs, index) and share only
+the weights volume:
+
+```
+Host:     /srv/lmforge-models        (virtio-fs export)
+Linux VM: LMFORGE_MODELS_DIR=/mnt/lmforge-models
+Windows VM: LMFORGE_MODELS_DIR=D:\lmforge-models
+```
+
+The index (`models.json`) stores per-model paths **relative to `models_dir`**
+(schema v2), so the same physical volume works across OSes with different mount
+points. On a freshly pointed VM, run `lmforge models scan` to (re)build the
+index from the weights already present on the volume.
 
 ---
 

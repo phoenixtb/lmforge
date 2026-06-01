@@ -57,6 +57,7 @@ pub async fn run(
         .or_else(|| config.api_key.clone());
     let engine_port: u16 = 11431; // Internal engine port
     let data_dir = config.data_dir();
+    let models_dir = config.models_dir();
 
     info!(port = api_port, bind = %bind_addr, "Starting LMForge...");
 
@@ -75,8 +76,18 @@ pub async fn run(
 
     // 1. Ensure data directory exists
     std::fs::create_dir_all(data_dir.join("engines"))?;
-    std::fs::create_dir_all(data_dir.join("models"))?;
+    std::fs::create_dir_all(&models_dir)?;
     std::fs::create_dir_all(data_dir.join("logs"))?;
+
+    // 1a. Execute pending migration manifest (written by POST /lf/storage/apply).
+    //     Must run after dirs exist but before any model-index access.
+    if let Ok(Some(manifest)) = crate::model::migration::PendingMigration::load() {
+        info!("Pending migration manifest found — executing startup drain...");
+        execute_migration_drain(&manifest, &data_dir, &models_dir).await;
+        if let Err(e) = crate::model::migration::PendingMigration::clear() {
+            warn!(error = %e, "Failed to clear pending-migration.json after drain");
+        }
+    }
 
     // 2. Proactive startup cleanup — kill any stale LMForge or engine processes
     //    and verify both ports are free BEFORE we do anything expensive.
@@ -126,7 +137,7 @@ pub async fn run(
     // 6. (Optional) validate model if --model was passed
     if let Some(ref m) = model {
         // Verify the model exists in the index before starting so we fail fast
-        let idx = crate::model::index::ModelIndex::load(&data_dir).unwrap_or_else(|_| {
+        let idx = crate::model::index::ModelIndex::load(&data_dir, &models_dir).unwrap_or_else(|_| {
             crate::model::index::ModelIndex {
                 schema_version: 1,
                 models: vec![],
@@ -167,6 +178,7 @@ pub async fn run(
         adapter,
         engine_port,
         data_dir.clone(),
+        models_dir.clone(),
         config.orchestrator.keep_alive.clone(),
         config.orchestrator.max_loaded_models,
         status_tx.clone(),
@@ -182,6 +194,7 @@ pub async fn run(
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
 
     let state = manager.state();
+    let pull_in_flight = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     println!("\n✓ LMForge Orchestrator ready");
     println!(
         "  Engine:  {} v{}",
@@ -206,11 +219,14 @@ pub async fn run(
         engine_config: engine_config.clone(),
         adapter: shared_adapter,
         data_dir: data_dir.clone(),
+        models_dir: models_dir.clone(),
         api_key: resolved_api_key.clone(),
         bind_address: bind_addr.clone(),
         config: std::sync::Arc::new(tokio::sync::RwLock::new(config.clone())),
         command_tx: cmd_tx.clone(),
         status_tx,
+        pull_in_flight,
+        active_pull: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
     };
 
     // Install the Prometheus recorder before the router is built so the
@@ -327,6 +343,82 @@ pub async fn run(
     println!("✓ LMForge stopped.");
 
     Ok(())
+}
+
+/// Execute the pending migration drain after dirs are ready.
+/// - Scan: rebuilds the model index from the new models_dir (prune=true).
+/// - Repull: re-downloads each queued model into the new models_dir.
+/// - None: no-op (adopt-in-place or delete-only — dirs are already right).
+async fn execute_migration_drain(
+    manifest: &crate::model::migration::PendingMigration,
+    data_dir: &std::path::Path,
+    models_dir: &std::path::Path,
+) {
+    use crate::model::migration::MigrationIntent;
+
+    match manifest.intent {
+        MigrationIntent::None | MigrationIntent::Scan => {
+            info!("Migration drain: scanning new models_dir for models...");
+            if let Err(e) = crate::cli::models::scan(data_dir, models_dir, true) {
+                warn!(error = %e, "Migration drain: index scan failed");
+            }
+        }
+        MigrationIntent::Repull => {
+            info!(
+                count = manifest.repull_queue.len(),
+                "Migration drain: re-pulling models into new directory..."
+            );
+            for entry in &manifest.repull_queue {
+                // Sanitise the model id into a filesystem-safe dir name.
+                let dir_name = entry.id.replace([':', '/'], "-");
+                let model_dir = models_dir.join(&dir_name);
+                if let Err(e) = std::fs::create_dir_all(&model_dir) {
+                    warn!(model = %entry.id, error = %e, "Migration drain: could not create model dir");
+                    continue;
+                }
+                info!(model = %entry.id, repo = %entry.hf_repo, "Migration drain: re-pulling...");
+                let (tx, _rx) = tokio::sync::mpsc::channel(32);
+                match crate::model::downloader::download_model(
+                    &entry.hf_repo,
+                    &[],
+                    &model_dir,
+                    Some(tx),
+                )
+                .await
+                {
+                    Ok(_) => {
+                        if let Ok(mut idx) =
+                            crate::model::index::ModelIndex::load(data_dir, models_dir)
+                        {
+                            let caps = crate::model::index::detect_capabilities(
+                                &model_dir,
+                                Some(&entry.id),
+                                Some(&entry.hf_repo),
+                            );
+                            idx.add(crate::model::index::ModelEntry {
+                                id: entry.id.clone(),
+                                path: model_dir.to_string_lossy().to_string(),
+                                format: entry.format.clone(),
+                                engine: entry.engine.clone(),
+                                hf_repo: Some(entry.hf_repo.clone()),
+                                size_bytes: crate::model::index::dir_size(&model_dir),
+                                capabilities: caps,
+                                added_at: chrono::Utc::now().to_rfc3339(),
+                            });
+                            let _ = idx.save(data_dir, models_dir);
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            model = %entry.id,
+                            error = %e,
+                            "Migration drain: re-pull failed — model will not be available until manually re-downloaded"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Proactive startup cleanup — runs BEFORE any expensive operations.

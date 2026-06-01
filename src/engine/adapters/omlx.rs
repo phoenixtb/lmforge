@@ -25,6 +25,7 @@ impl EngineAdapter for OmlxAdapter {
         &self,
         _repo: &str,
         _dest_dir: &Path,
+        _data_dir: &Path,
         _progress_tx: Sender<DownloadProgress>,
     ) -> Result<bool> {
         // oMLX's downloader is internal/undocumented with no stable external streaming API.

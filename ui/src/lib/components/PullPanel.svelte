@@ -1,7 +1,7 @@
 <script lang="ts">
   import { pullModel, fmtBytes, type PullProgress } from '$lib/api';
   import { toast } from '$lib/stores/toasts';
-  import { statusStore } from '$lib/stores/status';
+  import { statusStore, activePull } from '$lib/stores/status';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import { open } from '@tauri-apps/plugin-dialog';
 
@@ -130,6 +130,30 @@
     <h2 class="ap-title">Add Custom Model</h2>
     <p class="ap-sub">Pull any model from HuggingFace by repo ID, use a catalog shortcut, or point to a local directory.</p>
   </div>
+
+  <!-- Global in-flight download (driven by /lf/status; visible even if the
+       originating stream was lost). Hidden while THIS panel owns a live pull. -->
+  {#if $activePull && !pulling}
+    {@const gpPct = $activePull.total_bytes > 0
+      ? Math.round(($activePull.downloaded_bytes / $activePull.total_bytes) * 100)
+      : 0}
+    <div class="global-pull" role="status" aria-live="polite">
+      <span class="gp-spinner"></span>
+      <div class="gp-body">
+        <div class="gp-title">Downloading <strong>{$activePull.model}</strong> (in progress elsewhere)</div>
+        <div class="gp-file mono">{$activePull.error ? `✕ ${$activePull.error}` : $activePull.file}</div>
+        {#if $activePull.total_bytes > 0}
+          <div class="progress-bar-track">
+            <div class="progress-bar-fill" style="width:{gpPct}%"></div>
+          </div>
+          <div class="gp-meta">
+            <span>{gpPct}%</span>
+            <span>{fmtBytes($activePull.downloaded_bytes)} / {fmtBytes($activePull.total_bytes)}</span>
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
 
   <!-- Input card -->
   <div class="ap-card" class:pulling class:succeeded>
@@ -328,10 +352,34 @@
     height: 6px; background: var(--surface-3); border-radius: 99px; overflow: hidden;
   }
   .progress-bar-fill {
-    height: 100%; background: var(--accent); border-radius: 99px;
+    height: 100%; background: var(--warn); border-radius: 99px;
     transition: width 300ms ease;
   }
   .progress-meta {
+    display: flex; justify-content: space-between;
+    font-size: 10.5px; color: var(--text-3);
+  }
+
+  /* Global in-flight download banner */
+  .global-pull {
+    display: flex; gap: 10px; align-items: flex-start;
+    background: var(--warn-dim); border: 1px solid var(--warn);
+    border-radius: var(--radius-sm); padding: 10px 12px;
+  }
+  .gp-spinner {
+    flex-shrink: 0; margin-top: 2px;
+    width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid var(--surface-3); border-top-color: var(--warn);
+    animation: gp-spin 0.8s linear infinite;
+  }
+  @keyframes gp-spin { to { transform: rotate(360deg); } }
+  .gp-body { flex: 1; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .gp-title { font-size: 12px; color: var(--text); }
+  .gp-file {
+    font-size: 11px; color: var(--text-2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .gp-meta {
     display: flex; justify-content: space-between;
     font-size: 10.5px; color: var(--text-3);
   }

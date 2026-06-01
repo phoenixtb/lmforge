@@ -1,7 +1,7 @@
 <script lang="ts">
   import { pullModel, fmtBytes, type CatalogEntry, type PullProgress } from '$lib/api';
   import { toast } from '$lib/stores/toasts';
-  import { statusStore } from '$lib/stores/status';
+  import { statusStore, activePull } from '$lib/stores/status';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
   export let entry: CatalogEntry;
@@ -20,10 +20,44 @@
 
   $: installed = installedIds.has(entry.shortcut) || installedIds.has(entry.hf_repo);
 
-  $: pct = progress && progress.total_bytes > 0
-    ? Math.round((progress.downloaded_bytes / progress.total_bytes) * 100)
+  // ── Global pull reflection ────────────────────────────────────────────────
+  // The daemon publishes the in-flight pull in /lf/status (→ statusStore).
+  // When THIS card's model is the one being pulled but this instance doesn't
+  // own the live SSE stream (e.g. after navigating away and back, or it was
+  // started elsewhere), mirror that progress so the tile still shows the
+  // pulling state instead of a dead "Pull" button.
+  $: globalPull = (!pulling && !installed
+      && $activePull && $activePull.model === entry.shortcut)
+    ? $activePull
+    : null;
+
+  // Effective progress: local live stream when we own it, else the global snapshot.
+  $: effProgress = pulling
+    ? progress
+    : (globalPull
+        ? {
+            file: globalPull.error ? `✕ ${globalPull.error}` : globalPull.file,
+            downloaded_bytes: globalPull.downloaded_bytes,
+            total_bytes: globalPull.total_bytes,
+            speed_bps: 0,
+            done: globalPull.done,
+          }
+        : null);
+  $: showPulling = pulling || !!globalPull;
+
+  $: pct = effProgress && effProgress.total_bytes > 0
+    ? Math.round((effProgress.downloaded_bytes / effProgress.total_bytes) * 100)
     : 0;
-  $: speed = progress?.speed_bps ? `${fmtBytes(progress.speed_bps)}/s` : '';
+  $: speed = (pulling && progress?.speed_bps) ? `${fmtBytes(progress.speed_bps)}/s` : '';
+
+  // When a global pull for THIS model finishes (snapshot disappears), refresh the
+  // installed list so the tile flips to "Installed" without a manual reload.
+  let wasGlobalPulling = false;
+  $: {
+    const now = !!globalPull;
+    if (wasGlobalPulling && !now) onPulled();
+    wasGlobalPulling = now;
+  }
 
   /**
    * Real size in bytes from HuggingFace:
@@ -110,7 +144,7 @@
   oncancel={() => showIncompatWarning = false}
 />
 
-<div class="cat-card" class:pulling class:installed class:incompatible>
+<div class="cat-card" class:pulling={showPulling} class:installed class:incompatible>
   <!-- ── Header ── -->
   <div class="cat-top">
     <div class="cat-id-row">
@@ -144,9 +178,9 @@
   </div>
 
   <!-- ── Pull progress ── -->
-  {#if pulling && progress}
+  {#if showPulling && effProgress}
     <div class="pull-progress" aria-live="polite">
-      <div class="progress-file mono">{progress.file || 'Preparing…'}</div>
+      <div class="progress-file mono">{effProgress.file || 'Preparing…'}</div>
       <div class="progress-track">
         <div
           class="progress-fill"
@@ -159,11 +193,11 @@
       </div>
       <div class="progress-meta">
         <span>{pct}%</span>
-        <span>{fmtBytes(progress.downloaded_bytes)} / {fmtBytes(progress.total_bytes)}</span>
+        <span>{fmtBytes(effProgress.downloaded_bytes)} / {fmtBytes(effProgress.total_bytes)}</span>
         {#if speed}<span>{speed}</span>{/if}
       </div>
     </div>
-  {:else if pulling}
+  {:else if showPulling}
     <div class="pull-progress">
       <div class="skeleton" style="height:6px;width:100%;border-radius:4px;"></div>
       <div class="progress-meta"><span>Connecting…</span></div>
@@ -176,7 +210,7 @@
   {/if}
 
   <!-- ── Compat warning ── -->
-  {#if incompatible && !pulling && !installed}
+  {#if incompatible && !showPulling && !installed}
     <div class="compat-warn" role="alert">
       ⚠ {entry.format.toUpperCase()} — your engine needs {(requiredFormat ?? '').toUpperCase()}
     </div>
@@ -195,6 +229,8 @@
     {/if}
     {#if pulling}
       <button class="btn btn--danger btn--sm" onclick={cancelPull}>Cancel</button>
+    {:else if globalPull}
+      <span class="btn btn--ghost btn--sm disabled" aria-disabled="true">Downloading…</span>
     {:else if installed}
       <span class="btn btn--ghost btn--sm disabled" aria-disabled="true">Installed</span>
     {:else}
@@ -219,8 +255,17 @@
   }
   .cat-card:hover { border-color: var(--border-2); transform: translateY(-1px); box-shadow: var(--shadow-sm); }
   .cat-card.installed   { border-color: var(--success); background: var(--success-dim); }
-  .cat-card.pulling     { border-color: var(--accent); }
+  .cat-card.pulling     {
+    border-color: var(--warn);
+    background: var(--warn-dim);
+    animation: pulling-glow 1.8s ease-in-out infinite;
+  }
   .cat-card.incompatible { border-color: var(--warn, #f59e0b); }
+
+  @keyframes pulling-glow {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn) 35%, transparent); }
+    50%      { box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 14%, transparent); }
+  }
 
   /* Compat warning */
   .compat-warn {
@@ -288,7 +333,7 @@
     height: 5px; background: var(--surface-3); border-radius: 99px; overflow: hidden;
   }
   .progress-fill {
-    height: 100%; background: var(--accent); border-radius: 99px;
+    height: 100%; background: var(--warn); border-radius: 99px;
     transition: width 300ms ease;
   }
   .progress-meta {

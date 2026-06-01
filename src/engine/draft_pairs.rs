@@ -156,6 +156,7 @@ fn find_largest_gguf(model_dir: &Path) -> Option<PathBuf> {
 /// not marked broken.
 pub fn build_draft_context(
     data_dir: &Path,
+    models_dir: &Path,
     model_id: &str,
     hf_repo: Option<&str>,
 ) -> Option<DraftResolveContext> {
@@ -164,7 +165,7 @@ pub fn build_draft_context(
         return None;
     }
 
-    let idx = crate::model::index::ModelIndex::load(data_dir).ok()?;
+    let idx = crate::model::index::ModelIndex::load(data_dir, models_dir).ok()?;
     let draft_entry = idx.get(&draft_id)?;
     let draft_dir = PathBuf::from(&draft_entry.path);
     let gguf_path = find_largest_gguf(&draft_dir)?;

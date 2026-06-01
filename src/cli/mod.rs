@@ -35,6 +35,16 @@ pub struct Cli {
     /// Path to catalogs directory (default: ~/.lmforge/catalogs)
     #[arg(long, global = true)]
     pub catalogs_dir: Option<String>,
+
+    /// Path to the data directory (engines, logs, models.json).
+    /// Default: $LMFORGE_DATA_DIR or ~/.lmforge
+    #[arg(long, global = true)]
+    pub data_dir: Option<String>,
+
+    /// Path to the model weights directory.
+    /// Default: $LMFORGE_MODELS_DIR or {data_dir}/models
+    #[arg(long, global = true)]
+    pub models_dir: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -216,6 +226,8 @@ pub enum ServiceAction {
     Start,
     /// Stop the LMForge service (daemon process; models will be unloaded)
     Stop,
+    /// Restart the LMForge service (stop then start via the service manager)
+    Restart,
     /// Show current service status
     Status,
 }
@@ -233,6 +245,15 @@ pub enum ModelsAction {
 
     /// Unload the active model from VRAM (keeps files on disk)
     Unload,
+
+    /// Rebuild the model index by scanning the models directory.
+    /// Use after pointing models_dir at a populated (e.g. shared) volume, or to
+    /// repair a missing/stale models.json. Re-detects capabilities per model.
+    Scan {
+        /// Also drop index entries whose directory no longer exists on disk.
+        #[arg(long)]
+        prune: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -347,10 +368,11 @@ pub async fn dispatch(cli: Cli, config: LmForgeConfig) -> Result<()> {
         Command::Engine { action } => engine::run(&config, action).await,
         Command::Doctor => doctor::run(&config).await,
         Command::Service { action } => match action {
-            ServiceAction::Install => service::install(),
+            ServiceAction::Install => service::install(&config),
             ServiceAction::Uninstall => service::uninstall(),
             ServiceAction::Start => service::service_start(),
             ServiceAction::Stop => service::service_stop(),
+            ServiceAction::Restart => service::service_restart(),
             ServiceAction::Status => service::service_status(),
         },
         Command::Logs {
