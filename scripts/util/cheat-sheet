@@ -3,14 +3,22 @@
 # ── state / audit ────────────────────────────────────────────────────────────
 scripts/util/dev_status.sh
 
+# ── clean only (interactive) ─────────────────────────────────────────────────
+scripts/util/dev-clean-core.sh              # stop processes, engines, symlinks, …
+scripts/util/dev-clean-core.sh --yes --full   # + cargo target + cursor sandbox
+scripts/util/dev-clean-ui.sh                # AppImage, node_modules, tauri target, …
+scripts/util/dev-clean-ui.sh --yes --full
+
 # ── core: clean-rebuild-init-start (one shot) ────────────────────────────────
-scripts/util/dev-clean-reinstall-core_linux-sglang-cuda13.sh                       # full: wipe → rebuild → init → start
-scripts/util/dev-clean-reinstall-core_linux-sglang-cuda13.sh --pull qwen3:1.7b:4bit  # also pulls a smoke model
-scripts/util/dev-clean-reinstall-core_linux-sglang-cuda13.sh --keep-engines        # skip ~5 min engine reinstall
-scripts/util/dev-clean-reinstall-core_linux-sglang-cuda13.sh --no-cargo-clean      # incremental rust build
-scripts/util/dev-clean-reinstall-core_linux-sglang-cuda13.sh --no-init --no-start  # just rebuild + symlink
-scripts/util/dev-clean-reinstall-core_linux-sglang-cuda13.sh --release             # release profile
-scripts/util/dev-clean-reinstall-core_linux-sglang-cuda13.sh --wipe-models         # also nuke ~/.lmforge/models
+scripts/util/dev-reinstall-core.sh                    # interactive (cuda12 default)
+scripts/util/dev-reinstall-core.sh --yes              # defaults, no prompts
+scripts/util/dev-reinstall-core.sh --yes --smoke      # + background start + qwen3:1.7b:4bit pull
+scripts/util/dev-reinstall-core.sh --cuda13           # force cuda13 variant
+scripts/util/dev-reinstall-core.sh --keep-engines     # skip engine wipe (fast Rust loop)
+scripts/util/dev-reinstall-core.sh --no-cargo-clean   # incremental cargo build
+scripts/util/dev-reinstall-core.sh --no-init --no-start   # rebuild + symlink only
+scripts/util/dev-reinstall-core.sh --release          # release profile
+scripts/util/dev-reinstall-core.sh --wipe-models      # also nuke ~/.lmforge/models
 
 # ── UI: clean-reinstall-launch (one shot) ────────────────────────────────────
 scripts/util/dev-clean-reinstall-ui.sh                              # auto-detect distro → wipe ui artefacts → npm ci → tauri dev
@@ -44,10 +52,11 @@ lmforge start --engine sglang --yes-experimental    # experimental: known-broken
 LMFORGE_YES_EXPERIMENTAL=1 lmforge start --engine sglang   # same, for systemd/scripts
 
 # ── tests ────────────────────────────────────────────────────────────────────
-scripts/util/dev_test.sh                          # ~17 s, cargo only
-scripts/util/dev_test.sh --with-e2e               # ~3 min first time, ~30 s after
-scripts/util/dev_test.sh --e2e-only --keep-daemon # iterate e2e against running daemon
-scripts/util/dev_test.sh --e2e-model qwen3:4b:4bit  # override default test model
+scripts/util/dev_test.sh                    # interactive test matrix
+scripts/util/dev_test.sh --yes              # unit+integration+cli+api+inference
+scripts/util/dev_test.sh --yes --full       # + VLM + MTP + rerank
+scripts/util/dev_test.sh --e2e-only --yes   # live daemon only
+scripts/util/release_binary_test.sh         # cuda12/cuda13 release binary matrix
 
 # ── load / bench ─────────────────────────────────────────────────────────────
 scripts/util/dev_bench.sh -n 50 -c 8 --csv /tmp/bench.csv

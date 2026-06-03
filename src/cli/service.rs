@@ -621,15 +621,17 @@ mod tests {
         let _fn_ptr: fn() -> Result<()> = service_restart;
     }
 
-    // ── xml_escape helper ──────────────────────────────────────────────────────
+    // ── xml_escape helper (macOS launchd only) ─────────────────────────────────
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn xml_escape_leaves_clean_strings() {
         assert_eq!(xml_escape("hello world"), "hello world");
         assert_eq!(xml_escape("/usr/local/bin"), "/usr/local/bin");
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn xml_escape_replaces_special_chars() {
         assert_eq!(xml_escape("a&b"), "a&amp;b");
         assert_eq!(xml_escape("<tag>"), "&lt;tag&gt;");

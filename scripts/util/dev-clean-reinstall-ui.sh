@@ -2,7 +2,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Dev clean-reinstall for the LMForge UI (Tauri + SvelteKit).
 #
-# Equivalent of dev-clean-reinstall-core_linux-sglang-cuda13.sh, but for the
+# Equivalent of dev-reinstall-core.sh, but for the
 # `ui/` workspace. Stops any running tauri dev, wipes JS+Rust build artefacts,
 # reinstalls npm deps, and either launches `tauri dev` (default) or builds the
 # AppImage (`--build`). System deps (webkitgtk, libayatana-appindicator, …) are
