@@ -623,6 +623,74 @@ mod tests {
         assert!(bundled_shortcuts("").is_empty());
     }
 
+    // ── MLX catalog bit suffix validation ─────────────────────────────────────
+
+    /// User-facing quant markers allowed in mlx.json shortcut keys.
+    const MLX_QUANT_SUFFIXES: &[&str] = &["4bit", "5bit", "6bit", "8bit", "f16"];
+
+    fn mlx_shortcut_quant(shortcut: &str) -> Option<&str> {
+        shortcut
+            .split(':')
+            .find(|p| MLX_QUANT_SUFFIXES.contains(p))
+    }
+
+    /// Returns `Some(reason)` when the shortcut quant does not match the repo name.
+    fn mlx_quant_mismatch(shortcut: &str, repo: &str) -> Option<&'static str> {
+        let quant = mlx_shortcut_quant(shortcut)?;
+        let r = repo.to_ascii_lowercase();
+        let has_4 = r.contains("4bit")
+            || r.contains("mxfp4")
+            || r.contains("optiq-4")
+            || r.contains("dwq")
+            || r.contains("nvfp4");
+        let has_5 = r.contains("5bit");
+        let has_6 = r.contains("6bit");
+        let has_8 = r.contains("8bit") || r.contains("mxfp8");
+        let has_f16 = r.contains("f16") || r.contains("fp16") || r.contains("bf16");
+
+        match quant {
+            "4bit" if r.contains("mxfp8") => Some("4bit shortcut points at mxfp8 (8-bit) repo"),
+            "4bit" if !has_4 => Some("4bit shortcut missing 4bit-class repo name"),
+            "5bit" if !has_5 => Some("5bit shortcut missing 5bit repo name"),
+            "6bit" if !has_6 => Some("6bit shortcut missing 6bit repo name"),
+            "8bit" if !has_8 => Some("8bit shortcut missing 8bit/mxfp8 repo name"),
+            "f16" if r.contains("mxfp8") => Some("f16 shortcut points at mxfp8 repo"),
+            "f16" if !has_f16 => Some("f16 shortcut missing f16/fp16/bf16 repo name"),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn bundled_mlx_quant_suffixes_match_repos() {
+        let map: HashMap<String, CatalogValue> = serde_json::from_str(BUNDLED_MLX).unwrap();
+        let mut repos: HashMap<String, Vec<String>> = HashMap::new();
+        for (shortcut, value) in &map {
+            if shortcut.starts_with('_') {
+                continue;
+            }
+            let repo = value.repo();
+            assert!(
+                repo.starts_with("mlx-community/"),
+                "{shortcut} must use mlx-community, got {repo}"
+            );
+            assert!(
+                !shortcut.contains("mxfp8"),
+                "{shortcut}: use :8bit for mxfp8 repos, not :mxfp8 in the shortcut"
+            );
+            if let Some(reason) = mlx_quant_mismatch(shortcut, repo) {
+                panic!("{shortcut} → {repo}: {reason}");
+            }
+            repos.entry(repo.to_string()).or_default().push(shortcut.clone());
+        }
+        for (repo, shortcuts) in repos {
+            assert_eq!(
+                shortcuts.len(),
+                1,
+                "duplicate shortcuts for one repo {repo}: {shortcuts:?}"
+            );
+        }
+    }
+
     // ── infer_role ────────────────────────────────────────────────────────────
 
     #[test]

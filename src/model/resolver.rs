@@ -313,6 +313,7 @@ fn extract_quant_hint(shortcut: &str) -> Option<&str> {
         matches!(
             *part,
             "4bit" | "5bit" | "6bit" | "8bit" | "q4" | "q5" | "q6" | "q8" | "f16" | "bf16"
+                | "mxfp4" | "mxfp8" | "fp16"
         )
     })
 }
@@ -331,7 +332,7 @@ fn gguf_patterns_for_quant(quant: &str) -> &'static [&'static str] {
         "5bit" | "q5" => &["UD-Q5_K_XL", "Q5_K_M", "Q5_K_S", "Q5_K"],
         "6bit" | "q6" => &["UD-Q6_K_XL", "Q6_K"],
         "8bit" | "q8" => &["UD-Q8_K_XL", "Q8_0"],
-        "f16" | "bf16" => &["F16", "BF16", "f16", "bf16"],
+        "f16" | "bf16" => &["F16", "FP16", "BF16", "f16", "bf16", "fp16"],
         _ => &[],
     }
 }
