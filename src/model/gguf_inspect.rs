@@ -201,10 +201,7 @@ pub fn read_tensor_names(gguf_path: &Path) -> Result<Vec<String>, String> {
 /// upper-case (rare, but seen on community quants).
 fn is_mtp_tensor(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
-    n.starts_with("mtp.")
-        || n.starts_with("nextn.")
-        || n.contains(".mtp.")
-        || n.contains(".nextn.")
+    n.starts_with("mtp.") || n.starts_with("nextn.") || n.contains(".mtp.") || n.contains(".nextn.")
 }
 
 // ── Low-level read helpers (little-endian) ───────────────────────────────────

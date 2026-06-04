@@ -902,7 +902,10 @@ async fn tc14_model_list_resolves_relative_index_against_custom_models_dir() {
             engine: "mlx".to_string(),
             hf_repo: None,
             size_bytes: 0,
-            capabilities: ModelCapabilities { chat: true, ..Default::default() },
+            capabilities: ModelCapabilities {
+                chat: true,
+                ..Default::default()
+            },
             added_at: "2025-01-01".to_string(),
         }],
     };
@@ -910,7 +913,10 @@ async fn tc14_model_list_resolves_relative_index_against_custom_models_dir() {
 
     // On disk the path must be relative (portable).
     let raw = std::fs::read_to_string(data_dir.join("models.json")).unwrap();
-    assert!(raw.contains("\"qwen3-test\""), "expected relative path on disk: {raw}");
+    assert!(
+        raw.contains("\"qwen3-test\""),
+        "expected relative path on disk: {raw}"
+    );
 
     // Build AppState with the decoupled dirs.
     let (cmd_tx, cmd_rx) = mpsc::channel(64);

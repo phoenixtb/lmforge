@@ -232,7 +232,9 @@ pub fn normalize_dir(raw: &str) -> PathBuf {
     if trimmed == "~" {
         return dirs::home_dir().unwrap_or_else(|| PathBuf::from(trimmed));
     }
-    if let Some(rest) = trimmed.strip_prefix("~/").or_else(|| trimmed.strip_prefix("~\\"))
+    if let Some(rest) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
         && let Some(home) = dirs::home_dir()
     {
         return home.join(rest);
@@ -354,7 +356,9 @@ impl LmForgeConfig {
     /// Returns the path this config was loaded from (and should be saved to).
     /// Defaults to `bootstrap_config_path()` when not explicitly resolved.
     pub fn config_path(&self) -> PathBuf {
-        self.config_path.clone().unwrap_or_else(bootstrap_config_path)
+        self.config_path
+            .clone()
+            .unwrap_or_else(bootstrap_config_path)
     }
 
     /// Save current configuration to the bootstrap config path.
@@ -366,11 +370,7 @@ impl LmForgeConfig {
         let path = self.config_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                anyhow::anyhow!(
-                    "Cannot create config directory {}: {}",
-                    parent.display(),
-                    e
-                )
+                anyhow::anyhow!("Cannot create config directory {}: {}", parent.display(), e)
             })?;
         }
         crate::config::global::save(&path, self)
@@ -628,14 +628,19 @@ mod tests {
             !config_p.starts_with(&data_p),
             "config.toml must not be inside data_dir: config_path={config_p:?}, data_dir={data_p:?}"
         );
-        assert!(config_p.ends_with("config.toml"), "must end with config.toml: {config_p:?}");
+        assert!(
+            config_p.ends_with("config.toml"),
+            "must end with config.toml: {config_p:?}"
+        );
     }
 
     #[test]
     fn config_path_from_load_is_persisted_through_merge() {
         // A config_path set during load() must survive merge_config().
-        let mut base = LmForgeConfig::default();
-        base.config_path = Some(PathBuf::from("/custom/path/config.toml"));
+        let base = LmForgeConfig {
+            config_path: Some(PathBuf::from("/custom/path/config.toml")),
+            ..Default::default()
+        };
         let overlay = LmForgeConfig::default(); // config_path = None
         let merged = merge_config(base, overlay);
         assert_eq!(
@@ -647,7 +652,10 @@ mod tests {
 
     #[test]
     fn test_normalize_dir_passthrough_and_tilde() {
-        assert_eq!(normalize_dir("  /srv/models  "), PathBuf::from("/srv/models"));
+        assert_eq!(
+            normalize_dir("  /srv/models  "),
+            PathBuf::from("/srv/models")
+        );
         let home = dirs::home_dir().unwrap();
         assert_eq!(normalize_dir("~"), home);
         assert_eq!(normalize_dir("~/models"), home.join("models"));

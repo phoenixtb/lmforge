@@ -22,9 +22,7 @@ use tokio::sync::{RwLock, broadcast, mpsc};
 use lmforge::config::LmForgeConfig;
 use lmforge::engine::adapter::EngineAdapterInstance;
 use lmforge::engine::adapters::llamacpp::LlamacppAdapter;
-use lmforge::engine::manager::{
-    EngineMetrics, EngineState, EngineStatus, ManagerCommand,
-};
+use lmforge::engine::manager::{EngineMetrics, EngineState, EngineStatus, ManagerCommand};
 use lmforge::engine::registry::EngineConfig;
 use lmforge::model::index::{ModelCapabilities, ModelEntry, ModelIndex};
 use lmforge::model::migration::{MigrationIntent, PendingMigration};
@@ -52,6 +50,16 @@ fn clear_isolated_env() {
         std::env::remove_var("LMFORGE_CONFIG");
         std::env::remove_var("LMFORGE_DATA_DIR");
     }
+}
+
+fn setup_env(config_root: &Path, default_data: &Path) {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    set_isolated_env(config_root, default_data);
+}
+
+fn teardown_env() {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    clear_isolated_env();
 }
 
 /// Build a minimal AppState wired with the given live dirs. The config fields
@@ -106,8 +114,7 @@ async fn call(state: AppState, body: serde_json::Value) -> (StatusCode, serde_js
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .expect("body");
-    let json: serde_json::Value =
-        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
     (status, json)
 }
 
@@ -142,9 +149,8 @@ fn seed_index(data_dir: &Path, models_dir: &Path, entries: &[(&str, Option<&str>
 
 #[tokio::test]
 async fn rejects_when_nothing_changes() {
-    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();
-    set_isolated_env(root.path(), &root.path().join("defaultdata"));
+    setup_env(root.path(), &root.path().join("defaultdata"));
 
     let data = root.path().join("data");
     let models = root.path().join("models");
@@ -158,14 +164,13 @@ async fn rejects_when_nothing_changes() {
         "got: {json}"
     );
 
-    clear_isolated_env();
+    teardown_env();
 }
 
 #[tokio::test]
 async fn rejects_overlapping_models_dir() {
-    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();
-    set_isolated_env(root.path(), &root.path().join("defaultdata"));
+    setup_env(root.path(), &root.path().join("defaultdata"));
 
     let data = root.path().join("data");
     let models = root.path().join("models");
@@ -179,16 +184,18 @@ async fn rejects_overlapping_models_dir() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(json["error"].as_str().unwrap().contains("nested"), "got: {json}");
+    assert!(
+        json["error"].as_str().unwrap().contains("nested"),
+        "got: {json}"
+    );
 
-    clear_isolated_env();
+    teardown_env();
 }
 
 #[tokio::test]
 async fn rejects_unwritable_target() {
-    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();
-    set_isolated_env(root.path(), &root.path().join("defaultdata"));
+    setup_env(root.path(), &root.path().join("defaultdata"));
 
     let data = root.path().join("data");
     let models = root.path().join("models");
@@ -205,16 +212,18 @@ async fn rejects_unwritable_target() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(json["error"].as_str().unwrap().contains("not usable"), "got: {json}");
+    assert!(
+        json["error"].as_str().unwrap().contains("not usable"),
+        "got: {json}"
+    );
 
-    clear_isolated_env();
+    teardown_env();
 }
 
 #[tokio::test]
 async fn rejects_when_pull_in_flight() {
-    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();
-    set_isolated_env(root.path(), &root.path().join("defaultdata"));
+    setup_env(root.path(), &root.path().join("defaultdata"));
 
     let data = root.path().join("data");
     let models = root.path().join("models");
@@ -231,16 +240,15 @@ async fn rejects_when_pull_in_flight() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
 
-    clear_isolated_env();
+    teardown_env();
 }
 
 // ── migration manifest: scan + delete ────────────────────────────────────────
 
 #[tokio::test]
 async fn adopt_writes_scan_manifest_and_persists_config() {
-    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();
-    set_isolated_env(root.path(), &root.path().join("defaultdata"));
+    setup_env(root.path(), &root.path().join("defaultdata"));
 
     let data = root.path().join("data");
     let old_models = root.path().join("models");
@@ -273,14 +281,13 @@ async fn adopt_writes_scan_manifest_and_persists_config() {
         Some(new_models.to_string_lossy().as_ref())
     );
 
-    clear_isolated_env();
+    teardown_env();
 }
 
 #[tokio::test]
 async fn delete_removes_old_files_and_clears_index() {
-    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();
-    set_isolated_env(root.path(), &root.path().join("defaultdata"));
+    setup_env(root.path(), &root.path().join("defaultdata"));
 
     let data = root.path().join("data");
     let old_models = root.path().join("models");
@@ -302,16 +309,15 @@ async fn delete_removes_old_files_and_clears_index() {
     let idx = ModelIndex::load(&data, &old_models).unwrap();
     assert!(idx.list().is_empty(), "index must be cleared after delete");
 
-    clear_isolated_env();
+    teardown_env();
 }
 
 // ── migration manifest: re-pull + data-loss confirmation ─────────────────────
 
 #[tokio::test]
 async fn repull_returns_422_for_models_without_hf_repo() {
-    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();
-    set_isolated_env(root.path(), &root.path().join("defaultdata"));
+    setup_env(root.path(), &root.path().join("defaultdata"));
 
     let data = root.path().join("data");
     let old_models = root.path().join("models");
@@ -332,14 +338,13 @@ async fn repull_returns_422_for_models_without_hf_repo() {
     // No destructive action yet — old files still present.
     assert!(old_models.join("local-only/weights.gguf").exists());
 
-    clear_isolated_env();
+    teardown_env();
 }
 
 #[tokio::test]
 async fn repull_with_ack_queues_repullable_and_drops_rest() {
-    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();
-    set_isolated_env(root.path(), &root.path().join("defaultdata"));
+    setup_env(root.path(), &root.path().join("defaultdata"));
 
     let data = root.path().join("data");
     let old_models = root.path().join("models");
@@ -373,22 +378,25 @@ async fn repull_with_ack_queues_repullable_and_drops_rest() {
     assert_eq!(manifest.repull_queue[0].id, "has-repo");
     assert_eq!(manifest.repull_queue[0].hf_repo, "org/has-repo");
 
-    clear_isolated_env();
+    teardown_env();
 }
 
 // ── data dir relocate ────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn data_relocate_copies_regenerable_artifacts() {
-    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();
-    set_isolated_env(root.path(), &root.path().join("defaultdata"));
+    setup_env(root.path(), &root.path().join("defaultdata"));
 
     let old_data = root.path().join("old-data");
     let new_data = root.path().join("new-data");
     let models = root.path().join("models");
     std::fs::create_dir_all(&old_data).unwrap();
-    std::fs::write(old_data.join("models.json"), br#"{"schema_version":2,"models":[]}"#).unwrap();
+    std::fs::write(
+        old_data.join("models.json"),
+        br#"{"schema_version":2,"models":[]}"#,
+    )
+    .unwrap();
     std::fs::write(old_data.join("hardware.json"), b"{}").unwrap();
     // Engines dir must NOT be copied.
     std::fs::create_dir_all(old_data.join("engines/llamacpp")).unwrap();
@@ -407,23 +415,25 @@ async fn data_relocate_copies_regenerable_artifacts() {
     assert_eq!(status, StatusCode::OK);
 
     assert!(new_data.join("models.json").exists(), "models.json copied");
-    assert!(new_data.join("hardware.json").exists(), "hardware.json copied");
+    assert!(
+        new_data.join("hardware.json").exists(),
+        "hardware.json copied"
+    );
     assert!(
         !new_data.join("engines").exists(),
         "engines/ must NOT be relocated (venvs are not portable)"
     );
 
-    clear_isolated_env();
+    teardown_env();
 }
 
 // ── reset-to-default ─────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn reset_models_dir_persists_none_and_resolves_default() {
-    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();
     let default_data = root.path().join("defaultdata");
-    set_isolated_env(root.path(), &default_data);
+    setup_env(root.path(), &default_data);
 
     // Live daemon was using a custom models dir (config field Some).
     let custom_models = root.path().join("custom-weights");
@@ -455,15 +465,14 @@ async fn reset_models_dir_persists_none_and_resolves_default() {
         "reset must resolve to the default models dir under data_dir"
     );
 
-    clear_isolated_env();
+    teardown_env();
 }
 
 #[tokio::test]
 async fn reset_data_dir_persists_none() {
-    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();
     let default_data = root.path().join("defaultdata");
-    set_isolated_env(root.path(), &default_data);
+    setup_env(root.path(), &default_data);
 
     let custom_data = root.path().join("custom-data");
     // models_dir explicitly set to a stable path so it's unaffected by the reset.
@@ -483,5 +492,5 @@ async fn reset_data_dir_persists_none() {
         "data_dir field must be reset to None"
     );
 
-    clear_isolated_env();
+    teardown_env();
 }

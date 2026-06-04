@@ -47,7 +47,6 @@ impl SglangAdapter {
             PathBuf::from(&self.executable)
         }
     }
-
 }
 
 impl EngineAdapter for SglangAdapter {

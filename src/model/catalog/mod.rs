@@ -210,8 +210,7 @@ pub fn detect_engine_format(data_dir: &std::path::Path) -> String {
     // 1. Registry-aware path (preferred).
     let hw_path = data_dir.join("hardware.json");
     if let Ok(json) = std::fs::read_to_string(&hw_path)
-        && let Ok(profile) =
-            serde_json::from_str::<crate::hardware::probe::HardwareProfile>(&json)
+        && let Ok(profile) = serde_json::from_str::<crate::hardware::probe::HardwareProfile>(&json)
     {
         let user_override = data_dir.join("engines.toml");
         let override_path = if user_override.exists() {
@@ -294,7 +293,10 @@ pub fn list_for_ui(format: &str) -> Vec<CatalogEntry> {
 /// runtime catalog files (`{catalogs_dir}/{fmt}.json`) over the bundled copy
 /// for each format, falling back to bundled when a file is missing or unreadable.
 /// This keeps the UI "Recommended" tab in sync with a customised `catalogs_dir`.
-pub fn list_for_ui_from_dir(format: &str, catalogs_dir: Option<&std::path::Path>) -> Vec<CatalogEntry> {
+pub fn list_for_ui_from_dir(
+    format: &str,
+    catalogs_dir: Option<&std::path::Path>,
+) -> Vec<CatalogEntry> {
     let formats: &[(&str, &str)] = match format.to_lowercase().as_str() {
         "mlx" => &[("mlx", BUNDLED_MLX)],
         "safetensors" => &[("safetensors", BUNDLED_SAFETENSORS)],
@@ -432,20 +434,27 @@ mod tests {
 
     #[test]
     fn test_primary_models_exist_in_safetensors() {
-        let map: HashMap<String, CatalogValue> =
-            serde_json::from_str(BUNDLED_SAFETENSORS).unwrap();
+        let map: HashMap<String, CatalogValue> = serde_json::from_str(BUNDLED_SAFETENSORS).unwrap();
         // Chat: catalog is quantized-only — every inference shortcut carries
         // a `:4bit` or `:8bit` suffix (no bare `qwen3:8b` aliases).
-        assert!(map.contains_key("qwen3:8b:4bit"), "safetensors missing qwen3:8b:4bit");
-        assert!(map.contains_key("qwen3:8b:8bit"), "safetensors missing qwen3:8b:8bit");
+        assert!(
+            map.contains_key("qwen3:8b:4bit"),
+            "safetensors missing qwen3:8b:4bit"
+        );
+        assert!(
+            map.contains_key("qwen3:8b:8bit"),
+            "safetensors missing qwen3:8b:8bit"
+        );
         // Embeddings stay at native precision (small models, quality-sensitive).
-        assert!(map.contains_key("qwen3-embed:0.6b"), "safetensors missing 0.6B embed");
+        assert!(
+            map.contains_key("qwen3-embed:0.6b"),
+            "safetensors missing 0.6B embed"
+        );
     }
 
     #[test]
     fn test_safetensors_has_vlm_entries() {
-        let map: HashMap<String, CatalogValue> =
-            serde_json::from_str(BUNDLED_SAFETENSORS).unwrap();
+        let map: HashMap<String, CatalogValue> = serde_json::from_str(BUNDLED_SAFETENSORS).unwrap();
         // VLMs are quantized-only too — `:4bit` maps to the official AWQ build.
         assert_eq!(
             map.get("qwen2.5-vl:3b:4bit").unwrap().repo(),

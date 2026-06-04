@@ -219,7 +219,11 @@ mod tests {
     #[test]
     fn broken_pair_cache_round_trip() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(!is_pair_broken(dir.path(), "qwen3:8b:4bit", "qwen3:0.6b:4bit"));
+        assert!(!is_pair_broken(
+            dir.path(),
+            "qwen3:8b:4bit",
+            "qwen3:0.6b:4bit"
+        ));
         record_broken_pair(
             dir.path(),
             "qwen3:8b:4bit",
@@ -227,6 +231,10 @@ mod tests {
             "synthetic tokenizer mismatch",
         )
         .unwrap();
-        assert!(is_pair_broken(dir.path(), "qwen3:8b:4bit", "qwen3:0.6b:4bit"));
+        assert!(is_pair_broken(
+            dir.path(),
+            "qwen3:8b:4bit",
+            "qwen3:0.6b:4bit"
+        ));
     }
 }

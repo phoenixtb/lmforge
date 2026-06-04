@@ -274,8 +274,7 @@ impl EngineManager {
 
     /// Evict least recently used models until needed VRAM is free
     async fn evict_for_vram(&mut self, needed_vram_gb: f32) -> Result<()> {
-        let profile = crate::hardware::probe::detect_platform()
-            .unwrap_or_default();
+        let profile = crate::hardware::probe::detect_platform().unwrap_or_default();
 
         loop {
             let free_vram = crate::hardware::vram::get_free_vram(&profile);
@@ -378,11 +377,7 @@ impl EngineManager {
     /// The `child` is borrowed mutably because `try_wait` requires it; we
     /// don't take ownership so the caller can still SIGTERM the process
     /// on graceful shutdown paths.
-    async fn wait_slot_health(
-        &self,
-        port: u16,
-        child: &mut tokio::process::Child,
-    ) -> Result<()> {
+    async fn wait_slot_health(&self, port: u16, child: &mut tokio::process::Child) -> Result<()> {
         let health_url = format!("http://127.0.0.1:{}{}", port, self.config.health_endpoint);
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(3))
@@ -518,11 +513,7 @@ impl EngineManager {
         let entry_path = match index.get(model_id).map(|m| m.path.clone()) {
             Some(p) => p,
             None => {
-                let fallback = self
-                    .models_dir
-                    .join(model_id)
-                    .to_string_lossy()
-                    .to_string();
+                let fallback = self.models_dir.join(model_id).to_string_lossy().to_string();
                 warn!(
                     model_id,
                     fallback_path = %fallback,
@@ -619,18 +610,19 @@ impl EngineManager {
                 );
 
                 if engine.spec_mode == crate::engine::speculative::SpecMode::DraftModel {
-                    let hf_repo = crate::model::index::ModelIndex::load(&self.data_dir, &self.models_dir)
-                        .ok()
-                        .and_then(|idx| idx.get(model_id).and_then(|e| e.hf_repo.clone()));
-                    if let Some(draft_id) = crate::engine::draft_pairs::lookup_draft_pair(
-                        model_id,
-                        hf_repo.as_deref(),
-                    ) && let Err(rec_err) = crate::engine::draft_pairs::record_broken_pair(
-                        &self.data_dir,
-                        model_id,
-                        &draft_id,
-                        &e.to_string(),
-                    ) {
+                    let hf_repo =
+                        crate::model::index::ModelIndex::load(&self.data_dir, &self.models_dir)
+                            .ok()
+                            .and_then(|idx| idx.get(model_id).and_then(|e| e.hf_repo.clone()));
+                    if let Some(draft_id) =
+                        crate::engine::draft_pairs::lookup_draft_pair(model_id, hf_repo.as_deref())
+                        && let Err(rec_err) = crate::engine::draft_pairs::record_broken_pair(
+                            &self.data_dir,
+                            model_id,
+                            &draft_id,
+                            &e.to_string(),
+                        )
+                    {
                         warn!(model_id, error = %rec_err, "Failed to record broken draft pair");
                     }
                 }
@@ -662,9 +654,8 @@ impl EngineManager {
 
                 match retry_result {
                     Ok(mut retry_engine) => {
-                        if let Err(e2) = self
-                            .wait_slot_health(port, &mut retry_engine.process)
-                            .await
+                        if let Err(e2) =
+                            self.wait_slot_health(port, &mut retry_engine.process).await
                         {
                             let _ = self.adapter.stop(&mut retry_engine).await;
                             // Annotate the message so users see both

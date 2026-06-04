@@ -32,13 +32,14 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
         .with_context(|| format!("Cannot write mlx.json to {}", catalogs_dir.display()))?;
 
     let safetensors_defaults = include_str!("../../data/catalogs/safetensors.json");
-    std::fs::write(catalogs_dir.join("safetensors.json"), safetensors_defaults)
-        .with_context(|| {
+    std::fs::write(catalogs_dir.join("safetensors.json"), safetensors_defaults).with_context(
+        || {
             format!(
                 "Cannot write safetensors.json to {}",
                 catalogs_dir.display()
             )
-        })?;
+        },
+    )?;
 
     let gguf_defaults = include_str!("../../data/catalogs/gguf.json");
     std::fs::write(catalogs_dir.join("gguf.json"), gguf_defaults)
@@ -66,7 +67,11 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     info!(path = %profile_path.display(), "Hardware profile saved");
 
     // Print summary
-    println!("  OS:         {:?}{}", profile.os, if profile.is_wsl { " (WSL2)" } else { "" });
+    println!(
+        "  OS:         {:?}{}",
+        profile.os,
+        if profile.is_wsl { " (WSL2)" } else { "" }
+    );
     println!("  Arch:       {:?}", profile.arch);
     println!(
         "  GPU:        {:?}{}{}",
@@ -82,10 +87,7 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
         }
     );
     if let Some(ref runtime) = profile.cuda_runtime_version {
-        let driver = profile
-            .cuda_driver_version
-            .as_deref()
-            .unwrap_or("unknown");
+        let driver = profile.cuda_driver_version.as_deref().unwrap_or("unknown");
         println!("  CUDA:       runtime {} | driver {}", runtime, driver);
     }
     println!(
@@ -171,17 +173,16 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
 
     // Engine installation
     println!("⚙ Installing engine...");
-    let install_result = if selected.id == "llamacpp"
-        && profile.os == crate::hardware::probe::Os::Linux
-    {
-        crate::engine::installer::install_llamacpp_on_init(selected, &profile, &data_dir)
-            .await
-            .with_context(|| format!("Engine installation failed for {}", selected.id))?
-    } else {
-        crate::engine::installer::install(selected, &profile, &data_dir)
-            .await
-            .with_context(|| format!("Engine installation failed for {}", selected.id))?
-    };
+    let install_result =
+        if selected.id == "llamacpp" && profile.os == crate::hardware::probe::Os::Linux {
+            crate::engine::installer::install_llamacpp_on_init(selected, &profile, &data_dir)
+                .await
+                .with_context(|| format!("Engine installation failed for {}", selected.id))?
+        } else {
+            crate::engine::installer::install(selected, &profile, &data_dir)
+                .await
+                .with_context(|| format!("Engine installation failed for {}", selected.id))?
+        };
     println!("  Method: {}", install_result.method_used);
     println!();
 

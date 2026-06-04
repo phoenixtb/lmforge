@@ -188,6 +188,7 @@ mod tests {
 
     // ── helper: PathBuf for test bootstrap paths ────────────────────────────────
 
+    #[allow(dead_code)]
     fn fake_pending_path(dir: &std::path::Path) -> PathBuf {
         dir.join("pending-migration.json")
     }

@@ -23,10 +23,7 @@ pub async fn status_stream(State(state): State<AppState>) -> impl IntoResponse {
     // so stream consumers (browser/dev UI, CLI watchers) see download progress
     // the same way `GET /lf/status` exposes it. Extra field is ignored by typed
     // EngineState deserializers.
-    async fn frame(
-        snapshot: &crate::engine::manager::EngineState,
-        state: &AppState,
-    ) -> String {
+    async fn frame(snapshot: &crate::engine::manager::EngineState, state: &AppState) -> String {
         let mut v = serde_json::to_value(snapshot).unwrap_or_default();
         if let Some(obj) = v.as_object_mut() {
             let ap = state.active_pull.read().await.clone();
@@ -449,7 +446,15 @@ pub async fn model_pull(
         // navigation / second request never loses the in-flight pull.
         let (dl_tx, mut dl_rx) = tokio::sync::mpsc::channel(100);
         let dl_handle = tokio::spawn(async move {
-            dispatch_pull(&adapter, &dl_repo, &dl_files, &dl_model_dir, &dl_data_dir, dl_tx).await
+            dispatch_pull(
+                &adapter,
+                &dl_repo,
+                &dl_files,
+                &dl_model_dir,
+                &dl_data_dir,
+                dl_tx,
+            )
+            .await
         });
 
         while let Some(prog) = dl_rx.recv().await {
@@ -507,11 +512,17 @@ pub async fn model_pull(
 }
 
 /// Fold a single `DownloadProgress` event into the shared `ActivePull` snapshot.
-fn apply_pull_progress(slot: &mut super::ActivePull, prog: &crate::model::downloader::DownloadProgress) {
+fn apply_pull_progress(
+    slot: &mut super::ActivePull,
+    prog: &crate::model::downloader::DownloadProgress,
+) {
     use crate::model::downloader::DownloadProgress as P;
     match prog {
         P::Started { files, .. } => {
-            slot.file = format!("Preparing {files} file{}…", if *files == 1 { "" } else { "s" });
+            slot.file = format!(
+                "Preparing {files} file{}…",
+                if *files == 1 { "" } else { "s" }
+            );
         }
         P::FileProgress {
             file,
@@ -810,21 +821,18 @@ pub async fn config_update(
         }
         let gguf_path = new_catalogs_dir.join("gguf.json");
         if !gguf_path.exists() {
-            let _ = std::fs::write(
-                &gguf_path,
-                include_str!("../../data/catalogs/gguf.json"),
-            );
+            let _ = std::fs::write(&gguf_path, include_str!("../../data/catalogs/gguf.json"));
         }
         let exl3_path = new_catalogs_dir.join("exl3.json");
         if !exl3_path.exists() {
-            let _ = std::fs::write(
-                &exl3_path,
-                include_str!("../../data/catalogs/exl3.json"),
-            );
+            let _ = std::fs::write(&exl3_path, include_str!("../../data/catalogs/exl3.json"));
         }
     }
 
-    info!(restart_required, "Configuration safely mutated via /lf/config API");
+    info!(
+        restart_required,
+        "Configuration safely mutated via /lf/config API"
+    );
 
     Response::builder()
         .status(StatusCode::OK)
@@ -944,10 +952,11 @@ pub async fn storage_apply(
     // Resolve the resulting fields to effective paths with the same precedence
     // the daemon uses at startup (env > field > default). A fresh default config
     // carries no runtime `--data-dir` override, matching post-restart behavior.
-    let (resolved_new_data_dir, resolved_new_models_dir) = crate::config::LmForgeConfig::resolve_dirs(
-        new_data_field.as_deref(),
-        new_models_field.as_deref(),
-    );
+    let (resolved_new_data_dir, resolved_new_models_dir) =
+        crate::config::LmForgeConfig::resolve_dirs(
+            new_data_field.as_deref(),
+            new_models_field.as_deref(),
+        );
 
     // Preserve no-auto-follow semantics: a data_dir change does NOT silently
     // relocate a default models_dir here (that would wipe the index). The models
@@ -991,23 +1000,22 @@ pub async fn storage_apply(
             );
         }
     }
-    if data_dir_changed {
-        if let Err(e) = ensure_writable_dir(&new_data_dir) {
-            return apply_err(
-                StatusCode::BAD_REQUEST,
-                &format!("New data_dir not usable: {e}"),
-            );
-        }
+    if data_dir_changed
+        && let Err(e) = ensure_writable_dir(&new_data_dir)
+    {
+        return apply_err(
+            StatusCode::BAD_REQUEST,
+            &format!("New data_dir not usable: {e}"),
+        );
     }
 
     // Load current index before any destructive action.
-    let idx =
-        crate::model::index::ModelIndex::load(&old_data_dir, &old_models_dir).unwrap_or_else(
-            |_| crate::model::index::ModelIndex {
-                schema_version: 2,
-                models: vec![],
-            },
-        );
+    let idx = crate::model::index::ModelIndex::load(&old_data_dir, &old_models_dir).unwrap_or_else(
+        |_| crate::model::index::ModelIndex {
+            schema_version: 2,
+            models: vec![],
+        },
+    );
 
     // Build repull queue and collect models that would be permanently lost.
     let mut would_lose: Vec<String> = vec![];
@@ -1067,14 +1075,15 @@ pub async fn storage_apply(
     if models_dir_changed && (req.models_action == "delete" || req.models_action == "repull") {
         for entry in idx.list() {
             let model_path = std::path::Path::new(&entry.path);
-            if model_path.starts_with(&old_models_dir) && model_path.exists() {
-                if let Err(e) = std::fs::remove_dir_all(model_path) {
-                    warn!(
-                        path = %model_path.display(),
-                        error = %e,
-                        "Failed to delete model dir during storage apply"
-                    );
-                }
+            if model_path.starts_with(&old_models_dir)
+                && model_path.exists()
+                && let Err(e) = std::fs::remove_dir_all(model_path)
+            {
+                warn!(
+                    path = %model_path.display(),
+                    error = %e,
+                    "Failed to delete model dir during storage apply"
+                );
             }
         }
         let empty_idx = crate::model::index::ModelIndex {
@@ -1089,10 +1098,8 @@ pub async fn storage_apply(
         for filename in &["models.json", "hardware.json"] {
             let src = old_data_dir.join(filename);
             let dst = new_data_dir.join(filename);
-            if src.exists() {
-                if let Err(e) = std::fs::copy(&src, &dst) {
-                    warn!(src = %src.display(), dst = %dst.display(), error = %e, "Copy failed during data_dir relocation");
-                }
+            if src.exists() && let Err(e) = std::fs::copy(&src, &dst) {
+                warn!(src = %src.display(), dst = %dst.display(), error = %e, "Copy failed during data_dir relocation");
             }
         }
         if req.copy_logs {

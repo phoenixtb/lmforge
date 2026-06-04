@@ -357,7 +357,10 @@ mod tests {
 
         // Second caller while first holds the flag: must fail (already true).
         let second = flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst);
-        assert!(second.is_err(), "second acquire must fail while flag is held");
+        assert!(
+            second.is_err(),
+            "second acquire must fail while flag is held"
+        );
 
         // Release.
         flag.store(false, Ordering::SeqCst);

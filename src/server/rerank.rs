@@ -135,12 +135,11 @@ pub async fn rerank(State(state): State<AppState>, body: Bytes) -> impl IntoResp
     }
 
     // --- Model-level gate: does this model support re-ranking? ---
-    let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir).unwrap_or_else(|_| {
-        crate::model::index::ModelIndex {
+    let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
+        .unwrap_or_else(|_| crate::model::index::ModelIndex {
             schema_version: 1,
             models: vec![],
-        }
-    });
+        });
 
     if let Some(entry) = index.get(&model_id)
         && !entry.capabilities.reranking

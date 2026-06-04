@@ -17,7 +17,7 @@ DATA_DIR="${LMFORGE_DATA_DIR:-$HOME/.lmforge}"
 SKIP_PULL="${SKIP_PULL:-0}"
 VARIANTS="${VARIANTS:-cuda12,cuda13}"
 
-CHAT_MODEL="${CHAT_MODEL:-qwen3.5:4b:6bit}"
+CHAT_MODEL="${CHAT_MODEL:-qwen3:1.7b:4bit}"
 MTP_MODEL="${MTP_MODEL:-qwen3.5:4b:mtp:4bit}"
 EMBED_MODEL="${EMBED_MODEL:-qwen3-embed:0.6b:8bit}"
 VLM_MODEL="${VLM_MODEL:-qwen2.5-vl:3b:4bit}"

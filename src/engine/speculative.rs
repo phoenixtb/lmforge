@@ -247,9 +247,7 @@ pub fn resolve(
             let draft_path = cfg
                 .draft_model
                 .clone()
-                .or_else(|| {
-                    draft.map(|d| d.gguf_path.to_string_lossy().into_owned())
-                });
+                .or_else(|| draft.map(|d| d.gguf_path.to_string_lossy().into_owned()));
             let Some(path) = draft_path else {
                 return SpecResolved::off(
                     "draft-model requested but no draft path configured or paired",
@@ -523,7 +521,12 @@ mod tests {
             draft_model: None,
             ..Default::default()
         };
-        let r = resolve(ModelSpecInputs::default(), &cfg, gpu_budget(16.0, 4.0), None);
+        let r = resolve(
+            ModelSpecInputs::default(),
+            &cfg,
+            gpu_budget(16.0, 4.0),
+            None,
+        );
         assert_eq!(r.mode, SpecMode::Off);
         assert!(r.reason.contains("draft path"));
     }

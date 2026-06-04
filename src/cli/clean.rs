@@ -171,7 +171,11 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
     let mut engine_entries: Vec<(String, u64)> = Vec::new();
     let mut engine_total: u64 = 0;
     if engines_dir.exists() {
-        for entry in std::fs::read_dir(&engines_dir).into_iter().flatten().flatten() {
+        for entry in std::fs::read_dir(&engines_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
             let path = entry.path();
             if path.is_dir() {
                 let name = path
@@ -184,7 +188,11 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
             }
         }
     }
-    let bin_size = if bin_dir.exists() { dir_size(&bin_dir) } else { 0 };
+    let bin_size = if bin_dir.exists() {
+        dir_size(&bin_dir)
+    } else {
+        0
+    };
     let engines_grand_total = engine_total + bin_size;
 
     println!(
@@ -200,9 +208,7 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
         if bin_size > 0 {
             println!("  {:40} {:>8}", "bin/ (uv + helpers)", fmt_size(bin_size));
         }
-        println!(
-            "  Wipe with: lmforge clean --engines  (next `init` rebuilds them, ~2 min)"
-        );
+        println!("  Wipe with: lmforge clean --engines  (next `init` rebuilds them, ~2 min)");
     }
 
     // ── Summary ───────────────────────────────────────────────────────────────
@@ -280,10 +286,7 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
     {
         if engines_dir.exists() {
             std::fs::remove_dir_all(&engines_dir)?;
-            println!(
-                "  ✓ Removed engines/ ({})",
-                fmt_size(engine_total)
-            );
+            println!("  ✓ Removed engines/ ({})", fmt_size(engine_total));
         }
         if bin_dir.exists() {
             std::fs::remove_dir_all(&bin_dir)?;

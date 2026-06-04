@@ -691,12 +691,16 @@ mod tests {
 
     #[test]
     fn gguf_only_dir_defaults_to_chat() {
-        let dir = make_gguf_dir(
-            "gguf_chat",
-            &[("Qwen3-1.7B-Q4_K_M.gguf", b"fake-weights")],
+        let dir = make_gguf_dir("gguf_chat", &[("Qwen3-1.7B-Q4_K_M.gguf", b"fake-weights")]);
+        let caps = detect_capabilities(
+            &dir,
+            Some("qwen3:1.7b:4bit"),
+            Some("unsloth/Qwen3-1.7B-GGUF"),
         );
-        let caps = detect_capabilities(&dir, Some("qwen3:1.7b:4bit"), Some("unsloth/Qwen3-1.7B-GGUF"));
-        assert!(caps.chat, "GGUF model without embed/rerank markers must default chat=true");
+        assert!(
+            caps.chat,
+            "GGUF model without embed/rerank markers must default chat=true"
+        );
         assert!(!caps.embeddings);
         assert!(!caps.reranking);
         std::fs::remove_dir_all(&dir).unwrap();
@@ -713,7 +717,10 @@ mod tests {
             Some("qwen3-embed:0.6b:8bit"),
             Some("Qwen/Qwen3-Embedding-0.6B-GGUF"),
         );
-        assert!(caps.embeddings, "Catalog 'embed' shortcut must keep embeddings=true");
+        assert!(
+            caps.embeddings,
+            "Catalog 'embed' shortcut must keep embeddings=true"
+        );
         assert!(!caps.chat, "Embedding model must not be flagged as chat");
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -743,7 +750,10 @@ mod tests {
             &[("model.safetensors", b"fake-weights")],
         );
         let caps = detect_capabilities(&dir, Some("some-model:latest"), None);
-        assert!(!caps.chat, "Safetensors-only dir without config.json must not be flagged chat");
+        assert!(
+            !caps.chat,
+            "Safetensors-only dir without config.json must not be flagged chat"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -810,7 +820,10 @@ mod tests {
 
         // On disk the path must be relative to models_dir.
         let raw = std::fs::read_to_string(data_dir.join("models.json")).unwrap();
-        assert!(raw.contains("\"qwen3-8b\""), "expected relative path on disk: {raw}");
+        assert!(
+            raw.contains("\"qwen3-8b\""),
+            "expected relative path on disk: {raw}"
+        );
         assert!(!raw.contains(&abs), "absolute path must not be persisted");
 
         // On load it resolves back to the absolute path under models_dir.
@@ -863,7 +876,10 @@ mod tests {
         // Outside models_dir → kept absolute on disk (portable across hosts only
         // when standardized, but never silently broken).
         let raw = std::fs::read_to_string(data_dir.join("models.json")).unwrap();
-        assert!(raw.contains(&foreign), "foreign abs path must be preserved: {raw}");
+        assert!(
+            raw.contains(&foreign),
+            "foreign abs path must be preserved: {raw}"
+        );
 
         let loaded = ModelIndex::load(&data_dir, &models_dir).unwrap();
         assert_eq!(loaded.get("llama3").unwrap().path, foreign);

@@ -65,10 +65,7 @@ pub async fn install(
 
 /// Check if a pip engine is installed AND importable in its dedicated venv.
 /// Returns the venv interpreter path only when `python -c "import <pkg>"` succeeds.
-fn find_verified_pip_install(
-    engine: &EngineConfig,
-    data_dir: &std::path::Path,
-) -> Option<String> {
+fn find_verified_pip_install(engine: &EngineConfig, data_dir: &std::path::Path) -> Option<String> {
     let venv_python = venv_python_path(engine, data_dir);
     if !venv_python.is_file() {
         return None;
@@ -415,10 +412,7 @@ async fn install_via_pip(
     // Per-engine Python floor. Default 3.10 (works for vLLM 0.21, SGLang,
     // oMLX). TabbyAPI's `[cu13]` extra needs 3.12+. uv will auto-download
     // the interpreter if it's not already installed.
-    let python_pin: &str = engine
-        .min_python_version
-        .as_deref()
-        .unwrap_or("3.10");
+    let python_pin: &str = engine.min_python_version.as_deref().unwrap_or("3.10");
     if !venv_python.is_file() {
         println!(
             "  ⚙ Creating uv-managed venv (Python {}) at {}...",
@@ -610,11 +604,7 @@ async fn ensure_source_repo(
             // without `--branch` if the first try failed.
             let _ = std::fs::remove_dir_all(target_dir);
             let clone2 = tokio::process::Command::new("git")
-                .args([
-                    "clone",
-                    repo,
-                    target_dir.to_string_lossy().as_ref(),
-                ])
+                .args(["clone", repo, target_dir.to_string_lossy().as_ref()])
                 .status()
                 .await
                 .context("Failed to run `git clone` (full-depth fallback)")?;
@@ -1088,7 +1078,10 @@ fn copy_shared_libs_to_dir(
         }
         let dest = dest_dir.join(fname);
         std::fs::copy(&entry, &dest).with_context(|| {
-            format!("Failed to copy shared library {} to engines dir", entry.display())
+            format!(
+                "Failed to copy shared library {} to engines dir",
+                entry.display()
+            )
         })?;
         debug!(lib = ?fname, "Copied shared library alongside binary");
     }
@@ -1230,10 +1223,7 @@ pub async fn install_llamacpp_on_init(
 
     if plan.use_manifest {
         if let Err(reason) = crate::engine::variant::refuse_reason(plan.variant, profile) {
-            println!(
-                "  ⚠ Cannot install `{}`: {reason}",
-                plan.variant
-            );
+            println!("  ⚠ Cannot install `{}`: {reason}", plan.variant);
             println!("  ↪ Falling back to legacy Vulkan/CPU binary install...");
             return install_via_binary(engine, profile, data_dir).await;
         }
@@ -1368,8 +1358,7 @@ pub async fn install_variant(
     // the extracted payload into place. Failure leaves the existing
     // install (if any) untouched.
     let staging_root = data_dir.join("engines").join("llamacpp").join("staging");
-    std::fs::create_dir_all(&staging_root)
-        .context("Failed to create variant staging directory")?;
+    std::fs::create_dir_all(&staging_root).context("Failed to create variant staging directory")?;
     let archive_path = staging_root.join(format!("{}.tar.gz", variant.as_str()));
 
     download_with_sha256(&download_url, &archive_path, &entry.sha256).await?;
@@ -1549,11 +1538,7 @@ fn find_single_subdir(parent: &std::path::Path) -> Result<std::path::PathBuf> {
 /// Streaming download + on-the-fly sha256 verification. Mirrors the
 /// pattern in `crate::engine::uv::download_with_sha256` but lives here so
 /// the variant installer doesn't pull in the uv module's other helpers.
-async fn download_with_sha256(
-    url: &str,
-    dest: &std::path::Path,
-    expected_hex: &str,
-) -> Result<()> {
+async fn download_with_sha256(url: &str, dest: &std::path::Path, expected_hex: &str) -> Result<()> {
     use futures::StreamExt;
     use indicatif::{ProgressBar, ProgressStyle};
     use sha2::{Digest, Sha256};
@@ -1571,11 +1556,7 @@ async fn download_with_sha256(
         .with_context(|| format!("Failed to start download: {url}"))?;
 
     if !resp.status().is_success() {
-        bail!(
-            "Variant download failed: HTTP {} at {}",
-            resp.status(),
-            url
-        );
+        bail!("Variant download failed: HTTP {} at {}", resp.status(), url);
     }
 
     let total_size = resp.content_length().unwrap_or(0);
@@ -1587,8 +1568,8 @@ async fn download_with_sha256(
             .progress_chars("█▓░"),
     );
 
-    let mut file = std::fs::File::create(dest)
-        .with_context(|| format!("Cannot create {}", dest.display()))?;
+    let mut file =
+        std::fs::File::create(dest).with_context(|| format!("Cannot create {}", dest.display()))?;
     let mut stream = resp.bytes_stream();
     let mut hasher = Sha256::new();
     let mut got: u64 = 0;
@@ -1683,7 +1664,12 @@ mod tests {
             ("foo-bar[extras]==1.0", "foo_bar"),
         ] {
             let e = engine_with_pip_pkg("test", input);
-            assert_eq!(derive_import_name(&e).as_deref(), Some(*want), "input: {}", input);
+            assert_eq!(
+                derive_import_name(&e).as_deref(),
+                Some(*want),
+                "input: {}",
+                input
+            );
         }
     }
 

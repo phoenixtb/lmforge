@@ -104,15 +104,9 @@ fn list(registry: &EngineRegistry, profile: &HardwareProfile) -> Result<()> {
         }
     }
     println!();
-    println!(
-        "  • `default` tier engines are installed automatically by `lmforge init`."
-    );
-    println!(
-        "  • `opt-in`  tier engines require `lmforge engine install <id>` (uses ~5 GB)."
-    );
-    println!(
-        "  • `experimental` engines are never auto-selected; use `--engine <id>`."
-    );
+    println!("  • `default` tier engines are installed automatically by `lmforge init`.");
+    println!("  • `opt-in`  tier engines require `lmforge engine install <id>` (uses ~5 GB).");
+    println!("  • `experimental` engines are never auto-selected; use `--engine <id>`.");
     println!(
         "  • `lmforge engine install llamacpp --variant <cuda12|cuda13|vulkan|cpu>` \
          pulls a specific build."
@@ -124,10 +118,7 @@ fn list(registry: &EngineRegistry, profile: &HardwareProfile) -> Result<()> {
 /// Returns an empty string when no variant directory exists, so callers
 /// can suppress the row entirely. Active variant (per
 /// `variant::select`) is marked with `*`.
-fn llamacpp_variant_summary(
-    data_dir: &std::path::Path,
-    profile: &HardwareProfile,
-) -> String {
+fn llamacpp_variant_summary(data_dir: &std::path::Path, profile: &HardwareProfile) -> String {
     use crate::engine::variant::{LlamaVariant, VariantState, select};
 
     let cuda12 =
@@ -412,7 +403,10 @@ fn uninstall(
     }
 
     if targets.is_empty() {
-        println!("  ℹ No install artefacts found for `{}` — nothing to do.", id);
+        println!(
+            "  ℹ No install artefacts found for `{}` — nothing to do.",
+            id
+        );
         return Ok(());
     }
 
@@ -521,11 +515,16 @@ fn status(
     println!("  Format:     {}", engine.model_format);
     println!("  Embed:      {}", yes_no(engine.supports_embeddings));
     println!("  Rerank:     {}", yes_no(engine.supports_reranking));
+    println!("  Installed:  {}", if installed { "yes" } else { "no" });
     println!(
-        "  Installed:  {}",
-        if installed { "yes" } else { "no" }
+        "  Compatible: {}{}",
+        yes_no(compat),
+        if note.is_empty() {
+            String::new()
+        } else {
+            format!(" — {}", note)
+        }
     );
-    println!("  Compatible: {}{}", yes_no(compat), if note.is_empty() { String::new() } else { format!(" — {}", note) });
 
     if !installed && compat && engine.tier == EngineTier::OptIn {
         println!();

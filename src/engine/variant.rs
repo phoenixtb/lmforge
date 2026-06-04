@@ -263,10 +263,7 @@ pub fn init_target_variant(profile: &HardwareProfile) -> InitVariantPlan {
         }
 
         if cap_ok && driver < CUDA12_DRIVER_MIN {
-            let driver_label = profile
-                .cuda_driver_version
-                .as_deref()
-                .unwrap_or("unknown");
+            let driver_label = profile.cuda_driver_version.as_deref().unwrap_or("unknown");
             return InitVariantPlan {
                 variant: LlamaVariant::Vulkan,
                 use_manifest: false,
@@ -431,8 +428,10 @@ pub struct ManifestEntry {
 impl ManifestEntry {
     /// Resolve the download URL for this variant entry.
     pub fn download_url(&self, cdn_base: Option<&str>) -> anyhow::Result<String> {
-        if let (Some(base), Some(key)) = (cdn_base.filter(|b| is_usable_cdn_base(b)), self.object_key.as_deref())
-        {
+        if let (Some(base), Some(key)) = (
+            cdn_base.filter(|b| is_usable_cdn_base(b)),
+            self.object_key.as_deref(),
+        ) {
             let base = base.trim_end_matches('/');
             let key = key.trim_start_matches('/');
             return Ok(format!("{base}/{key}"));
@@ -454,8 +453,7 @@ fn is_usable_cdn_base(base: &str) -> bool {
         && !b.contains("YOURDOMAIN")
 }
 
-const BUNDLED_MANIFEST: &str =
-    include_str!("../../data/engines/llamacpp/variants-manifest.json");
+const BUNDLED_MANIFEST: &str = include_str!("../../data/engines/llamacpp/variants-manifest.json");
 
 impl Manifest {
     /// Parse the manifest baked into the binary at build time. Cheap —
@@ -646,12 +644,18 @@ mod tests {
 
     #[test]
     fn select_linux_amd_always_vulkan() {
-        assert_eq!(select(&linux_amd(), &VariantState::default()), LlamaVariant::Vulkan);
+        assert_eq!(
+            select(&linux_amd(), &VariantState::default()),
+            LlamaVariant::Vulkan
+        );
     }
 
     #[test]
     fn select_linux_cpu_only_picks_cpu() {
-        assert_eq!(select(&linux_cpu_only(), &VariantState::default()), LlamaVariant::Cpu);
+        assert_eq!(
+            select(&linux_cpu_only(), &VariantState::default()),
+            LlamaVariant::Cpu
+        );
     }
 
     #[test]
@@ -661,7 +665,10 @@ mod tests {
         // Silicon — Apple is not in the `has_gpu` set used by
         // `fallback_variant`, so we end up at `Cpu`. This is fine; the
         // result is never read on Darwin.
-        assert_eq!(select(&macos_arm(), &VariantState::default()), LlamaVariant::Cpu);
+        assert_eq!(
+            select(&macos_arm(), &VariantState::default()),
+            LlamaVariant::Cpu
+        );
     }
 
     #[test]
@@ -793,7 +800,9 @@ mod tests {
         for v in &m.variants {
             assert_eq!(v.sha256.len(), 64, "{} sha256 must be 64 hex chars", v.id);
             assert!(
-                v.sha256.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()),
+                v.sha256
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()),
                 "{} sha256 must be lowercase hex",
                 v.id
             );

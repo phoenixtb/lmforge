@@ -128,7 +128,11 @@ pub async fn run(config: &LmForgeConfig, action: ModelsAction) -> Result<()> {
 /// recompute size. Existing entries keep their `hf_repo`, `format`/`engine`,
 /// and `added_at`; brand-new directories get a best-effort format inferred from
 /// their files. With `prune`, index entries whose directory is gone are dropped.
-pub(crate) fn scan(data_dir: &std::path::Path, models_dir: &std::path::Path, prune: bool) -> Result<()> {
+pub(crate) fn scan(
+    data_dir: &std::path::Path,
+    models_dir: &std::path::Path,
+    prune: bool,
+) -> Result<()> {
     let mut idx = ModelIndex::load(data_dir, models_dir).unwrap_or_else(|_| ModelIndex {
         schema_version: 2,
         models: vec![],
@@ -172,11 +176,15 @@ pub(crate) fn scan(data_dir: &std::path::Path, models_dir: &std::path::Path, pru
         let format = prior
             .map(|e| e.format.clone())
             .unwrap_or_else(|| infer_format(&path));
-        let engine = prior.map(|e| e.engine.clone()).unwrap_or_else(|| format.clone());
+        let engine = prior
+            .map(|e| e.engine.clone())
+            .unwrap_or_else(|| format.clone());
         let added_at = prior
             .map(|e| e.added_at.clone())
             .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-        let id = prior.map(|e| e.id.clone()).unwrap_or_else(|| dir_name.clone());
+        let id = prior
+            .map(|e| e.id.clone())
+            .unwrap_or_else(|| dir_name.clone());
 
         if prior.is_some() {
             refreshed += 1;

@@ -464,12 +464,11 @@ pub async fn completions(State(state): State<AppState>, body: Bytes) -> impl Int
         Err(resp) => return resp.into_response(),
     };
 
-    let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir).unwrap_or_else(|_| {
-        crate::model::index::ModelIndex {
+    let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
+        .unwrap_or_else(|_| crate::model::index::ModelIndex {
             schema_version: 1,
             models: vec![],
-        }
-    });
+        });
     // Same engine-aware rewrite as `/v1/chat/completions`. See the comment
     // there for why vLLM is exempt.
     let needs_basename_rewrite = state.engine_config.id != "vllm";
@@ -733,12 +732,11 @@ pub async fn model_get(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
-    let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir).unwrap_or_else(|_| {
-        crate::model::index::ModelIndex {
+    let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
+        .unwrap_or_else(|_| crate::model::index::ModelIndex {
             schema_version: 1,
             models: vec![],
-        }
-    });
+        });
 
     let Some(m) = index.get(&id) else {
         let body = format!(
@@ -780,12 +778,11 @@ pub async fn model_get(
 
 /// `GET /v1/models` — List available models with capability metadata
 pub async fn models(State(state): State<AppState>) -> impl IntoResponse {
-    let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir).unwrap_or_else(|_| {
-        crate::model::index::ModelIndex {
+    let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
+        .unwrap_or_else(|_| crate::model::index::ModelIndex {
             schema_version: 1,
             models: vec![],
-        }
-    });
+        });
 
     let data: Vec<serde_json::Value> = index
         .list()

@@ -178,7 +178,12 @@ async fn resolve_hf_repo(
 
     let files = if format == ModelFormat::Gguf {
         let mut selected = select_gguf_files(&all_format_files, quant_hint);
-        append_vlm_sidecars(&all_format_files, &mut selected, catalog_shortcut, &repo_base);
+        append_vlm_sidecars(
+            &all_format_files,
+            &mut selected,
+            catalog_shortcut,
+            repo_base,
+        );
         selected
     } else {
         all_format_files
@@ -187,7 +192,11 @@ async fn resolve_hf_repo(
     // Derive a friendly dir name. Suffix the revision when set so
     // `turboderp/Qwen3-8B-exl3@6.0bpw` lands at `qwen3-8b-exl3-6.0bpw`
     // and two bpw variants of the same model don't collide on disk.
-    let base = repo_base.split('/').next_back().unwrap_or(repo_base).to_lowercase();
+    let base = repo_base
+        .split('/')
+        .next_back()
+        .unwrap_or(repo_base)
+        .to_lowercase();
     let dir_name = match revision {
         Some(rev) => format!("{}-{}", base, sanitize_revision(rev)),
         None => base,
@@ -383,11 +392,11 @@ fn append_vlm_sidecars(
     if !is_vlm_target(catalog_shortcut, repo) {
         return;
     }
-    if let Some(mmproj) = select_mmproj_sidecar(all_gguf) {
-        if !files.contains(&mmproj) {
-            debug!(mmproj = %mmproj, "Appending VLM mmproj sidecar to download list");
-            files.push(mmproj);
-        }
+    if let Some(mmproj) = select_mmproj_sidecar(all_gguf)
+        && !files.contains(&mmproj)
+    {
+        debug!(mmproj = %mmproj, "Appending VLM mmproj sidecar to download list");
+        files.push(mmproj);
     }
 }
 

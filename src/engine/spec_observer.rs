@@ -152,10 +152,7 @@ impl SpecObserver {
     /// lock is poisoned — both states should render in the UI as "no
     /// telemetry yet" rather than an error.
     pub fn snapshot(&self) -> SpecStats {
-        self.inner
-            .read()
-            .map(|s| s.clone())
-            .unwrap_or_default()
+        self.inner.read().map(|s| s.clone()).unwrap_or_default()
     }
 
     /// True when at least one sample has been captured. Lets the status
@@ -250,10 +247,10 @@ mod tests {
             "slot launch_slot_: id  0 | task 0 | processing task",
             "print_timings: load time =     124.30 ms",
             "",
-            "draft acceptance rate", // truncated
+            "draft acceptance rate",   // truncated
             "draft acceptance rate =", // missing value
             "draft acceptance rate = abc (1 accepted / 2 generated)",
-            "draft acceptance rate = 0.5", // no parens
+            "draft acceptance rate = 0.5",          // no parens
             "draft acceptance rate = 0.5 (5 / 10)", // wrong inside
         ];
         for l in &lines {

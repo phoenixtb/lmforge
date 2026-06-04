@@ -443,8 +443,12 @@ fn detect_nvfp4_quant(model_dir: &Path) -> bool {
     };
     // Check both common locations: `quantization_config.quant_method` (newer)
     // and the top-level `quantization` string (older models).
-    let q1 = v["quantization_config"]["quant_method"].as_str().unwrap_or("");
-    let q2 = v["quantization_config"]["quant_type"].as_str().unwrap_or("");
+    let q1 = v["quantization_config"]["quant_method"]
+        .as_str()
+        .unwrap_or("");
+    let q2 = v["quantization_config"]["quant_type"]
+        .as_str()
+        .unwrap_or("");
     let q3 = v["quantization"].as_str().unwrap_or("");
     let combined = format!("{} {} {}", q1, q2, q3).to_lowercase();
     combined.contains("nvfp4") || combined.contains("fp4")

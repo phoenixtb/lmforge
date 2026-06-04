@@ -109,10 +109,7 @@ fn launchd_plist_path() -> Result<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-fn install_launchd(
-    exe_path: &str,
-    data_dir: &std::path::Path,
-) -> Result<()> {
+fn install_launchd(exe_path: &str, data_dir: &std::path::Path) -> Result<()> {
     let plist_path = launchd_plist_path()?;
 
     if let Some(parent) = plist_path.parent() {
@@ -217,10 +214,7 @@ fn systemd_unit_path() -> Result<PathBuf> {
 }
 
 #[cfg(target_os = "linux")]
-fn install_systemd(
-    exe_path: &str,
-    data_dir: &std::path::Path,
-) -> Result<()> {
+fn install_systemd(exe_path: &str, data_dir: &std::path::Path) -> Result<()> {
     let unit_path = systemd_unit_path()?;
 
     if let Some(parent) = unit_path.parent() {
@@ -299,10 +293,7 @@ static WINDOWS_TASK_NAME: &str = "LMForge Daemon";
 /// at every user logon. Uses PowerShell's Register-ScheduledTask — no
 /// administrator elevation is required (RunLevel = Limited).
 #[cfg(windows)]
-fn install_scheduled_task(
-    exe_path: &str,
-    data_dir: &std::path::Path,
-) -> Result<()> {
+fn install_scheduled_task(exe_path: &str, data_dir: &std::path::Path) -> Result<()> {
     // Build the log directory so the task can redirect output immediately.
     let log_dir = data_dir.join("logs");
     std::fs::create_dir_all(&log_dir)?;
@@ -588,9 +579,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn service_installed_matches_plist_existence() {
         let installed = is_service_installed();
-        let plist_exists = launchd_plist_path()
-            .map(|p| p.exists())
-            .unwrap_or(false);
+        let plist_exists = launchd_plist_path().map(|p| p.exists()).unwrap_or(false);
         assert_eq!(
             installed, plist_exists,
             "is_service_installed() must agree with plist-file existence"
@@ -601,9 +590,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn service_installed_matches_unit_file_existence() {
         let installed = is_service_installed();
-        let unit_exists = systemd_unit_path()
-            .map(|p| p.exists())
-            .unwrap_or(false);
+        let unit_exists = systemd_unit_path().map(|p| p.exists()).unwrap_or(false);
         assert_eq!(
             installed, unit_exists,
             "is_service_installed() must agree with unit-file existence"
@@ -637,6 +624,9 @@ mod tests {
         assert_eq!(xml_escape("<tag>"), "&lt;tag&gt;");
         assert_eq!(xml_escape("a>b"), "a&gt;b");
         // Single/double quotes are not escaped (paths don't contain them).
-        assert_eq!(xml_escape("/usr/local/bin/lmforge"), "/usr/local/bin/lmforge");
+        assert_eq!(
+            xml_escape("/usr/local/bin/lmforge"),
+            "/usr/local/bin/lmforge"
+        );
     }
 }

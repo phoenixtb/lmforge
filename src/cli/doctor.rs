@@ -30,7 +30,10 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
 
 fn print_hardware(profile: &HardwareProfile) {
     println!("Hardware");
-    println!("  os                : {:?} ({:?})", profile.os, profile.os_family);
+    println!(
+        "  os                : {:?} ({:?})",
+        profile.os, profile.os_family
+    );
     println!("  arch              : {:?}", profile.arch);
     println!(
         "  gpu               : {:?}{}",
@@ -49,13 +52,26 @@ fn print_hardware(profile: &HardwareProfile) {
     println!(
         "  ram_gb            : {:.1}{}",
         profile.total_ram_gb,
-        if profile.unified_mem { " (unified)" } else { "" }
+        if profile.unified_mem {
+            " (unified)"
+        } else {
+            ""
+        }
     );
-    println!("  cpu               : {} ({} cores)", profile.cpu_model, profile.cpu_cores);
+    println!(
+        "  cpu               : {} ({} cores)",
+        profile.cpu_model, profile.cpu_cores
+    );
 
     if profile.gpu_vendor == crate::hardware::probe::GpuVendor::Nvidia {
-        let runtime = profile.cuda_runtime_version.as_deref().unwrap_or("(unknown)");
-        let driver_str = profile.cuda_driver_version.as_deref().unwrap_or("(unknown)");
+        let runtime = profile
+            .cuda_runtime_version
+            .as_deref()
+            .unwrap_or("(unknown)");
+        let driver_str = profile
+            .cuda_driver_version
+            .as_deref()
+            .unwrap_or("(unknown)");
         let driver_tuple = profile.driver_tuple;
         println!("  cuda_runtime      : {runtime}");
         println!("  cuda_driver       : {driver_str}");
@@ -80,7 +96,10 @@ fn print_hardware(profile: &HardwareProfile) {
             variant::CUDA13_DRIVER_MIN.2,
         );
     }
-    println!("  vulkan_loader     : {}", yesno(probe_vulkan_loader(profile.os)));
+    println!(
+        "  vulkan_loader     : {}",
+        yesno(probe_vulkan_loader(profile.os))
+    );
 }
 
 fn print_engine_state(
@@ -103,17 +122,40 @@ fn print_engine_state(
     ] {
         let installed = matches!(
             (v, state),
-            (LlamaVariant::Cuda12, VariantState { cuda12_installed: true, .. })
-                | (LlamaVariant::Cuda13, VariantState { cuda13_installed: true, .. })
-                | (LlamaVariant::Vulkan, VariantState { vulkan_installed: true, .. })
-                | (LlamaVariant::Cpu, VariantState { cpu_installed: true, .. })
+            (
+                LlamaVariant::Cuda12,
+                VariantState {
+                    cuda12_installed: true,
+                    ..
+                }
+            ) | (
+                LlamaVariant::Cuda13,
+                VariantState {
+                    cuda13_installed: true,
+                    ..
+                }
+            ) | (
+                LlamaVariant::Vulkan,
+                VariantState {
+                    vulkan_installed: true,
+                    ..
+                }
+            ) | (
+                LlamaVariant::Cpu,
+                VariantState {
+                    cpu_installed: true,
+                    ..
+                }
+            )
         );
         let marker = if v == active { "  ◀ ACTIVE" } else { "" };
         let refuse = if !installed {
             match variant::refuse_reason(v, profile) {
-                Ok(()) => "  (install with: lmforge engine install llamacpp --variant ".to_string()
-                    + v.as_str()
-                    + ")",
+                Ok(()) => {
+                    "  (install with: lmforge engine install llamacpp --variant ".to_string()
+                        + v.as_str()
+                        + ")"
+                }
                 Err(reason) => format!("  ({reason})"),
             }
         } else {
@@ -131,7 +173,10 @@ fn print_engine_state(
     // existing installs until C-3 ports them to the variant tree.
     let legacy = data_dir.join("engines").join("llama-server");
     if legacy.is_file() {
-        println!("  legacy_binary     : {}  (pre-v0.2.0 layout)", legacy.display());
+        println!(
+            "  legacy_binary     : {}  (pre-v0.2.0 layout)",
+            legacy.display()
+        );
     }
 
     if let Ok(manifest) = variant::Manifest::embedded() {

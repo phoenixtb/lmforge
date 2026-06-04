@@ -137,12 +137,13 @@ pub async fn run(
     // 6. (Optional) validate model if --model was passed
     if let Some(ref m) = model {
         // Verify the model exists in the index before starting so we fail fast
-        let idx = crate::model::index::ModelIndex::load(&data_dir, &models_dir).unwrap_or_else(|_| {
-            crate::model::index::ModelIndex {
-                schema_version: 1,
-                models: vec![],
-            }
-        });
+        let idx =
+            crate::model::index::ModelIndex::load(&data_dir, &models_dir).unwrap_or_else(|_| {
+                crate::model::index::ModelIndex {
+                    schema_version: 1,
+                    models: vec![],
+                }
+            });
         if idx.get(m).is_none() {
             anyhow::bail!(
                 "Model '{}' not found. Pull it first with:\n  lmforge pull {}",
@@ -670,10 +671,7 @@ fn is_loopback_bind(bind: &str) -> bool {
 ///   * Non-interactive (no TTY) → bails. We never want a systemd unit to
 ///     silently fall through to an unsupported engine.
 ///   * Interactive TTY → reads y/N from stdin.
-fn confirm_experimental_engine(
-    cfg: &engine::EngineConfig,
-    yes_flag: bool,
-) -> anyhow::Result<()> {
+fn confirm_experimental_engine(cfg: &engine::EngineConfig, yes_flag: bool) -> anyhow::Result<()> {
     use crate::engine::registry::EngineTier;
 
     if cfg.tier != EngineTier::Experimental {
@@ -688,9 +686,10 @@ fn confirm_experimental_engine(
         cfg.id
     );
 
-    if yes_flag || std::env::var("LMFORGE_YES_EXPERIMENTAL").is_ok_and(|v| {
-        matches!(v.as_str(), "1" | "true" | "yes")
-    }) {
+    if yes_flag
+        || std::env::var("LMFORGE_YES_EXPERIMENTAL")
+            .is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+    {
         warn!(engine_id = %cfg.id, "Experimental engine forced via flag/env");
         eprintln!("{banner}");
         return Ok(());
@@ -714,7 +713,10 @@ fn confirm_experimental_engine(
     if answer.trim().eq_ignore_ascii_case("y") {
         Ok(())
     } else {
-        anyhow::bail!("Aborted by user — experimental engine `{}` not started.", cfg.id);
+        anyhow::bail!(
+            "Aborted by user — experimental engine `{}` not started.",
+            cfg.id
+        );
     }
 }
 

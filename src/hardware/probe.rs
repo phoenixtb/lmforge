@@ -798,25 +798,16 @@ mod tests {
     #[test]
     fn test_derive_os_family_matrix() {
         // Native Linux: not WSL.
-        assert_eq!(
-            derive_os_family(Os::Linux, false),
-            OsFamily::Linux
-        );
+        assert_eq!(derive_os_family(Os::Linux, false), OsFamily::Linux);
         // WSL2: kernel reports Linux but we know better.
-        assert_eq!(
-            derive_os_family(Os::Linux, true),
-            OsFamily::WindowsWsl2
-        );
+        assert_eq!(derive_os_family(Os::Linux, true), OsFamily::WindowsWsl2);
         // Native Windows: `is_wsl` is meaningless (always false).
         assert_eq!(
             derive_os_family(Os::Windows, false),
             OsFamily::WindowsNative
         );
         // macOS.
-        assert_eq!(
-            derive_os_family(Os::Darwin, false),
-            OsFamily::Darwin
-        );
+        assert_eq!(derive_os_family(Os::Darwin, false), OsFamily::Darwin);
     }
 
     #[test]

@@ -62,11 +62,9 @@ impl EngineAdapter for LlamacppAdapter {
         // (`nvidia-smi` shells out twice) and could give inconsistent
         // results if the GPU state changed mid-spawn.
         let profile = resolve_profile_with_vram();
-        let variant_state =
-            crate::engine::installer::scan_variant_state(data_dir, &profile);
+        let variant_state = crate::engine::installer::scan_variant_state(data_dir, &profile);
         let active_variant = crate::engine::variant::select(&profile, &variant_state);
-        let variant_dir =
-            crate::engine::installer::variant_install_dir(data_dir, active_variant);
+        let variant_dir = crate::engine::installer::variant_install_dir(data_dir, active_variant);
         let variant_dir_opt = if variant_dir.is_dir() {
             Some(variant_dir.as_path())
         } else {
@@ -975,10 +973,7 @@ mod tests {
 
         // mtp_suffix is non-empty AND every flag in it is `--spec-*`.
         assert!(!mtp_suffix.is_empty());
-        let suffix_flags: Vec<_> = mtp_suffix
-            .iter()
-            .filter(|a| a.starts_with("--"))
-            .collect();
+        let suffix_flags: Vec<_> = mtp_suffix.iter().filter(|a| a.starts_with("--")).collect();
         assert!(!suffix_flags.is_empty());
         for f in suffix_flags {
             assert!(
