@@ -629,9 +629,7 @@ mod tests {
     const MLX_QUANT_SUFFIXES: &[&str] = &["4bit", "5bit", "6bit", "8bit", "f16"];
 
     fn mlx_shortcut_quant(shortcut: &str) -> Option<&str> {
-        shortcut
-            .split(':')
-            .find(|p| MLX_QUANT_SUFFIXES.contains(p))
+        shortcut.split(':').find(|p| MLX_QUANT_SUFFIXES.contains(p))
     }
 
     /// Returns `Some(reason)` when the shortcut quant does not match the repo name.
@@ -680,7 +678,10 @@ mod tests {
             if let Some(reason) = mlx_quant_mismatch(shortcut, repo) {
                 panic!("{shortcut} → {repo}: {reason}");
             }
-            repos.entry(repo.to_string()).or_default().push(shortcut.clone());
+            repos
+                .entry(repo.to_string())
+                .or_default()
+                .push(shortcut.clone());
         }
         for (repo, shortcuts) in repos {
             assert_eq!(

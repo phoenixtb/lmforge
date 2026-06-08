@@ -254,7 +254,7 @@ fi
 
 if (( DO_INTEGRATION )) && !(( E2E_ONLY )); then
     t_sec "Integration tests"
-    run_cargo_tests "cargo test --tests" "--tests"
+    run_cargo_tests "cargo test --tests" "--tests -- --test-threads=1"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -551,7 +551,7 @@ if (( DO_RERANK )); then
     if [[ "$SUPPORTS" != "true" ]]; then
         t_skip "POST /v1/rerank" "0" "active engine lacks reranking"
     else
-        if ! ensure_model "$RERANK_MODEL"; then
+        if ! ensure_model "$RERANK_MODEL" 1; then
             t_skip "POST /v1/rerank" "0" "$RERANK_MODEL unavailable"
         elif ! start_with_model "$RERANK_MODEL"; then
             t_fail "start $RERANK_MODEL" "0" ""

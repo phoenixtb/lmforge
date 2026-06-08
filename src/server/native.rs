@@ -1000,9 +1000,7 @@ pub async fn storage_apply(
             );
         }
     }
-    if data_dir_changed
-        && let Err(e) = ensure_writable_dir(&new_data_dir)
-    {
+    if data_dir_changed && let Err(e) = ensure_writable_dir(&new_data_dir) {
         return apply_err(
             StatusCode::BAD_REQUEST,
             &format!("New data_dir not usable: {e}"),
@@ -1098,7 +1096,9 @@ pub async fn storage_apply(
         for filename in &["models.json", "hardware.json"] {
             let src = old_data_dir.join(filename);
             let dst = new_data_dir.join(filename);
-            if src.exists() && let Err(e) = std::fs::copy(&src, &dst) {
+            if src.exists()
+                && let Err(e) = std::fs::copy(&src, &dst)
+            {
                 warn!(src = %src.display(), dst = %dst.display(), error = %e, "Copy failed during data_dir relocation");
             }
         }

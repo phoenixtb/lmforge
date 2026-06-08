@@ -312,8 +312,19 @@ fn extract_quant_hint(shortcut: &str) -> Option<&str> {
     shortcut.split(':').find(|part| {
         matches!(
             *part,
-            "4bit" | "5bit" | "6bit" | "8bit" | "q4" | "q5" | "q6" | "q8" | "f16" | "bf16"
-                | "mxfp4" | "mxfp8" | "fp16"
+            "4bit"
+                | "5bit"
+                | "6bit"
+                | "8bit"
+                | "q4"
+                | "q5"
+                | "q6"
+                | "q8"
+                | "f16"
+                | "bf16"
+                | "mxfp4"
+                | "mxfp8"
+                | "fp16"
         )
     })
 }
