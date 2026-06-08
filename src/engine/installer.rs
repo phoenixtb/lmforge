@@ -667,6 +667,7 @@ async fn install_via_binary(
 
     // Download the main binary archive
     download_file(&download_url, &archive_path).await?;
+    verify_asset_checksum(&asset_name, &archive_path)?;
 
     // On Windows + NVIDIA: also pull the matching CUDA-runtime DLL companion
     // archive. Without it, llama-server.exe fails with "cudart64_*.dll not
@@ -686,6 +687,7 @@ async fn install_via_binary(
             println!("  ⚙ Downloading CUDA runtime DLLs ({}):", cuda_variant);
             println!("    {}", cudart_url);
             download_file(&cudart_url, &cudart_path).await?;
+            verify_asset_checksum(&cudart_name, &cudart_path)?;
             Some(cudart_path)
         } else {
             warn!(
@@ -762,6 +764,70 @@ async fn install_via_binary(
         install_path: path,
         method_used: "binary".to_string(),
     })
+}
+
+/// Bundled SHA256SUMS for the upstream llama.cpp release assets. Used for a
+/// best-effort integrity check on the legacy binary-install path (Windows
+/// CUDA/Vulkan/CPU + Linux Vulkan/CPU), which downloads directly from the
+/// upstream GitHub release rather than our sha256-pinned R2 manifest.
+const LLAMACPP_SHA256SUMS: &str = include_str!("../../data/engines/llamacpp/SHA256SUMS");
+
+/// Expected lowercase-hex sha256 for a release asset by file name, parsed from
+/// the bundled `SHA256SUMS` (`<hex>  <name>` per line). `None` when unlisted.
+fn expected_sha256_for_asset(asset_name: &str) -> Option<String> {
+    for line in LLAMACPP_SHA256SUMS.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let hash = parts.next()?;
+        let name = parts.next()?;
+        if name == asset_name {
+            return Some(hash.to_ascii_lowercase());
+        }
+    }
+    None
+}
+
+/// Lowercase-hex sha256 of a file, streamed so we don't buffer 100s of MB.
+fn sha256_of_file(path: &std::path::Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path).context("open downloaded archive for hashing")?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).context("hash downloaded archive")?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Best-effort integrity check against the bundled `SHA256SUMS`. Bails on a
+/// mismatch when the asset is listed; warns and proceeds when it isn't (e.g.
+/// large Windows CUDA / cudart zips not yet in the sums file). This hardens
+/// the legacy GitHub download path without blocking variants we haven't
+/// pinned yet.
+fn verify_asset_checksum(asset_name: &str, path: &std::path::Path) -> Result<()> {
+    match expected_sha256_for_asset(asset_name) {
+        Some(expected) => {
+            let actual = sha256_of_file(path)?;
+            if actual != expected {
+                bail!(
+                    "Checksum mismatch for {asset_name}\n  expected: {expected}\n  actual:   {actual}\n\
+                     Refusing to install a corrupt or tampered engine archive."
+                );
+            }
+            info!(
+                asset = asset_name,
+                "sha256 verified against bundled SHA256SUMS"
+            );
+            Ok(())
+        }
+        None => {
+            warn!(
+                asset = asset_name,
+                "no bundled sha256 for this asset — skipping integrity check (download unverified)"
+            );
+            Ok(())
+        }
+    }
 }
 
 /// Download a file with progress reporting

@@ -248,6 +248,11 @@ jobs:
             curl -fsSL https://github.com/${{ env.REPO }}/releases/latest/download/install-core.sh | bash
             ```
 
+            ### Core on Windows (PowerShell)
+            ```powershell
+            irm https://github.com/${{ env.REPO }}/releases/latest/download/install.ps1 | iex
+            ```
+
             ### UI (desktop app) — install Core first
             ```bash
             curl -fsSL https://github.com/${{ env.REPO }}/releases/latest/download/install-ui.sh | bash
@@ -270,3 +275,4 @@ jobs:
             scripts/uninstall-core.sh
             scripts/install-ui.sh
             scripts/uninstall-ui.sh
+            install.ps1
