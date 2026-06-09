@@ -5,7 +5,7 @@
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
   export let entry: CatalogEntry;
-  /** Set of installed model IDs / HF repos — for "Already installed" indicator */
+  /** Set of installed catalog shortcuts (model ids) — for "Already installed" indicator */
   export let installedIds: Set<string> = new Set();
   /** Called after a successful pull so the parent can refresh the installed list */
   export let onPulled: () => void = () => {};
@@ -18,7 +18,7 @@
   let cancelFn: (() => void) | null = null;
   let pullError: string | null = null;
 
-  $: installed = installedIds.has(entry.shortcut) || installedIds.has(entry.hf_repo);
+  $: installed = installedIds.has(entry.shortcut);
 
   // ── Global pull reflection ────────────────────────────────────────────────
   // The daemon publishes the in-flight pull in /lf/status (→ statusStore).

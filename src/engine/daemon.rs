@@ -42,10 +42,21 @@ pub fn is_process_running(pid: u32) -> bool {
         // kill(pid, 0) checks if process exists without sending a signal
         unsafe { libc::kill(pid as i32, 0) == 0 }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        // On non-Unix, assume running if PID file exists
-        true
+        std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .map(|o| {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                stdout.contains(&pid.to_string()) && !stdout.contains("No tasks")
+            })
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
     }
 }
 

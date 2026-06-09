@@ -86,11 +86,8 @@
     return true;
   });
 
-  // Installed IDs + HF repos for "Already installed" state across both tabs
-  $: installedIds = new Set<string>([
-    ...models.map((m) => m.id),
-    ...models.filter((m) => m.hf_repo).map((m) => m.hf_repo as string),
-  ]);
+  // Installed catalog shortcuts only — hf_repo is shared across quants in a family.
+  $: installedIds = new Set<string>(models.map((m) => m.id));
 
   // Real HF sizes: populated in the background after catalog loads
   // key = hf_repo, value = bytes

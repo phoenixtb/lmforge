@@ -1,4 +1,5 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
+use std::process::Stdio;
 use tracing::{info, warn};
 
 use crate::config::LmForgeConfig;
@@ -34,6 +35,19 @@ pub async fn run(
     opts: StartOptions,
     external_status_tx: Option<tokio::sync::broadcast::Sender<crate::engine::manager::EngineState>>,
 ) -> Result<()> {
+    // Daemon mode (default): spawn a detached `start --foreground` child and exit
+    // once /health responds. Tauri embed passes `external_status_tx` and always runs
+    // in-process; service units invoke `--foreground` directly.
+    if !opts.foreground && external_status_tx.is_none() {
+        let api_port = opts.port.unwrap_or(config.port);
+        let bind_addr = opts
+            .bind
+            .clone()
+            .or_else(|| std::env::var("LMFORGE_BIND").ok().filter(|s| !s.is_empty()))
+            .unwrap_or_else(|| config.bind_address.clone());
+        return spawn_detached_daemon(api_port, &bind_addr).await;
+    }
+
     let StartOptions {
         model,
         port,
@@ -599,6 +613,98 @@ async fn is_daemon_running(port: u16) -> bool {
 
     let resp = std::str::from_utf8(&buf[..n]).unwrap_or("");
     resp.starts_with("HTTP/1") && resp.contains(" 2")
+}
+
+/// Build argv for a foreground child, preserving global flags (`--data-dir`, etc.).
+fn foreground_child_argv() -> Vec<String> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "start" {
+            out.push(args[i].clone());
+            if !args[i + 1..].iter().any(|a| a == "--foreground") {
+                out.push("--foreground".to_string());
+            }
+            i += 1;
+            while i < args.len() {
+                out.push(args[i].clone());
+                i += 1;
+            }
+            break;
+        }
+        out.push(args[i].clone());
+        i += 1;
+    }
+    out
+}
+
+/// Default daemon mode: fork a detached `start --foreground` child, wait for /health, exit.
+async fn spawn_detached_daemon(api_port: u16, bind_addr: &str) -> Result<()> {
+    if is_daemon_running(api_port).await {
+        println!(
+            "✓ LMForge already running at http://{}:{}",
+            bind_addr, api_port
+        );
+        println!("  Use `lmforge status` to see running models.");
+        return Ok(());
+    }
+
+    let argv = foreground_child_argv();
+    let exe = argv
+        .first()
+        .cloned()
+        .or_else(|| std::env::current_exe().ok().map(|p| p.to_string_lossy().into_owned()))
+        .context("Could not resolve lmforge executable path")?;
+
+    let mut cmd = std::process::Command::new(&exe);
+    if argv.len() > 1 {
+        cmd.args(&argv[1..]);
+    } else {
+        cmd.args(["start", "--foreground"]);
+    }
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+    }
+
+    let child = cmd
+        .spawn()
+        .context("Failed to spawn detached LMForge daemon")?;
+    info!(pid = child.id(), "Detached daemon child spawned");
+
+    println!("Starting LMForge daemon...");
+    let max_attempts = 120; // 60s
+    for i in 0..max_attempts {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if is_daemon_running(api_port).await {
+            println!(
+                "\n✓ LMForge started at http://{}:{}",
+                bind_addr, api_port
+            );
+            println!("  Health: http://{}:{}/health", bind_addr, api_port);
+            return Ok(());
+        }
+        if i % 4 == 3 {
+            print!(".");
+            use std::io::Write;
+            std::io::stdout().flush().ok();
+        }
+    }
+
+    anyhow::bail!(
+        "Daemon did not become healthy within 60s. Check {}logs/daemon.out.log or run `lmforge start --foreground` to see errors.",
+        std::env::var("USERPROFILE")
+            .map(|h| format!("{h}/.lmforge/"))
+            .unwrap_or_else(|_| "~/.lmforge/".to_string())
+    )
 }
 
 async fn is_port_free(port: u16) -> bool {

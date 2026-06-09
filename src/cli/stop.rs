@@ -37,6 +37,12 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
                     libc::kill(pid as i32, libc::SIGTERM);
                 }
             }
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/PID", &pid.to_string()])
+                    .output();
+            }
 
             // Wait a bit then check
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -48,6 +54,12 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
                     unsafe {
                         libc::kill(pid as i32, libc::SIGKILL);
                     }
+                }
+                #[cfg(windows)]
+                {
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/PID", &pid.to_string(), "/F"])
+                        .output();
                 }
             }
 
