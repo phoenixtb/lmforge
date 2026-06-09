@@ -166,12 +166,15 @@ fn build_app_state(
         adapter: Arc::new(lmforge::engine::adapter::EngineAdapterInstance::Omlx(
             lmforge::engine::adapters::omlx::OmlxAdapter::default(),
         )),
+        models_dir: data_dir.join("models"),
         data_dir,
         api_key: None,
         bind_address: "127.0.0.1:11430".to_string(),
         config: Arc::new(RwLock::new(cfg)),
         command_tx: cmd_tx,
         status_tx: status_tx.clone(),
+        pull_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        active_pull: Arc::new(RwLock::new(None)),
     };
 
     spawn_fake_manager(port_map, cmd_rx);
@@ -701,12 +704,15 @@ async fn tc09_request_body_limit_enforced_and_configurable() {
         adapter: Arc::new(lmforge::engine::adapter::EngineAdapterInstance::Omlx(
             lmforge::engine::adapters::omlx::OmlxAdapter::default(),
         )),
+        models_dir: tmp.path().join("models"),
         data_dir: tmp.path().to_path_buf(),
         api_key: None,
         bind_address: "127.0.0.1:11430".to_string(),
         config: Arc::new(RwLock::new(cfg)),
         command_tx: cmd_tx,
         status_tx,
+        pull_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        active_pull: Arc::new(RwLock::new(None)),
     };
     spawn_fake_manager(port_map, cmd_rx);
 
@@ -864,4 +870,105 @@ async fn tc13_logs_tail_rejects_path_traversal() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     println!("✓ TC-13 passed — invalid stream values rejected");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC-14: GET /lf/model/list resolves a v2 (relative) index against a custom
+//        models_dir decoupled from data_dir — the virtio-fs sharing scenario.
+// ─────────────────────────────────────────────────────────────────────────────
+#[tokio::test]
+async fn tc14_model_list_resolves_relative_index_against_custom_models_dir() {
+    use axum::body::to_bytes;
+    use lmforge::server::auth::AuthPolicy;
+    use lmforge::server::concurrency::ConcurrencyLimit;
+
+    // data_dir and models_dir are intentionally different directories.
+    let data_tmp = tempfile::tempdir().unwrap();
+    let models_tmp = tempfile::tempdir().unwrap();
+    let data_dir = data_tmp.path().to_path_buf();
+    let models_dir = models_tmp.path().to_path_buf();
+
+    // A model living under the (custom) models_dir.
+    let model_subdir = models_dir.join("qwen3-test");
+    std::fs::create_dir_all(&model_subdir).unwrap();
+
+    // Persist via the index API so the on-disk form is the v2 relative shape.
+    let idx = ModelIndex {
+        schema_version: 2,
+        models: vec![ModelEntry {
+            id: "qwen3:test".to_string(),
+            path: model_subdir.to_string_lossy().to_string(),
+            format: "mlx".to_string(),
+            engine: "mlx".to_string(),
+            hf_repo: None,
+            size_bytes: 0,
+            capabilities: ModelCapabilities {
+                chat: true,
+                ..Default::default()
+            },
+            added_at: "2025-01-01".to_string(),
+        }],
+    };
+    idx.save(&data_dir, &models_dir).unwrap();
+
+    // On disk the path must be relative (portable).
+    let raw = std::fs::read_to_string(data_dir.join("models.json")).unwrap();
+    assert!(
+        raw.contains("\"qwen3-test\""),
+        "expected relative path on disk: {raw}"
+    );
+
+    // Build AppState with the decoupled dirs.
+    let (cmd_tx, cmd_rx) = mpsc::channel(64);
+    let (status_tx, _) = broadcast::channel(16);
+    let engine_config = fake_engine_config();
+    let engine_state = Arc::new(RwLock::new(EngineState {
+        overall_status: EngineStatus::Ready,
+        engine_id: engine_config.id.clone(),
+        engine_version: engine_config.version.clone(),
+        running_models: HashMap::new(),
+        metrics: EngineMetrics::default(),
+        last_errors: HashMap::new(),
+    }));
+    let state = AppState {
+        engine_state,
+        engine_config,
+        adapter: Arc::new(lmforge::engine::adapter::EngineAdapterInstance::Omlx(
+            lmforge::engine::adapters::omlx::OmlxAdapter::default(),
+        )),
+        models_dir: models_dir.clone(),
+        data_dir: data_dir.clone(),
+        api_key: None,
+        bind_address: "127.0.0.1:11430".to_string(),
+        config: Arc::new(RwLock::new(lmforge::config::LmForgeConfig::default())),
+        command_tx: cmd_tx,
+        status_tx,
+        pull_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        active_pull: Arc::new(RwLock::new(None)),
+    };
+    spawn_fake_manager(HashMap::new(), cmd_rx);
+
+    let auth_policy = Arc::new(AuthPolicy::from_config(None, &[], true));
+    let concurrency = ConcurrencyLimit::new(0, 0);
+    let router = lmforge::server::build_router(state, auth_policy, concurrency, 1024 * 1024);
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/lf/model/list")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let v: Value = serde_json::from_slice(&body).unwrap();
+
+    // The API must return the ABSOLUTE path resolved against the custom models_dir.
+    let returned = v["models"][0]["path"].as_str().unwrap();
+    assert_eq!(returned, model_subdir.to_string_lossy());
+    assert!(
+        returned.starts_with(&*models_dir.to_string_lossy()),
+        "list path must resolve under custom models_dir: {returned}"
+    );
+
+    println!("✓ TC-14 passed — relative index resolves against custom models_dir");
 }

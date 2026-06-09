@@ -12,10 +12,11 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     let data_dir = config.data_dir();
     // Always ensure all expected subdirs exist — create_dir_all is idempotent.
     // This also re-creates any dirs that uninstall-core.sh removed (e.g. engines/).
+    let models_dir = config.models_dir();
     std::fs::create_dir_all(data_dir.join("engines"))
         .with_context(|| format!("Cannot create engines dir: {}", data_dir.display()))?;
-    std::fs::create_dir_all(data_dir.join("models"))
-        .with_context(|| format!("Cannot create models dir: {}", data_dir.display()))?;
+    std::fs::create_dir_all(&models_dir)
+        .with_context(|| format!("Cannot create models dir: {}", models_dir.display()))?;
     std::fs::create_dir_all(data_dir.join("logs"))
         .with_context(|| format!("Cannot create logs dir: {}", data_dir.display()))?;
     info!("Ensured data directories at {}", data_dir.display());
@@ -31,13 +32,14 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
         .with_context(|| format!("Cannot write mlx.json to {}", catalogs_dir.display()))?;
 
     let safetensors_defaults = include_str!("../../data/catalogs/safetensors.json");
-    std::fs::write(catalogs_dir.join("safetensors.json"), safetensors_defaults)
-        .with_context(|| {
+    std::fs::write(catalogs_dir.join("safetensors.json"), safetensors_defaults).with_context(
+        || {
             format!(
                 "Cannot write safetensors.json to {}",
                 catalogs_dir.display()
             )
-        })?;
+        },
+    )?;
 
     let gguf_defaults = include_str!("../../data/catalogs/gguf.json");
     std::fs::write(catalogs_dir.join("gguf.json"), gguf_defaults)
@@ -65,7 +67,11 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     info!(path = %profile_path.display(), "Hardware profile saved");
 
     // Print summary
-    println!("  OS:         {:?}{}", profile.os, if profile.is_wsl { " (WSL2)" } else { "" });
+    println!(
+        "  OS:         {:?}{}",
+        profile.os,
+        if profile.is_wsl { " (WSL2)" } else { "" }
+    );
     println!("  Arch:       {:?}", profile.arch);
     println!(
         "  GPU:        {:?}{}{}",
@@ -81,10 +87,7 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
         }
     );
     if let Some(ref runtime) = profile.cuda_runtime_version {
-        let driver = profile
-            .cuda_driver_version
-            .as_deref()
-            .unwrap_or("unknown");
+        let driver = profile.cuda_driver_version.as_deref().unwrap_or("unknown");
         println!("  CUDA:       runtime {} | driver {}", runtime, driver);
     }
     println!(
@@ -139,26 +142,47 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     println!("  Install:  {}", selected.install_method);
 
     // For binary-install engines (currently just llama.cpp), preview the exact
-    // upstream asset we're about to fetch. Lets users sanity-check the GPU vs
-    // CPU choice before the download eats 50-200 MB of disk + bandwidth, and
-    // catches LMFORGE_LLAMACPP_VARIANT overrides in real time.
-    if selected.install_method == "binary"
-        && let Ok((variant, ext)) = crate::engine::installer::resolve_platform(&profile)
-    {
-        println!("  Variant:  {}.{}", variant, ext);
+    // build we're about to fetch. On Linux this follows the variant-aware init
+    // plan (cuda12 manifest tarball when hardware allows); on Windows it still
+    // uses the legacy upstream asset naming from resolve_platform.
+    if selected.install_method == "binary" {
+        if profile.os == crate::hardware::probe::Os::Linux {
+            let plan = crate::engine::variant::init_target_variant(&profile);
+            println!(
+                "  Variant:  {} ({})",
+                plan.variant,
+                if plan.use_manifest {
+                    "manifest tarball"
+                } else {
+                    "legacy upstream"
+                }
+            );
+            if let Some(ref hint) = plan.hint {
+                println!("            {hint}");
+            }
+        } else if let Ok((variant, ext)) = crate::engine::installer::resolve_platform(&profile) {
+            println!("  Variant:  {}.{}", variant, ext);
+        }
         if let Ok(override_val) = std::env::var("LMFORGE_LLAMACPP_VARIANT")
             && !override_val.eq_ignore_ascii_case("auto")
         {
-            println!("            (forced by LMFORGE_LLAMACPP_VARIANT={})", override_val);
+            println!("            (forced by LMFORGE_LLAMACPP_VARIANT={override_val})");
         }
     }
     println!();
 
     // Engine installation
     println!("⚙ Installing engine...");
-    let install_result = crate::engine::installer::install(selected, &profile, &data_dir)
-        .await
-        .with_context(|| format!("Engine installation failed for {}", selected.id))?;
+    let install_result =
+        if selected.id == "llamacpp" && profile.os == crate::hardware::probe::Os::Linux {
+            crate::engine::installer::install_llamacpp_on_init(selected, &profile, &data_dir)
+                .await
+                .with_context(|| format!("Engine installation failed for {}", selected.id))?
+        } else {
+            crate::engine::installer::install(selected, &profile, &data_dir)
+                .await
+                .with_context(|| format!("Engine installation failed for {}", selected.id))?
+        };
     println!("  Method: {}", install_result.method_used);
     println!();
 

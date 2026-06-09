@@ -47,13 +47,6 @@ impl SglangAdapter {
             PathBuf::from(&self.executable)
         }
     }
-
-    /// Derive `data_dir` from a model directory of shape
-    /// `<data_dir>/models/<model_id>/`. Used by [`pull_model`] which only
-    /// receives `dest_dir`.
-    fn data_dir_from_model_dir(model_dir: &Path) -> Option<&Path> {
-        model_dir.parent().and_then(|p| p.parent())
-    }
 }
 
 impl EngineAdapter for SglangAdapter {
@@ -74,6 +67,7 @@ impl EngineAdapter for SglangAdapter {
         &self,
         repo: &str,
         dest_dir: &Path,
+        data_dir: &Path,
         progress_tx: Sender<DownloadProgress>,
     ) -> Result<bool> {
         std::fs::create_dir_all(dest_dir)
@@ -100,9 +94,7 @@ impl EngineAdapter for SglangAdapter {
             dest = dest_dir.to_string_lossy(),
         );
 
-        let python = Self::data_dir_from_model_dir(dest_dir)
-            .map(|d| self.resolve_python(d))
-            .unwrap_or_else(|| PathBuf::from(&self.executable));
+        let python = self.resolve_python(data_dir);
         debug!(python = %python.display(), "SGLang pull: using interpreter");
 
         let output = Command::new(&python)
@@ -231,6 +223,8 @@ impl EngineAdapter for SglangAdapter {
         Ok(ActiveEngine {
             process: child,
             model_id: model_id.to_string(),
+            spec_observer: None,
+            spec_mode: crate::engine::speculative::SpecMode::Off,
         })
     }
 
@@ -400,14 +394,6 @@ mod tests {
         let adapter = SglangAdapter::default();
         let resolved = adapter.resolve_python(&data_dir);
         assert_eq!(resolved, PathBuf::from("python3"));
-    }
-
-    #[test]
-    fn test_data_dir_from_model_dir() {
-        // Shape: <data_dir>/models/<model_id>
-        let model_dir = Path::new("/home/me/.lmforge/models/qwen3-8b");
-        let data_dir = SglangAdapter::data_dir_from_model_dir(model_dir).unwrap();
-        assert_eq!(data_dir, Path::new("/home/me/.lmforge"));
     }
 
     #[test]

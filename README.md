@@ -115,18 +115,19 @@ lmforge service install        # register Scheduled Task (auto-starts at logon)
 What the install script does on macOS/Linux:
 1. Downloads the pre-built `lmforge` binary for your platform/arch (~5 MB)
 2. Installs to `/usr/local/bin/lmforge`
-3. Runs `lmforge init` — probes hardware, pulls the matching inference engine
-   from upstream:
+3. Runs `lmforge init` — probes hardware, pulls the matching inference engine:
    - **macOS** → oMLX (MLX on Metal) via Homebrew
-   - **Linux / Windows** → `llama.cpp` b9351; Vulkan build for any GPU
-     (NVIDIA + AMD + Intel iGPU) on Linux; CUDA build for NVIDIA on
-     Windows; CPU build for GPU-less machines. ~70 MB at first run.
+   - **Linux NVIDIA (driver ≥ r570)** → custom **cuda12** tarball (~1 GB, bundled
+     CUDA runtime + llama.cpp). Opt-in **cuda13** via
+     `lmforge engine install llamacpp --variant cuda13`.
+   - **Linux NVIDIA (below r570) / AMD / Intel** → Vulkan upstream build
+   - **Linux / Windows, no GPU** → CPU build
+   - **Windows NVIDIA** → upstream CUDA prebuilts
 4. Registers a system service (`launchd` on macOS, `systemd --user` on Linux)
 5. Starts the daemon immediately
 
-Override the engine variant by exporting `LMFORGE_LLAMACPP_VARIANT=cpu`
-(or `=gpu`) before running `lmforge init` — useful for headless VMs and
-testing.
+Override variant: `LMFORGE_LLAMACPP_VARIANT={cuda12,cuda13,cpu,gpu}` before
+`lmforge init`. Run `lmforge doctor` to see installed variants and which is active.
 
 To pin a specific version:
 ```bash
@@ -1309,8 +1310,12 @@ Run this whenever you add or change a catalog entry.
 |---|---|---|
 | `RUST_LOG` | `info` | Log verbosity: `error`, `warn`, `info`, `debug`, `trace` |
 | `LMFORGE_CONFIG` | `~/.lmforge/config.toml` | Override config file path |
-| `LMFORGE_DATA_DIR` | `~/.lmforge` | Override the entire data directory |
+| `LMFORGE_DATA_DIR` | `~/.lmforge` | Override the data directory (engines, logs, `models.json`). Also settable via `--data-dir` or `data_dir` in config.toml. |
+| `LMFORGE_MODELS_DIR` | `{data_dir}/models` | Override the model **weights** directory only. Also settable via `--models-dir` or `models_dir` in config.toml. Point this at a shared volume to reuse one weights library across machines. |
 | `LMFORGE_PORT` | `11430` | Override the API port |
+
+Precedence for the storage dirs: CLI flag > env var > config.toml > default.
+Changing them via the UI / `POST /lf/config` is persisted but takes effect on the next daemon restart.
 
 ---
 
@@ -1334,6 +1339,26 @@ Everything LMForge writes at runtime lives in `~/.lmforge/`:
 └── logs/                # Daemon log files
     └── lmforge.log
 ```
+
+`models/` can be relocated independently of the data root via `models_dir`
+(`LMFORGE_MODELS_DIR` / `--models-dir` / config). The rest of the layout stays
+under `data_dir`.
+
+#### Sharing a weights library across VMs (virtio-fs)
+
+Keep `data_dir` local per machine (engines, venvs, logs, index) and share only
+the weights volume:
+
+```
+Host:     /srv/lmforge-models        (virtio-fs export)
+Linux VM: LMFORGE_MODELS_DIR=/mnt/lmforge-models
+Windows VM: LMFORGE_MODELS_DIR=D:\lmforge-models
+```
+
+The index (`models.json`) stores per-model paths **relative to `models_dir`**
+(schema v2), so the same physical volume works across OSes with different mount
+points. On a freshly pointed VM, run `lmforge models scan` to (re)build the
+index from the weights already present on the volume.
 
 ---
 

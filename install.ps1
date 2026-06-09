@@ -119,7 +119,8 @@ Info "Registering Windows Scheduled Task (auto-start at logon)..."
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 Write-Host ""
-Success "LMForge $($Latest ?? 'dev') installed successfully!"
+$VersionLabel = if ($Latest) { $Latest } else { "dev" }
+Success "LMForge $VersionLabel installed successfully!"
 Write-Host ""
 Write-Host "  The daemon is running and starts automatically at logon." -ForegroundColor White
 Write-Host "  API:  http://127.0.0.1:11430" -ForegroundColor White

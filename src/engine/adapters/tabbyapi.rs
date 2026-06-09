@@ -92,12 +92,6 @@ impl TabbyApiAdapter {
         data_dir.join("engines").join("tabbyapi").join("source")
     }
 
-    /// Mirrors vLLM's helper — `dest_dir` is always shaped
-    /// `<data_dir>/models/<...>/`.
-    fn data_dir_from_model_dir(model_dir: &Path) -> Option<&Path> {
-        model_dir.parent().and_then(|p| p.parent())
-    }
-
     fn cache_mode() -> String {
         std::env::var(ENV_CACHE_MODE)
             .ok()
@@ -123,6 +117,7 @@ impl EngineAdapter for TabbyApiAdapter {
         &self,
         repo: &str,
         dest_dir: &Path,
+        data_dir: &Path,
         progress_tx: Sender<DownloadProgress>,
     ) -> Result<bool> {
         std::fs::create_dir_all(dest_dir)
@@ -162,9 +157,7 @@ impl EngineAdapter for TabbyApiAdapter {
             rev = revision_arg,
         );
 
-        let python = Self::data_dir_from_model_dir(dest_dir)
-            .map(|d| self.resolve_python(d))
-            .unwrap_or_else(|| PathBuf::from("python3"));
+        let python = self.resolve_python(data_dir);
         debug!(python = %python.display(), "TabbyAPI pull: using interpreter");
 
         let output = Command::new(&python)
@@ -175,7 +168,10 @@ impl EngineAdapter for TabbyApiAdapter {
 
         if output.status.success() {
             let total_bytes = dir_size(dest_dir);
-            info!(repo, total_bytes, "TabbyAPI: huggingface_hub pull completed");
+            info!(
+                repo,
+                total_bytes, "TabbyAPI: huggingface_hub pull completed"
+            );
 
             let _ = progress_tx
                 .send(DownloadProgress::Completed {
@@ -264,7 +260,10 @@ impl EngineAdapter for TabbyApiAdapter {
             .join("work")
             .join(safe_dir_component(model_id));
         std::fs::create_dir_all(&work_dir).with_context(|| {
-            format!("Failed to create TabbyAPI work dir at {}", work_dir.display())
+            format!(
+                "Failed to create TabbyAPI work dir at {}",
+                work_dir.display()
+            )
         })?;
         let config_path = work_dir.join("config.yml");
         let config_yaml = render_config_yaml(
@@ -274,9 +273,8 @@ impl EngineAdapter for TabbyApiAdapter {
             &cache_mode,
             chunk_size,
         );
-        std::fs::write(&config_path, config_yaml).with_context(|| {
-            format!("Failed to write config.yml at {}", config_path.display())
-        })?;
+        std::fs::write(&config_path, config_yaml)
+            .with_context(|| format!("Failed to write config.yml at {}", config_path.display()))?;
         info!(config = %config_path.display(), "TabbyAPI config rendered");
 
         // PATH injection — same rationale as vLLM. Some ExLlamaV3 helper
@@ -325,6 +323,8 @@ impl EngineAdapter for TabbyApiAdapter {
         Ok(ActiveEngine {
             process: child,
             model_id: model_id.to_string(),
+            spec_observer: None,
+            spec_mode: crate::engine::speculative::SpecMode::Off,
         })
     }
 
@@ -504,10 +504,7 @@ mod tests {
     #[test]
     fn yaml_quote_escapes_specials() {
         assert_eq!(yaml_quote("simple"), "\"simple\"");
-        assert_eq!(
-            yaml_quote(r#"path\with"quotes"#),
-            r#""path\\with\"quotes""#
-        );
+        assert_eq!(yaml_quote(r#"path\with"quotes"#), r#""path\\with\"quotes""#);
     }
 
     #[test]
@@ -516,10 +513,7 @@ mod tests {
             safe_dir_component("RedHatAI/Qwen3-1.7B"),
             "RedHatAI_Qwen3-1.7B"
         );
-        assert_eq!(
-            safe_dir_component("vendor:1.0/model"),
-            "vendor_1.0_model"
-        );
+        assert_eq!(safe_dir_component("vendor:1.0/model"), "vendor_1.0_model");
     }
 
     #[test]
@@ -599,7 +593,8 @@ mod tests {
 
     #[test]
     fn extract_python_error_picks_last_nonblank() {
-        let stderr = "Traceback (most recent call last):\n  File ...\nValueError: model not found\n\n";
+        let stderr =
+            "Traceback (most recent call last):\n  File ...\nValueError: model not found\n\n";
         assert_eq!(extract_python_error(stderr), "ValueError: model not found");
     }
 

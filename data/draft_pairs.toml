@@ -1,0 +1,22 @@
+# Curated draft-model pairings for speculative decoding when MTP is unavailable.
+# Hard requirement: target and draft must share tokenizer / vocabulary family.
+# Only pairs with a draft model present in models.json are activated at runtime.
+
+[[pair]]
+target_family = "qwen3.x"
+draft_id      = "qwen3:0.6b:4bit"
+note          = "Qwen3 tokenizer family — use when MTP tensors are absent."
+
+# Llama 3.x draft requires a small Instruct GGUF in the catalog (e.g. Llama-3.2-1B).
+# Uncomment once `llama3.2:1b:4bit` (or equivalent) is added to gguf.json.
+# [[pair]]
+# target_family = "llama-3.x"
+# draft_id      = "llama3.2:1b:4bit"
+# note          = "Shared Llama-3 tokenizer."
+
+# Qwen2.5 smallest catalog entry today is 7B — too heavy as a universal draft.
+# Add a ≤1.5B Qwen2.5 shortcut before enabling auto draft-model for this family.
+# [[pair]]
+# target_family = "qwen2.5"
+# draft_id      = "qwen2.5:0.5b:4bit"
+# note          = "Same Qwen2.5 tokenizer family."

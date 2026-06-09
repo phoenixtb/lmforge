@@ -251,11 +251,7 @@ impl EngineRegistry {
     ///
     /// Returns the config or an error explaining *why* the requested engine
     /// can't run here.
-    pub fn select_explicit(
-        &self,
-        id: &str,
-        profile: &HardwareProfile,
-    ) -> Result<&EngineConfig> {
+    pub fn select_explicit(&self, id: &str, profile: &HardwareProfile) -> Result<&EngineConfig> {
         let engine = self
             .engines
             .iter()
@@ -564,14 +560,19 @@ mod tests {
     #[test]
     fn test_tabbyapi_is_opt_in_with_correct_gates() {
         let registry = EngineRegistry::load(None).unwrap();
-        let tabby = registry.get("tabbyapi").expect("tabbyapi must be registered");
+        let tabby = registry
+            .get("tabbyapi")
+            .expect("tabbyapi must be registered");
         assert_eq!(tabby.tier, EngineTier::OptIn);
         assert_eq!(tabby.install_method, "pip");
         assert_eq!(tabby.matches_gpu.as_deref(), Some("nvidia"));
         assert_eq!(tabby.min_compute_cap.as_deref(), Some("7.5"));
         assert_eq!(tabby.min_python_version.as_deref(), Some("3.12"));
         assert_eq!(tabby.verify_import_name.as_deref(), Some("exllamav3"));
-        assert!(tabby.source_repo.is_some(), "tabbyapi must have source_repo");
+        assert!(
+            tabby.source_repo.is_some(),
+            "tabbyapi must have source_repo"
+        );
         assert_eq!(tabby.model_format, "exl3");
         // Native Windows is excluded — same triton/uvloop reasons as vLLM.
         assert!(
@@ -630,7 +631,11 @@ mod tests {
                 .any(|f| f == "windows-native")
         );
         assert!(vllm.supported_os_families.iter().any(|f| f == "linux"));
-        assert!(vllm.supported_os_families.iter().any(|f| f == "windows-wsl2"));
+        assert!(
+            vllm.supported_os_families
+                .iter()
+                .any(|f| f == "windows-wsl2")
+        );
         // Embeddings stay on the sidecar — gate must reflect that.
         assert!(
             !vllm.supports_embeddings,
@@ -772,35 +777,35 @@ mod tests {
         // Each row was traced by hand against engines.toml.
         let matrix: &[(&str, &str, &HardwareProfile, bool)] = &[
             // omlx — darwin-aarch64 only
-            ("omlx",     "apple",            &apple,            true),
-            ("omlx",     "linux-blackwell",  &linux_blackwell,  false),
-            ("omlx",     "windows-native",   &windows_native,   false),
-            ("omlx",     "cpu-only",         &cpu_only,         false),
+            ("omlx", "apple", &apple, true),
+            ("omlx", "linux-blackwell", &linux_blackwell, false),
+            ("omlx", "windows-native", &windows_native, false),
+            ("omlx", "cpu-only", &cpu_only, false),
             // llamacpp — universal fallback on Linux + Windows; macOS is
             // explicitly excluded because oMLX is the default there (better
             // perf, native Metal). matches_fallback=true within its supported
             // OS families means it's never refused on hardware grounds.
-            ("llamacpp", "apple",            &apple,            false),
-            ("llamacpp", "linux-blackwell",  &linux_blackwell,  true),
-            ("llamacpp", "linux-hopper",     &linux_hopper,     true),
-            ("llamacpp", "windows-native",   &windows_native,   true),
-            ("llamacpp", "wsl2",             &wsl2,             true),
-            ("llamacpp", "cpu-only",         &cpu_only,         true),
+            ("llamacpp", "apple", &apple, false),
+            ("llamacpp", "linux-blackwell", &linux_blackwell, true),
+            ("llamacpp", "linux-hopper", &linux_hopper, true),
+            ("llamacpp", "windows-native", &windows_native, true),
+            ("llamacpp", "wsl2", &wsl2, true),
+            ("llamacpp", "cpu-only", &cpu_only, true),
             // sglang — Linux + NVIDIA sm_9.0..=10.3 only. Blackwell sm_120
             // and macOS are out; native Windows is out.
-            ("sglang",   "apple",            &apple,            false),
-            ("sglang",   "linux-blackwell",  &linux_blackwell,  false),
-            ("sglang",   "linux-hopper",     &linux_hopper,     true),
-            ("sglang",   "windows-native",   &windows_native,   false),
-            ("sglang",   "wsl2",             &wsl2,             false),
-            ("sglang",   "cpu-only",         &cpu_only,         false),
+            ("sglang", "apple", &apple, false),
+            ("sglang", "linux-blackwell", &linux_blackwell, false),
+            ("sglang", "linux-hopper", &linux_hopper, true),
+            ("sglang", "windows-native", &windows_native, false),
+            ("sglang", "wsl2", &wsl2, false),
+            ("sglang", "cpu-only", &cpu_only, false),
             // vllm — Linux + WSL2, NVIDIA sm_7.5+, ≥12 GB VRAM.
-            ("vllm",     "apple",            &apple,            false),
-            ("vllm",     "linux-blackwell",  &linux_blackwell,  true),
-            ("vllm",     "linux-hopper",     &linux_hopper,     true),
-            ("vllm",     "windows-native",   &windows_native,   false),
-            ("vllm",     "wsl2",             &wsl2,             true),
-            ("vllm",     "cpu-only",         &cpu_only,         false),
+            ("vllm", "apple", &apple, false),
+            ("vllm", "linux-blackwell", &linux_blackwell, true),
+            ("vllm", "linux-hopper", &linux_hopper, true),
+            ("vllm", "windows-native", &windows_native, false),
+            ("vllm", "wsl2", &wsl2, true),
+            ("vllm", "cpu-only", &cpu_only, false),
         ];
 
         let mut failures: Vec<String> = Vec::new();
@@ -1100,11 +1105,17 @@ mod tests {
         engine.min_vram_gb = None;
 
         // Turing (sm_75) → below bound, excluded.
-        assert!(!engine_matches(&engine, &linux_nvidia_with_cc((7, 5), 24.0)));
+        assert!(!engine_matches(
+            &engine,
+            &linux_nvidia_with_cc((7, 5), 24.0)
+        ));
         // Hopper (sm_90) → at bound, included.
         assert!(engine_matches(&engine, &linux_nvidia_with_cc((9, 0), 80.0)));
         // Blackwell (sm_120) → above bound, included.
-        assert!(engine_matches(&engine, &linux_nvidia_with_cc((12, 0), 16.0)));
+        assert!(engine_matches(
+            &engine,
+            &linux_nvidia_with_cc((12, 0), 16.0)
+        ));
     }
 
     #[test]
@@ -1121,12 +1132,21 @@ mod tests {
         // Hopper (sm_90) — in window.
         assert!(engine_matches(&engine, &linux_nvidia_with_cc((9, 0), 80.0)));
         // Datacenter Blackwell (sm_100) — in window.
-        assert!(engine_matches(&engine, &linux_nvidia_with_cc((10, 0), 80.0)));
+        assert!(engine_matches(
+            &engine,
+            &linux_nvidia_with_cc((10, 0), 80.0)
+        ));
         // sm_103 — in window (inclusive max).
-        assert!(engine_matches(&engine, &linux_nvidia_with_cc((10, 3), 80.0)));
+        assert!(engine_matches(
+            &engine,
+            &linux_nvidia_with_cc((10, 3), 80.0)
+        ));
         // Consumer Blackwell (sm_120) — OUT of window. This is the bug fix:
         // SGLang on RTX 5060 Ti must not be auto-selected.
-        assert!(!engine_matches(&engine, &linux_nvidia_with_cc((12, 0), 16.0)));
+        assert!(!engine_matches(
+            &engine,
+            &linux_nvidia_with_cc((12, 0), 16.0)
+        ));
     }
 
     #[test]
@@ -1192,7 +1212,10 @@ mod tests {
             ..Default::default()
         };
         // Even with `matches_fallback = true`, the experimental gate slams the door.
-        assert!(!engine_matches(&engine, &linux_nvidia_with_cc((9, 0), 24.0)));
+        assert!(!engine_matches(
+            &engine,
+            &linux_nvidia_with_cc((9, 0), 24.0)
+        ));
     }
 
     #[test]

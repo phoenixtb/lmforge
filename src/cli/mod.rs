@@ -1,5 +1,6 @@
 pub mod catalog;
 pub mod clean;
+pub mod doctor;
 pub mod engine;
 pub mod init;
 pub mod logs;
@@ -34,6 +35,16 @@ pub struct Cli {
     /// Path to catalogs directory (default: ~/.lmforge/catalogs)
     #[arg(long, global = true)]
     pub catalogs_dir: Option<String>,
+
+    /// Path to the data directory (engines, logs, models.json).
+    /// Default: $LMFORGE_DATA_DIR or ~/.lmforge
+    #[arg(long, global = true)]
+    pub data_dir: Option<String>,
+
+    /// Path to the model weights directory.
+    /// Default: $LMFORGE_MODELS_DIR or {data_dir}/models
+    #[arg(long, global = true)]
+    pub models_dir: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -92,6 +103,13 @@ pub enum Command {
         /// format mismatch.
         #[arg(long)]
         engine: Option<String>,
+
+        /// Re-evaluate capabilities for an already-downloaded model without
+        /// re-fetching the weights. Useful after upgrading lmforge — newer
+        /// versions detect capabilities (e.g. the `mtp` flag for speculative
+        /// decoding, S-1) that older pulls didn't record.
+        #[arg(long)]
+        refresh: bool,
     },
 
     /// Run an interactive REPL with a model
@@ -168,6 +186,12 @@ pub enum Command {
         engines: bool,
     },
 
+    /// Diagnose hardware + engine state (driver, compute_cap, glibc,
+    /// Vulkan loader, active `llama.cpp` variant, speculative-decoding
+    /// status). Mirrors what's surfaced in `/lf/status` so the same
+    /// information is reachable without the daemon running.
+    Doctor,
+
     /// View logs
     Logs {
         /// Tail the log continuously
@@ -202,6 +226,8 @@ pub enum ServiceAction {
     Start,
     /// Stop the LMForge service (daemon process; models will be unloaded)
     Stop,
+    /// Restart the LMForge service (stop then start via the service manager)
+    Restart,
     /// Show current service status
     Status,
 }
@@ -219,6 +245,15 @@ pub enum ModelsAction {
 
     /// Unload the active model from VRAM (keeps files on disk)
     Unload,
+
+    /// Rebuild the model index by scanning the models directory.
+    /// Use after pointing models_dir at a populated (e.g. shared) volume, or to
+    /// repair a missing/stale models.json. Re-detects capabilities per model.
+    Scan {
+        /// Also drop index entries whose directory no longer exists on disk.
+        #[arg(long)]
+        prune: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -238,6 +273,15 @@ pub enum EngineAction {
         /// Skip the experimental-tier confirmation prompt.
         #[arg(long)]
         yes_experimental: bool,
+
+        /// For `llamacpp` only — install a specific build variant under
+        /// `~/.lmforge/engines/llamacpp/variants/<id>/`. Accepted values:
+        /// `cuda12` (default for Linux NVIDIA, sm_75..sm_120, driver≥570.26),
+        /// `cuda13` (opt-in, driver≥590.44.01, adds sm_100 B200),
+        /// `vulkan` (universal fallback, Linux/Windows AMD/Intel), `cpu`.
+        /// Ignored for non-`llamacpp` engines.
+        #[arg(long)]
+        variant: Option<String>,
     },
 
     /// Remove an engine install (venv + cached wheels for pip engines,
@@ -288,7 +332,11 @@ pub async fn dispatch(cli: Cli, config: LmForgeConfig) -> Result<()> {
         }
         Command::Stop => stop::run(&config).await,
         Command::Status => status::run(&config).await,
-        Command::Pull { model, engine } => pull::run(&config, &model, engine.as_deref()).await,
+        Command::Pull {
+            model,
+            engine,
+            refresh,
+        } => pull::run(&config, &model, engine.as_deref(), refresh).await,
         Command::Models { action } => models::run(&config, action).await,
         Command::Catalog { format, search } => catalog::run(&config, format, search).await,
         Command::Clean {
@@ -318,11 +366,13 @@ pub async fn dispatch(cli: Cli, config: LmForgeConfig) -> Result<()> {
         }
         Command::Run { model } => run::run(&config, &model).await,
         Command::Engine { action } => engine::run(&config, action).await,
+        Command::Doctor => doctor::run(&config).await,
         Command::Service { action } => match action {
-            ServiceAction::Install => service::install(),
+            ServiceAction::Install => service::install(&config),
             ServiceAction::Uninstall => service::uninstall(),
             ServiceAction::Start => service::service_start(),
             ServiceAction::Stop => service::service_stop(),
+            ServiceAction::Restart => service::service_restart(),
             ServiceAction::Status => service::service_status(),
         },
         Command::Logs {

@@ -17,7 +17,7 @@ set -euo pipefail
 REPO="phoenixtb/lmforge"
 BINARY_NAME="lmforge"
 INSTALL_DIR="${LMFORGE_INSTALL_DIR:-$HOME/.local/bin}"
-VERSION="${LMFORGE_VERSION:-latest}"
+LMFORGE_RELEASE="${LMFORGE_VERSION:-latest}"
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BOLD='\033[1m'; NC='\033[0m'
@@ -26,7 +26,38 @@ warn()    { echo -e "${YELLOW}  ⚠${NC} $*"; }
 error()   { echo -e "${RED}  ✗${NC} $*" >&2; exit 1; }
 section() { echo -e "\n${BOLD}$*${NC}"; }
 
-# ── Detect platform ───────────────────────────────────────────────────────────
+# shellcheck source=banner.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/banner.sh" 2>/dev/null || true
+if ! declare -F print_lmforge_banner &>/dev/null; then
+    print_lmforge_banner() {
+        echo ""
+        echo "  ██╗     ███╗   ███╗███████╗ ██████╗ ██████╗  ██████╗ ███████╗"
+        echo "  ██║     ████╗ ████║██╔════╝██╔═══██╗██╔══██╗██╔════╝ ██╔════╝"
+        echo "  ██║     ██╔████╔██║█████╗  ██║   ██║██████╔╝██║  ███╗█████╗  "
+        echo "  ██║     ██║╚██╔╝██║██╔══╝  ██║   ██║██╔══██╗██║   ██║██╔══╝  "
+        echo "  ███████╗██║ ╚═╝ ██║██║     ╚██████╔╝██║  ██║╚██████╔╝███████╗"
+        echo "  ╚══════╝╚═╝     ╚═╝╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝"
+        echo ""
+        echo "  ${1:-Hardware-aware LLM inference orchestrator}"
+        echo ""
+    }
+fi
+
+# Stop daemon/service so we can overwrite the binary (ETXTBSY / "Text file busy").
+stop_running_lmforge_for_install() {
+    export PATH="$INSTALL_DIR:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+    if command -v "$BINARY_NAME" &>/dev/null; then
+        "$BINARY_NAME" service stop 2>/dev/null || true
+        "$BINARY_NAME" stop 2>/dev/null || true
+    fi
+    systemctl --user stop lmforge.service 2>/dev/null || true
+    curl -sf -X POST --max-time 3 http://127.0.0.1:11430/lf/shutdown 2>/dev/null || true
+    sleep 1
+    pkill -x "$BINARY_NAME" 2>/dev/null || true
+    sleep 1
+}
+
+TARGET_BIN="$INSTALL_DIR/$BINARY_NAME"
 detect_asset() {
     local os arch
     os=$(uname -s)
@@ -53,29 +84,33 @@ detect_asset() {
 # ── Resolve download URL ──────────────────────────────────────────────────────
 resolve_url() {
     local asset="$1"
-    if [[ "$VERSION" == "latest" ]]; then
+    if [[ "$LMFORGE_RELEASE" == "latest" ]]; then
         echo "https://github.com/${REPO}/releases/latest/download/${asset}"
     else
-        echo "https://github.com/${REPO}/releases/download/${VERSION}/${asset}"
+        echo "https://github.com/${REPO}/releases/download/${LMFORGE_RELEASE}/${asset}"
     fi
 }
 
 # ── Banner ────────────────────────────────────────────────────────────────────
-echo ""
-echo -e "${BOLD}  LMForge Core — Installer${NC}"
-echo    "  ─────────────────────────────────────────"
+print_lmforge_banner "LMForge Core — Installer"
 echo    "  Repo   : https://github.com/$REPO"
-echo    "  Version: $VERSION"
+echo    "  Version: $LMFORGE_RELEASE"
 echo    "  Install: $INSTALL_DIR/$BINARY_NAME"
 echo ""
 
 # ── Idempotency check ─────────────────────────────────────────────────────────
-if command -v "$BINARY_NAME" &>/dev/null; then
-    INSTALLED_VER=$("$BINARY_NAME" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
-    warn "lmforge $INSTALLED_VER is already installed at $(command -v $BINARY_NAME)"
+export PATH="$INSTALL_DIR:$HOME/.local/bin:$PATH"
+if [[ -x "$TARGET_BIN" ]] && [[ "${LMFORGE_UPGRADE:-0}" != "1" ]]; then
+    INSTALLED_VER=$("$TARGET_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+    warn "lmforge $INSTALLED_VER is already installed at $TARGET_BIN"
     warn "Use 'lmforge service status' to check the daemon."
-    warn "To reinstall, run: bash <(curl -fsSL https://github.com/$REPO/releases/latest/download/uninstall-core.sh)"
+    warn "To upgrade in place: LMFORGE_UPGRADE=1 curl -fsSL .../install-core.sh | bash"
+    warn "To reinstall clean: bash <(curl -fsSL https://github.com/$REPO/releases/latest/download/uninstall-core.sh)"
     exit 0
+fi
+if [[ -x "$TARGET_BIN" ]] && [[ "${LMFORGE_UPGRADE:-0}" == "1" ]]; then
+    section "Upgrading lmforge..."
+    stop_running_lmforge_for_install
 fi
 
 # ── Prerequisites ─────────────────────────────────────────────────────────────
@@ -117,22 +152,34 @@ info "Downloaded $ASSET"
 section "Installing..."
 
 chmod +x "$TMP_BIN"
-cp "$TMP_BIN" "$INSTALL_DIR/$BINARY_NAME"
-info "Installed $INSTALL_DIR/$BINARY_NAME"
+if [[ -e "$TARGET_BIN" ]] || pgrep -x "$BINARY_NAME" &>/dev/null; then
+    stop_running_lmforge_for_install
+fi
+cp "$TMP_BIN" "$TARGET_BIN"
+info "Installed $TARGET_BIN"
 
 # ── PATH injection ────────────────────────────────────────────────────────────
 # Add INSTALL_DIR to PATH in every shell config if not already present.
 add_to_path() {
     local profile_file="$1"
+    local begin="# >>> LMForge >>>"
+    local end="# <<< LMForge <<<"
     local export_line="export PATH=\"$INSTALL_DIR:\$PATH\""
-    if [[ -f "$profile_file" ]] && grep -qF "$INSTALL_DIR" "$profile_file"; then
-        return  # already present
+    # Idempotent: skip if our managed block (sentinel or legacy comment) is
+    # already present. We intentionally do NOT skip merely because INSTALL_DIR
+    # appears elsewhere (e.g. the stock ~/.profile "$HOME/.local/bin" line) —
+    # that line is the user's, not ours, and must be left untouched.
+    if [[ -f "$profile_file" ]] && grep -qE "^# >>> LMForge >>>$|^# LMForge$" "$profile_file"; then
+        return
     fi
     # Only write to files that exist OR the primary shell rc
     if [[ -f "$profile_file" ]] || [[ "$profile_file" == "$HOME/.zshrc" ]] || [[ "$profile_file" == "$HOME/.bashrc" ]]; then
-        echo "" >> "$profile_file"
-        echo "# LMForge" >> "$profile_file"
-        echo "$export_line" >> "$profile_file"
+        {
+            echo ""
+            echo "$begin"
+            echo "$export_line"
+            echo "$end"
+        } >> "$profile_file"
         info "Added $INSTALL_DIR to PATH in $profile_file"
     fi
 }

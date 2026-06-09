@@ -64,9 +64,25 @@
 
   // Role filter: '' = all, 'chat', 'embed', 'rerank', 'vision', 'code'
   let catalogRole = '';
+  let catalogSearchQuery = '';
+
+  function catalogEntryMatchesQuery(entry: CatalogEntry, query: string): boolean {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    const haystack = [
+      entry.shortcut,
+      entry.hf_repo,
+      entry.role,
+      entry.format,
+      ...(entry.tags ?? []),
+      entry.file ?? '',
+    ].join(' ').toLowerCase();
+    return haystack.includes(q);
+  }
 
   $: filteredCatalog = catalogEntries.filter((e) => {
     if (catalogRole && e.role !== catalogRole) return false;
+    if (!catalogEntryMatchesQuery(e, catalogSearchQuery)) return false;
     return true;
   });
 
@@ -91,7 +107,14 @@
       const res = await getCatalog(platformFormat);
       catalogEntries        = res.entries;
       catalogFetchedFormat  = platformFormat;
-      fetchHfSizesBatch(res.entries.map((e) => ({ repo: e.hf_repo, file: e.file ?? null }))).then((sizes) => {
+      fetchHfSizesBatch(res.entries.map((e) => ({
+        key: e.shortcut,
+        repo: e.hf_repo,
+        file: e.file ?? null,
+        format: e.format,
+        quant: e.tags.at(-1) ?? null,
+        shortcut: e.shortcut,
+      }))).then((sizes) => {
         catalogSizes = sizes;
         catalogSizesReady = true;
       });
@@ -195,7 +218,11 @@
       // ask for the whole-repo size (MLX / safetensors style). For GGUF
       // search hits this still overcounts multi-quant repos, but that's
       // inherent to the search-result shape: there is no "selected file".
-      fetchHfSizesBatch(searchResults.map((e) => ({ repo: e.hf_repo }))).then((sizes) => {
+      fetchHfSizesBatch(searchResults.map((e) => ({
+        key: e.hf_repo,
+        repo: e.hf_repo,
+        format: e.format,
+      }))).then((sizes) => {
         discoverSizes = sizes;
         discoverSizesReady = true;
       });
@@ -307,7 +334,28 @@
         </div>
 
       {:else}
-        <!-- Role filter + count -->
+        <!-- Search + role filter -->
+        <div class="catalog-header">
+          <div class="search-field">
+            <svg class="search-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path
+                d="M9 3.5a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11Z"
+                stroke="currentColor" stroke-width="1.6"
+              />
+              <path
+                d="M13.2 13.2 17 17"
+                stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+              />
+            </svg>
+            <input
+              id="catalog-search"
+              type="search"
+              class="search-input"
+              placeholder="Filter models (e.g. qwen, embed, 4bit, vision)…"
+              bind:value={catalogSearchQuery}
+            />
+          </div>
+        </div>
         <div class="filter-bar">
           <div class="filter-group">
             <span class="filter-label">Role</span>
@@ -323,7 +371,14 @@
           <div class="empty-full">
             <div class="es-icon">🔍</div>
             <h3>No matches</h3>
-            <p>Try changing the role filter.</p>
+            <p>
+              {#if catalogSearchQuery.trim()}
+                No models match "<strong>{catalogSearchQuery.trim()}</strong>".
+                {#if catalogRole} Try clearing the role filter.{/if}
+              {:else}
+                Try changing the role filter.
+              {/if}
+            </p>
           </div>
         {:else}
           <div class="model-grid" role="list">
@@ -332,7 +387,7 @@
                 {entry}
                 {installedIds}
                 onPulled={onCatalogPulled}
-                sizeBytes={catalogSizesReady ? (catalogSizes[entry.hf_repo] ?? null) : undefined}
+                sizeBytes={catalogSizesReady ? (catalogSizes[entry.shortcut] ?? null) : undefined}
               />
             {/each}
           </div>
@@ -480,6 +535,25 @@
   .tab-body { flex: 1; overflow-y: auto; padding: 18px 20px; }
 
   /* ── Filter bar (shared: Recommended + Discover results) ─────────────────── */
+  .catalog-header { margin-bottom: 10px; }
+  .search-field {
+    position: relative;
+    width: 100%;
+  }
+  .search-field .search-input {
+    width: 100%;
+    padding-left: 34px;
+  }
+  .search-icon {
+    position: absolute;
+    left: 11px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 15px;
+    height: 15px;
+    color: var(--text-3);
+    pointer-events: none;
+  }
   .filter-bar {
     display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
     margin-bottom: 16px;

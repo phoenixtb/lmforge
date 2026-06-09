@@ -66,21 +66,39 @@ sudo apt-get install -y libwebkit2gtk-4.1-dev   # Ubuntu 24.04
 
 ### Variant matrix (what `lmforge init` will fetch)
 
-| Your hardware | Asset pulled at init | Notes |
+| Your hardware | Variant installed | Notes |
 |---|---|---|
-| Linux x86_64 + NVIDIA / AMD / Intel iGPU | `llama-b9351-bin-ubuntu-vulkan-x64.tar.gz` | Vulkan binary, one build for all GPU vendors |
-| Linux x86_64 + no GPU | `llama-b9351-bin-ubuntu-x64.tar.gz` | CPU only |
-| Linux aarch64 + any GPU | `llama-b9351-bin-ubuntu-vulkan-arm64.tar.gz` | Vulkan ARM (Jetson, Rockchip) |
-| Linux aarch64 + no GPU | `llama-b9351-bin-ubuntu-arm64.tar.gz` | CPU only |
+| Linux x86_64 + NVIDIA, driver ≥ r570.26 | **cuda12** (manifest tarball) | Custom CUDA 12.8.1 build with bundled cudart/cuBLAS, `sm_86…sm_120`. Default on Blackwell. |
+| Linux x86_64 + NVIDIA, driver ≥ r590.44 | **cuda13** (opt-in) | `lmforge engine install llamacpp --variant cuda13` or `LMFORGE_LLAMACPP_VARIANT=cuda13` |
+| Linux x86_64 + NVIDIA, driver < r570.26 | **vulkan** (legacy upstream) | Auto-fallback; `lmforge doctor` prints upgrade hint |
+| Linux x86_64 + AMD / Intel iGPU | **vulkan** (legacy upstream) | One binary for all non-NVIDIA GPUs |
+| Linux x86_64 + no GPU | **cpu** (legacy upstream) | CPU-only build |
+| Linux aarch64 + GPU | **vulkan** ARM64 | Jetson / Rockchip |
+| Linux aarch64 + no GPU | **cpu** ARM64 | |
 
-The Vulkan path requires `libvulkan.so.1` (shipped by every NVIDIA
-proprietary driver, Mesa, and Intel Mesa-Iris). `lmforge init` emits a
-loud warning if the loader is missing but proceeds with the GPU variant
-anyway (in case you're about to install drivers).
+CUDA variants live under `~/.lmforge/engines/llamacpp/variants/<id>/` with
+bundled libs + RPATH. Vulkan/CPU still use the legacy flat layout until
+those entries land in the variants manifest.
 
-Override the auto-selected variant with `LMFORGE_LLAMACPP_VARIANT={gpu,cpu}`
-before running `lmforge init` — useful for headless VMs where Vulkan isn't
-worth installing.
+Override selection with `LMFORGE_LLAMACPP_VARIANT={cuda12,cuda13,cpu,gpu}`.
+Use `lmforge doctor` to see installed variants and which one is **ACTIVE**.
+
+### Speculative decoding (MTP)
+
+On chat models with MTP/nextn tensors in the GGUF, `mode=auto` enables
+`--spec-type draft-mtp` on CUDA (primary) or Vulkan (fallback). Telemetry
+(`spec_mode`, accept-rate) surfaces on `/lf/status` and the Overview UI.
+
+**Important:** standard Unsloth `Qwen3.5-*-GGUF` quants strip MTP heads.
+Use dedicated MTP repos (e.g. `unsloth/Qwen3.5-4B-MTP-GGUF`) — shortcut
+`qwen3.5:4b:mtp:4bit`. After pull, verify with:
+
+```bash
+lmforge pull qwen3.5:4b:mtp:4bit --refresh   # mtp=Some(true) in output
+```
+
+Non-MTP models may still get draft-model speculation via curated pairs
+(`data/draft_pairs.toml`, e.g. `qwen3:8b:4bit` + installed `qwen3:0.6b:4bit`).
 
 ### CUDA toolkit (only required for `opt-in` engines)
 

@@ -23,6 +23,19 @@ pub struct ActiveEngine {
     pub process: tokio::process::Child,
     /// The unique model footprint this process is bound to
     pub model_id: String,
+    /// Live speculative-decoding telemetry, fed by the stderr tee task
+    /// the `llamacpp` adapter sets up. `None` for engines that don't
+    /// emit acceptance-rate stats (vLLM, SGLang, oMLX, TabbyAPI today).
+    /// Cloning the inner `Arc` is cheap — the manager snapshots from a
+    /// clone on every `/lf/status` notify without blocking the spawn.
+    pub spec_observer: Option<crate::engine::spec_observer::SpecObserver>,
+    /// Which speculative-decoding mode was actually used to spawn this
+    /// engine. Surfaced in `/lf/status` so the UI can show "spec=mtp"
+    /// vs "spec=off" without re-resolving the config. Also drives the
+    /// crash-fallback retry policy in `EngineManager` (S-2.8): if the
+    /// engine dies <5s after spawn AND this is anything but
+    /// `SpecMode::Off`, the manager retries once with spec disabled.
+    pub spec_mode: crate::engine::speculative::SpecMode,
 }
 
 #[allow(async_fn_in_trait)]
@@ -33,10 +46,16 @@ pub trait EngineAdapter: Send + Sync {
     ///   `Ok(true)`  — engine handled the download (success); caller should update ModelIndex.
     ///   `Ok(false)` — engine deferred; caller must fall back to LMForge Rust downloader.
     ///   `Err(e)`    — engine attempted but failed; caller should surface the error.
+    ///
+    /// `data_dir` is passed explicitly (rather than derived from `dest_dir`)
+    /// because the weights dir can live outside the data dir (e.g. a shared
+    /// virtio-fs volume). Adapters that spawn a managed venv (SGLang, vLLM)
+    /// need the real data dir to resolve their interpreter.
     async fn pull_model(
         &self,
         repo: &str,
         dest_dir: &Path,
+        data_dir: &Path,
         progress_tx: Sender<DownloadProgress>,
     ) -> Result<bool>;
     async fn start(
@@ -66,14 +85,15 @@ impl EngineAdapter for EngineAdapterInstance {
         &self,
         repo: &str,
         dest_dir: &Path,
+        data_dir: &Path,
         progress_tx: Sender<DownloadProgress>,
     ) -> Result<bool> {
         match self {
-            Self::Omlx(ad) => ad.pull_model(repo, dest_dir, progress_tx).await,
-            Self::Sglang(ad) => ad.pull_model(repo, dest_dir, progress_tx).await,
-            Self::Llamacpp(ad) => ad.pull_model(repo, dest_dir, progress_tx).await,
-            Self::Vllm(ad) => ad.pull_model(repo, dest_dir, progress_tx).await,
-            Self::TabbyApi(ad) => ad.pull_model(repo, dest_dir, progress_tx).await,
+            Self::Omlx(ad) => ad.pull_model(repo, dest_dir, data_dir, progress_tx).await,
+            Self::Sglang(ad) => ad.pull_model(repo, dest_dir, data_dir, progress_tx).await,
+            Self::Llamacpp(ad) => ad.pull_model(repo, dest_dir, data_dir, progress_tx).await,
+            Self::Vllm(ad) => ad.pull_model(repo, dest_dir, data_dir, progress_tx).await,
+            Self::TabbyApi(ad) => ad.pull_model(repo, dest_dir, data_dir, progress_tx).await,
         }
     }
 

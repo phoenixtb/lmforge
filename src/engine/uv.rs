@@ -146,10 +146,7 @@ pub async fn ensure_uv(data_dir: &Path) -> Result<PathBuf> {
 
     // `uv --version` prints "uv X.Y.Z (target)" — strip the leading "uv " so
     // our log doesn't read "uv uv 0.11.16 ...".
-    let pretty = version
-        .trim()
-        .strip_prefix("uv ")
-        .unwrap_or(version.trim());
+    let pretty = version.trim().strip_prefix("uv ").unwrap_or(version.trim());
     info!(path = %uv_path.display(), version = %pretty, "uv installed");
     println!("  ✓ uv {} ready at {}", pretty, uv_path.display());
     Ok(uv_path)
@@ -218,8 +215,8 @@ async fn download_and_hash(
             .progress_chars("█▓░"),
     );
 
-    let mut file = std::fs::File::create(dest)
-        .with_context(|| format!("Cannot create {}", dest.display()))?;
+    let mut file =
+        std::fs::File::create(dest).with_context(|| format!("Cannot create {}", dest.display()))?;
     let mut stream = resp.bytes_stream();
     let mut hasher = Sha256::new();
     let mut got: u64 = 0;
@@ -346,7 +343,11 @@ mod tests {
     fn test_uv_version_is_well_formed() {
         // X.Y.Z pinning rule. Any drift to "latest" / branch tags is a bug.
         let parts: Vec<&str> = UV_VERSION.split('.').collect();
-        assert_eq!(parts.len(), 3, "UV_VERSION must be X.Y.Z, got '{UV_VERSION}'");
+        assert_eq!(
+            parts.len(),
+            3,
+            "UV_VERSION must be X.Y.Z, got '{UV_VERSION}'"
+        );
         for p in parts {
             assert!(
                 p.chars().all(|c| c.is_ascii_digit()),

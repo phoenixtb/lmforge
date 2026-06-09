@@ -129,12 +129,6 @@ impl VllmAdapter {
         }
     }
 
-    /// Derive `data_dir` from a model directory of shape
-    /// `<data_dir>/models/<model_id>/`. Mirrors SGLang's helper.
-    fn data_dir_from_model_dir(model_dir: &Path) -> Option<&Path> {
-        model_dir.parent().and_then(|p| p.parent())
-    }
-
     /// Read `gpu_count` from the cached hardware profile so we can wire
     /// `--tensor-parallel-size` only on multi-GPU hosts.
     ///
@@ -170,6 +164,7 @@ impl EngineAdapter for VllmAdapter {
         &self,
         repo: &str,
         dest_dir: &Path,
+        data_dir: &Path,
         progress_tx: Sender<DownloadProgress>,
     ) -> Result<bool> {
         std::fs::create_dir_all(dest_dir)
@@ -193,9 +188,7 @@ impl EngineAdapter for VllmAdapter {
             dest = dest_dir.to_string_lossy(),
         );
 
-        let python = Self::data_dir_from_model_dir(dest_dir)
-            .map(|d| self.resolve_python(d))
-            .unwrap_or_else(|| PathBuf::from("python3"));
+        let python = self.resolve_python(data_dir);
         debug!(python = %python.display(), "vLLM pull: using interpreter");
 
         let output = Command::new(&python)
@@ -360,6 +353,8 @@ impl EngineAdapter for VllmAdapter {
         Ok(ActiveEngine {
             process: child,
             model_id: model_id.to_string(),
+            spec_observer: None,
+            spec_mode: crate::engine::speculative::SpecMode::Off,
         })
     }
 
@@ -448,8 +443,12 @@ fn detect_nvfp4_quant(model_dir: &Path) -> bool {
     };
     // Check both common locations: `quantization_config.quant_method` (newer)
     // and the top-level `quantization` string (older models).
-    let q1 = v["quantization_config"]["quant_method"].as_str().unwrap_or("");
-    let q2 = v["quantization_config"]["quant_type"].as_str().unwrap_or("");
+    let q1 = v["quantization_config"]["quant_method"]
+        .as_str()
+        .unwrap_or("");
+    let q2 = v["quantization_config"]["quant_type"]
+        .as_str()
+        .unwrap_or("");
     let q3 = v["quantization"].as_str().unwrap_or("");
     let combined = format!("{} {} {}", q1, q2, q3).to_lowercase();
     combined.contains("nvfp4") || combined.contains("fp4")
@@ -668,13 +667,6 @@ mod tests {
         std::fs::write(data_dir.join("hardware.json"), profile).unwrap();
         assert!(!hardware_is_sm120(&data_dir));
         std::fs::remove_dir_all(&data_dir).unwrap();
-    }
-
-    #[test]
-    fn data_dir_from_model_dir_shape() {
-        let model_dir = Path::new("/home/me/.lmforge/models/qwen3-8b");
-        let data_dir = VllmAdapter::data_dir_from_model_dir(model_dir).unwrap();
-        assert_eq!(data_dir, Path::new("/home/me/.lmforge"));
     }
 
     #[test]

@@ -23,6 +23,7 @@ pub struct CleanOptions {
 /// `lmforge clean` — Disk usage audit and cleanup
 pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
     let data_dir = config.data_dir();
+    let models_dir = config.models_dir();
     let do_all = opts.all;
 
     // ── Audit phase ──────────────────────────────────────────────────────────
@@ -30,7 +31,7 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
     println!("Auditing disk usage...\n");
 
     // 1. Indexed models
-    let idx = ModelIndex::load(&data_dir)?;
+    let idx = ModelIndex::load(&data_dir, &models_dir)?;
     let indexed: Vec<_> = idx
         .list()
         .iter()
@@ -46,7 +47,6 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
 
     // 2. Orphaned model directories — on disk but not in index
     //    These are most commonly partial/interrupted downloads.
-    let models_dir = data_dir.join("models");
     let indexed_paths: std::collections::HashSet<String> =
         indexed.iter().map(|(_, p, _)| p.clone()).collect();
 
@@ -171,7 +171,11 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
     let mut engine_entries: Vec<(String, u64)> = Vec::new();
     let mut engine_total: u64 = 0;
     if engines_dir.exists() {
-        for entry in std::fs::read_dir(&engines_dir).into_iter().flatten().flatten() {
+        for entry in std::fs::read_dir(&engines_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
             let path = entry.path();
             if path.is_dir() {
                 let name = path
@@ -184,7 +188,11 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
             }
         }
     }
-    let bin_size = if bin_dir.exists() { dir_size(&bin_dir) } else { 0 };
+    let bin_size = if bin_dir.exists() {
+        dir_size(&bin_dir)
+    } else {
+        0
+    };
     let engines_grand_total = engine_total + bin_size;
 
     println!(
@@ -200,9 +208,7 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
         if bin_size > 0 {
             println!("  {:40} {:>8}", "bin/ (uv + helpers)", fmt_size(bin_size));
         }
-        println!(
-            "  Wipe with: lmforge clean --engines  (next `init` rebuilds them, ~2 min)"
-        );
+        println!("  Wipe with: lmforge clean --engines  (next `init` rebuilds them, ~2 min)");
     }
 
     // ── Summary ───────────────────────────────────────────────────────────────
@@ -260,12 +266,12 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
 
     // Stale index entries
     if !stale.is_empty() {
-        let mut idx2 = ModelIndex::load(&data_dir)?;
+        let mut idx2 = ModelIndex::load(&data_dir, &models_dir)?;
         for id in &stale {
             idx2.remove(id);
             println!("  ✓ Removed stale index entry '{}'", id);
         }
-        idx2.save(&data_dir)?;
+        idx2.save(&data_dir, &models_dir)?;
     }
 
     // Engine installs — opt-in via `--engines` (or implied by `--all`).
@@ -280,10 +286,7 @@ pub async fn run(config: &LmForgeConfig, opts: CleanOptions) -> Result<()> {
     {
         if engines_dir.exists() {
             std::fs::remove_dir_all(&engines_dir)?;
-            println!(
-                "  ✓ Removed engines/ ({})",
-                fmt_size(engine_total)
-            );
+            println!("  ✓ Removed engines/ ({})", fmt_size(engine_total));
         }
         if bin_dir.exists() {
             std::fs::remove_dir_all(&bin_dir)?;

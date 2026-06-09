@@ -105,12 +105,20 @@ if [[ "$OS" == "Linux" ]]; then
         warn "AppImage not found at $LINUX_APPIMAGE"
     fi
 
-    # 3. Remove .desktop launcher
+    # 3. Remove .desktop launcher + theme icons
     if [[ -f "$LINUX_DESKTOP" ]]; then
         rm -f "$LINUX_DESKTOP"
         info "Removed $LINUX_DESKTOP"
-        # Refresh app launcher cache
         update-desktop-database "${HOME}/.local/share/applications" 2>/dev/null || true
+    fi
+
+    ICON_THEME="${HOME}/.local/share/icons/hicolor"
+    if [[ -d "$ICON_THEME" ]]; then
+        find "$ICON_THEME" -path '*/apps/lmforge-ui.png' -delete 2>/dev/null || true
+        if command -v gtk-update-icon-cache &>/dev/null; then
+            gtk-update-icon-cache -f -t "$ICON_THEME" 2>/dev/null || true
+        fi
+        info "Removed LMForge UI icons"
     fi
 fi
 

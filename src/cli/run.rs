@@ -17,7 +17,7 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
         crate::model::resolver::resolve(model_input, &engine_format, &catalogs_dir).await?;
     let model_id = resolved.id;
 
-    let idx = crate::model::index::ModelIndex::load(&config.data_dir())?;
+    let idx = crate::model::index::ModelIndex::load(&config.data_dir(), &config.models_dir())?;
     if idx.get(&model_id).is_none() {
         println!("\nModel '{}' is not installed locally.", model_id);
         print!("Would you like to pull it now? [y/N]: ");
@@ -27,7 +27,7 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
         std::io::stdin().read_line(&mut input)?;
         if input.trim().eq_ignore_ascii_case("y") {
             println!();
-            crate::cli::pull::run(config, model_input, None).await?;
+            crate::cli::pull::run(config, model_input, None, false).await?;
         } else {
             anyhow::bail!("Model required to start interactive session. Exiting.");
         }

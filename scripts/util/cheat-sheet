@@ -1,31 +1,39 @@
-cd /home/phoenixt/projects/lmforge/repo/lmforge/scripts/util
+# Run all commands from the repo root (lmforge/)
 
 # ── state / audit ────────────────────────────────────────────────────────────
-./dev_status.sh
+scripts/util/dev_status.sh
+
+# ── clean only (interactive) ─────────────────────────────────────────────────
+scripts/util/dev-clean-core.sh              # stop processes, engines, symlinks, …
+scripts/util/dev-clean-core.sh --yes --full   # + cargo target + cursor sandbox
+scripts/util/dev-clean-ui.sh                # AppImage, node_modules, tauri target, …
+scripts/util/dev-clean-ui.sh --yes --full
 
 # ── core: clean-rebuild-init-start (one shot) ────────────────────────────────
-./dev-clean-reinstall-core_linux-sglang-cuda13.sh                       # full: wipe → rebuild → init → start
-./dev-clean-reinstall-core_linux-sglang-cuda13.sh --pull qwen3:1.7b:4bit  # also pulls a smoke model
-./dev-clean-reinstall-core_linux-sglang-cuda13.sh --keep-engines        # skip ~5 min engine reinstall
-./dev-clean-reinstall-core_linux-sglang-cuda13.sh --no-cargo-clean      # incremental rust build
-./dev-clean-reinstall-core_linux-sglang-cuda13.sh --no-init --no-start  # just rebuild + symlink
-./dev-clean-reinstall-core_linux-sglang-cuda13.sh --release             # release profile
-./dev-clean-reinstall-core_linux-sglang-cuda13.sh --wipe-models         # also nuke ~/.lmforge/models
+scripts/util/dev-reinstall-core.sh                    # interactive (cuda12 default)
+scripts/util/dev-reinstall-core.sh --yes              # defaults, no prompts
+scripts/util/dev-reinstall-core.sh --yes --smoke      # + background start + qwen3:1.7b:4bit pull
+scripts/util/dev-reinstall-core.sh --cuda13           # force cuda13 variant
+scripts/util/dev-reinstall-core.sh --keep-engines     # skip engine wipe (fast Rust loop)
+scripts/util/dev-reinstall-core.sh --no-cargo-clean   # incremental cargo build
+scripts/util/dev-reinstall-core.sh --no-init --no-start   # rebuild + symlink only
+scripts/util/dev-reinstall-core.sh --release          # release profile
+scripts/util/dev-reinstall-core.sh --wipe-models      # also nuke ~/.lmforge/models
 
 # ── UI: clean-reinstall-launch (one shot) ────────────────────────────────────
-./dev-clean-reinstall-ui.sh                              # auto-detect distro → wipe ui artefacts → npm ci → tauri dev
-./dev-clean-reinstall-ui.sh --build                      # AppImage build instead of `tauri dev`
-./dev-clean-reinstall-ui.sh --keep-node --keep-rust      # iterate fast (only stop+launch)
-./dev-clean-reinstall-ui.sh --no-launch                  # just clean + npm ci, don't run
-./dev-clean-reinstall-ui.sh --distro fedora              # force distro variant
+scripts/util/dev-clean-reinstall-ui.sh                              # auto-detect distro → wipe ui artefacts → npm ci → tauri dev
+scripts/util/dev-clean-reinstall-ui.sh --build                      # AppImage build instead of `tauri dev`
+scripts/util/dev-clean-reinstall-ui.sh --keep-node --keep-rust      # iterate fast (only stop+launch)
+scripts/util/dev-clean-reinstall-ui.sh --no-launch                  # just clean + npm ci, don't run
+scripts/util/dev-clean-reinstall-ui.sh --distro fedora              # force distro variant
 
 # ── UI: distro-specific launchers (called by the combo script too) ──────────
-./dev_ui_ubuntu24.sh                # apt-based (Ubuntu / Debian / Mint)
-./dev_ui_fedora.sh                  # dnf-based (Fedora / RHEL / Rocky / Alma)
-./dev_ui_arch.sh                    # pacman-based (Arch / Manjaro / EndeavourOS)
-./dev_ui_ubuntu24.sh --build        # any of the above accept --build (AppImage)
-./dev_ui_ubuntu24.sh --skip-deps    # skip webkit/appindicator probe (faster restart)
-./dev_ui_ubuntu24.sh --skip-daemon-check  # launch even if no daemon on :11430
+scripts/util/dev_ui_ubuntu24.sh                # apt-based (Ubuntu / Debian / Mint)
+scripts/util/dev_ui_fedora.sh                  # dnf-based (Fedora / RHEL / Rocky / Alma)
+scripts/util/dev_ui_arch.sh                    # pacman-based (Arch / Manjaro / EndeavourOS)
+scripts/util/dev_ui_ubuntu24.sh --build        # any of the above accept --build (AppImage)
+scripts/util/dev_ui_ubuntu24.sh --skip-deps    # skip webkit/appindicator probe (faster restart)
+scripts/util/dev_ui_ubuntu24.sh --skip-daemon-check  # launch even if no daemon on :11430
 
 # ── catalog (after `lmforge init` / dev rebuild) ─────────────────────────────
 lmforge catalog                       # uses host's current engine format (GGUF on most boxes post-Phase 1)
@@ -44,38 +52,39 @@ lmforge start --engine sglang --yes-experimental    # experimental: known-broken
 LMFORGE_YES_EXPERIMENTAL=1 lmforge start --engine sglang   # same, for systemd/scripts
 
 # ── tests ────────────────────────────────────────────────────────────────────
-./dev_test.sh                          # ~17 s, cargo only
-./dev_test.sh --with-e2e               # ~3 min first time, ~30 s after
-./dev_test.sh --e2e-only --keep-daemon # iterate e2e against running daemon
-./dev_test.sh --e2e-model qwen3:4b:4bit  # override default test model
+scripts/util/dev_test.sh                    # interactive test matrix
+scripts/util/dev_test.sh --yes              # unit+integration+cli+api+inference
+scripts/util/dev_test.sh --yes --full       # + VLM + MTP + rerank
+scripts/util/dev_test.sh --e2e-only --yes   # live daemon only
+scripts/util/release_binary_test.sh         # cuda12/cuda13 release binary matrix
 
 # ── load / bench ─────────────────────────────────────────────────────────────
-./dev_bench.sh -n 50 -c 8 --csv /tmp/bench.csv
-./dev_bench.sh --stream --max-tokens 256
-./dev_bench.sh -m qwen3:8b:4bit -n 100 -c 16
+scripts/util/dev_bench.sh -n 50 -c 8 --csv /tmp/bench.csv
+scripts/util/dev_bench.sh --stream --max-tokens 256
+scripts/util/dev_bench.sh -m qwen3:8b:4bit -n 100 -c 16
 
 # ── logs (in another terminal) ───────────────────────────────────────────────
-./dev_logs.sh                          # default dev.log
-./dev_logs.sh --daemon                 # daemon out+err split
-./dev_logs.sh --filter ERROR           # only errors, colored
-./dev_logs.sh --all                    # everything in ~/.lmforge/logs/
+scripts/util/dev_logs.sh                          # default dev.log
+scripts/util/dev_logs.sh --daemon                 # daemon out+err split
+scripts/util/dev_logs.sh --filter ERROR           # only errors, colored
+scripts/util/dev_logs.sh --all                    # everything in ~/.lmforge/logs/
 
 # ── pre-commit safety ────────────────────────────────────────────────────────
-./pre-commit-check-catalog.sh                  # full: JSON + drift + gated probe (safetensors+gguf) + quant suffix
-./pre-commit-check-catalog.sh --no-network     # offline-only (JSON + drift + suffix)
-./pre-commit-check-catalog.sh --fix-drift      # auto-resolve repo→live drift
+scripts/util/pre-commit-check-catalog.sh                  # full: JSON + drift + gated probe (safetensors+gguf) + quant suffix
+scripts/util/pre-commit-check-catalog.sh --no-network     # offline-only (JSON + drift + suffix)
+scripts/util/pre-commit-check-catalog.sh --fix-drift      # auto-resolve repo→live drift
 
 # ── cleanup (audit by default; --yes to skip prompts) ────────────────────────
-./dev_clean.sh                         # audit only (dry-run)
-./dev_clean.sh --target --yes          # cargo + ui rust target (~3–6 GB)
-./dev_clean.sh --node --yes            # ui/node_modules + ui/dist + .svelte-kit
-./dev_clean.sh --engines --yes         # ~/.lmforge/{engines,bin}  (re-init: ~5 min)
-./dev_clean.sh --logs --yes            # truncate ~/.lmforge/logs/*
-./dev_clean.sh --engines --logs --yes  # frees ~8.6 GB, keeps models
-./dev_clean.sh --all --yes             # everything except models + HF cache
-./dev_clean.sh --models                # ALWAYS prompts (forces re-pull)
-./dev_clean.sh --hf-cache              # ALWAYS prompts (shared with all HF tools)
-./dev_clean.sh --nuke                  # full wipe (always prompts)
+scripts/util/dev_clean.sh                         # audit only (dry-run)
+scripts/util/dev_clean.sh --target --yes          # cargo + ui rust target (~3–6 GB)
+scripts/util/dev_clean.sh --node --yes            # ui/node_modules + ui/dist + .svelte-kit
+scripts/util/dev_clean.sh --engines --yes         # ~/.lmforge/{engines,bin}  (re-init: ~5 min)
+scripts/util/dev_clean.sh --logs --yes            # truncate ~/.lmforge/logs/*
+scripts/util/dev_clean.sh --engines --logs --yes  # frees ~8.6 GB, keeps models
+scripts/util/dev_clean.sh --all --yes             # everything except models + HF cache
+scripts/util/dev_clean.sh --models                # ALWAYS prompts (forces re-pull)
+scripts/util/dev_clean.sh --hf-cache              # ALWAYS prompts (shared with all HF tools)
+scripts/util/dev_clean.sh --nuke                  # full wipe (always prompts)
 
 # ── in-binary cleanup (complements dev_clean.sh) ─────────────────────────────
 lmforge clean                          # audit only
@@ -86,4 +95,4 @@ lmforge clean --engines --yes          # ~/.lmforge/engines (same effect)
 # Cursor's sandboxed shells redirect target/ writes to /tmp/cursor-sandbox-cache.
 # Manually copy the fresh binary back if you suspect a stale ~/.cargo/bin/lmforge:
 ls /tmp/cursor-sandbox-cache/*/target/debug/lmforge 2>/dev/null
-# cp <that path> ~/projects/lmforge/repo/lmforge/target/debug/lmforge
+# cp <that path> target/debug/lmforge
