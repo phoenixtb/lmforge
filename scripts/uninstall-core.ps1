@@ -64,9 +64,33 @@ if ($CoreBin) {
 }
 
 # --- 2. Belt-and-suspenders: remove Scheduled Task ---
-$task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-if ($task) {
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+# Non-fatal: access denied must not abort purge or binary removal.
+$taskRemoved = $false
+try {
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($task) {
+        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop
+        $taskRemoved = $true
+    }
+} catch {
+    Warn "Could not unregister scheduled task via PowerShell: $($_.Exception.Message)"
+}
+
+if (-not $taskRemoved) {
+    $schtasksOut = & schtasks.exe /Delete /TN $TaskName /F 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $taskRemoved = $true
+    } elseif ($schtasksOut -match 'cannot find|does not exist|not found') {
+        $taskRemoved = $true
+    } elseif ($schtasksOut -match 'Access is denied|access is denied') {
+        Warn "Scheduled task '$TaskName' still registered (access denied)."
+        Warn "Run uninstall again from an elevated PowerShell, or: schtasks /Delete /TN `"$TaskName`" /F"
+    } else {
+        Warn "Could not remove scheduled task '$TaskName' (schtasks exit $LASTEXITCODE)."
+    }
+}
+
+if ($taskRemoved) {
     Info "Removed scheduled task: $TaskName"
 }
 
