@@ -17,6 +17,44 @@ function Success { param($m) Write-Host "  [+] $m" -ForegroundColor Green }
 function Warn    { param($m) Write-Host "  [!] $m" -ForegroundColor Yellow }
 function Err     { param($m) Write-Host "  [x] $m" -ForegroundColor Red; exit 1 }
 
+function Test-LmforgeHealth {
+    param([int]$TimeoutSec = 3)
+    try {
+        Invoke-WebRequest -Uri "http://127.0.0.1:11430/health" -UseBasicParsing -TimeoutSec $TimeoutSec | Out-Null
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Wait-LmforgeHealth {
+    param([int]$TimeoutSec = 120)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-LmforgeHealth -TimeoutSec 2) { return $true }
+        Start-Sleep -Seconds 2
+    }
+    return $false
+}
+
+function Ensure-LmforgeDaemon {
+    param([string]$Binary)
+    if (Test-LmforgeHealth -TimeoutSec 3) {
+        Info "Daemon is running at http://127.0.0.1:11430"
+        return
+    }
+    Warn "Daemon not reachable yet. Starting engine..."
+    & $Binary start
+    if (Wait-LmforgeHealth -TimeoutSec 120) {
+        Success "Daemon is running at http://127.0.0.1:11430"
+    } else {
+        Warn "Daemon still not reachable after 120s."
+        Warn "Check: lmforge service status"
+        Warn "Log:  $env:USERPROFILE\.lmforge\logs\daemon.out.log"
+        Warn "Debug: lmforge start --foreground"
+    }
+}
+
 Write-Host ""
 Write-Host "  LMForge Core - Installer" -ForegroundColor Cyan
 Write-Host ""
@@ -41,6 +79,13 @@ if ($LmforgeCmd -or (Test-Path "$InstallDir\$Binary")) {
     $CoreVerMatch = [regex]::Match($CoreVerRaw, '(\d+\.\d+\.\d+)')
     $CoreVer = if ($CoreVerMatch.Success) { $CoreVerMatch.Groups[1].Value } else { "unknown" }
     Warn "lmforge $CoreVer is already installed at $CoreBin"
+    if (-not (Test-LmforgeHealth -TimeoutSec 3)) {
+        Warn "Daemon is not running - repairing service and starting engine..."
+        & $CoreBin service install
+        Ensure-LmforgeDaemon $CoreBin
+    } else {
+        Info "Daemon is running at http://127.0.0.1:11430"
+    }
     Warn "Use 'lmforge service status' to check the daemon."
     Warn "To reinstall:"
     Warn "  irm https://github.com/$Repo/releases/latest/download/uninstall-core.ps1 | iex"
@@ -101,6 +146,8 @@ Info "Running lmforge init..."
 
 Info "Registering Windows Scheduled Task (auto-start at logon)..."
 & "$InstallDir\$Binary" service install
+
+Ensure-LmforgeDaemon "$InstallDir\$Binary"
 
 Write-Host ""
 Success "LMForge $Version installed successfully!"

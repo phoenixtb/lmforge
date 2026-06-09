@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
+use std::process::Stdio;
 
 use crate::config::LmForgeConfig;
 
@@ -289,6 +290,49 @@ fn uninstall_systemd() -> Result<()> {
 #[cfg(windows)]
 static WINDOWS_TASK_NAME: &str = "LMForge Daemon";
 
+#[cfg(windows)]
+static WINDOWS_TASK_LAUNCHER: &str = "daemon-task.cmd";
+
+/// True when the daemon API port accepts a TCP connection.
+#[cfg(windows)]
+fn daemon_reachable() -> bool {
+    std::net::TcpStream::connect_timeout(
+        &"127.0.0.1:11430".parse().unwrap(),
+        std::time::Duration::from_millis(500),
+    )
+    .is_ok()
+}
+
+#[cfg(windows)]
+fn wait_daemon_health(timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if daemon_reachable() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    false
+}
+
+/// Spawn `lmforge start` detached (daemon mode). Used when the scheduled task
+/// has not brought /health up yet during install.
+#[cfg(windows)]
+fn spawn_lmforge_start(exe_path: &str) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    std::process::Command::new(exe_path)
+        .arg("start")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+        .spawn()
+        .context("Failed to spawn lmforge start")?;
+    Ok(())
+}
+
 /// Register a Windows Scheduled Task that runs `lmforge start --foreground`
 /// at every user logon. Uses PowerShell's Register-ScheduledTask — no
 /// administrator elevation is required (RunLevel = Limited).
@@ -304,21 +348,36 @@ fn install_scheduled_task(exe_path: &str, data_dir: &std::path::Path) -> Result<
     // and is read by the daemon on every startup. Baking stale env would shadow
     // any UI-driven config change until the user re-runs `lmforge service install`.
     //
-    // Redirect stdout/stderr to daemon.out.log — bare ScheduledTaskAction
-    // does not tee output, so wrap lmforge via cmd.exe with append redirect.
-    let log_out = log_out_path.to_string_lossy().replace('\\', "\\\\");
-    let exe_esc = exe_path.replace('\\', "\\\\");
+    // Redirect stdout/stderr to daemon.out.log via a small .cmd launcher.
+    // Inlining cmd.exe /c with nested quotes breaks under Task Scheduler
+    // (Last Run Result 1); a launcher file avoids that quoting trap.
+    let launcher_path = data_dir.join(WINDOWS_TASK_LAUNCHER);
+    let launcher_content = format!(
+        "@echo off\r\n\"{exe}\" start --foreground >> \"{log}\" 2>&1\r\n",
+        exe = exe_path,
+        log = log_out_path.display()
+    );
+    std::fs::write(&launcher_path, launcher_content).with_context(|| {
+        format!(
+            "Cannot write scheduled-task launcher: {}",
+            launcher_path.display()
+        )
+    })?;
+
+    let launcher_esc = launcher_path
+        .to_string_lossy()
+        .replace('\\', "\\\\");
     let ps_script = format!(
         r#"
-$logOut = "{log_out}"
-$exe    = "{exe_esc}"
-$arg    = '/c ""' + $exe + '"" start --foreground >> ""' + $logOut + '"" 2>&1'
-$action  = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $arg
-$trigger = New-ScheduledTaskTrigger -AtLogon
+$launcher = "{launcher_esc}"
+$action   = New-ScheduledTaskAction -Execute $launcher
+$trigger  = New-ScheduledTaskTrigger -AtLogon
 $settings = New-ScheduledTaskSettingsSet `
     -RestartCount 3 `
     -RestartInterval (New-TimeSpan -Minutes 1) `
-    -ExecutionTimeLimit ([TimeSpan]::Zero)
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -ExecutionTimeLimit (New-TimeSpan -Days 3650)
 $principal = New-ScheduledTaskPrincipal `
     -UserId "$env:USERNAME" `
     -RunLevel Limited `
@@ -332,8 +391,7 @@ Register-ScheduledTask `
     -Force | Out-Null
 Start-ScheduledTask -TaskName "{task}"
 "#,
-        log_out = log_out,
-        exe_esc = exe_esc,
+        launcher_esc = launcher_esc,
         task = WINDOWS_TASK_NAME,
     );
 
@@ -352,6 +410,20 @@ Start-ScheduledTask -TaskName "{task}"
     println!("✓ LMForge scheduled task registered and started.");
     println!("  It will now start automatically at logon.");
     println!("  Logs: {}", log_out_path.display());
+
+    if !wait_daemon_health(std::time::Duration::from_secs(90)) {
+        println!("⚙ Scheduled task did not bring the daemon up yet — starting now...");
+        spawn_lmforge_start(exe_path)?;
+        if wait_daemon_health(std::time::Duration::from_secs(60)) {
+            println!("✓ LMForge daemon is reachable at http://127.0.0.1:11430");
+        } else {
+            println!(
+                "⚠ Daemon still not reachable. Check {} or run `lmforge start --foreground`.",
+                log_out_path.display()
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -371,6 +443,13 @@ fn uninstall_scheduled_task() -> Result<()> {
         .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
         .output()
         .context("Failed to run PowerShell")?;
+
+    if let Ok(data_dir) = home_dir().map(|h| h.join(".lmforge")) {
+        let launcher = data_dir.join(WINDOWS_TASK_LAUNCHER);
+        if launcher.exists() {
+            let _ = std::fs::remove_file(launcher);
+        }
+    }
 
     println!("✓ LMForge scheduled task removed.");
     Ok(())

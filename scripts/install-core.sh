@@ -236,6 +236,30 @@ section "Initializing LMForge..."
 section "Installing system service..."
 "$INSTALL_DIR/$BINARY_NAME" service install
 
+wait_health() {
+    local i
+    for i in $(seq 1 60); do
+        if curl -sf --max-time 2 http://127.0.0.1:11430/health >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 2
+    done
+    return 1
+}
+
+if ! wait_health; then
+    warn "Daemon not reachable yet. Starting engine..."
+    "$INSTALL_DIR/$BINARY_NAME" start || true
+    if wait_health; then
+        info "Daemon is running at http://127.0.0.1:11430"
+    else
+        warn "Daemon still not reachable. Check: lmforge service status"
+        warn "Log:  ${HOME}/.lmforge/logs/daemon.out.log"
+    fi
+else
+    info "Daemon is running at http://127.0.0.1:11430"
+fi
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}${GREEN}  ✓ LMForge Core $INSTALLED_VER installed successfully!${NC}"
