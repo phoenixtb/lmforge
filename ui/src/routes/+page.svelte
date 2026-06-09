@@ -287,7 +287,7 @@
                 <div class="err-r1">
                   <span class="dot dot--err" style="margin-top:3px"></span>
                   <span class="sn mono">{modelId}</span>
-                  <span class="err-when ps">{fmtErrorAt(err.at)}</span>
+                  <span class="err-when ps">{fmtRelative(err.at)}</span>
                 </div>
                 <div class="err-msg">{err.message}</div>
                 {#if err.stderr_tail && err.stderr_tail.length > 0}
