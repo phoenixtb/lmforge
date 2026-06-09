@@ -314,6 +314,29 @@ fn check_nvidia_present() -> bool {
     std::path::Path::new("/dev/nvidia0").exists()
 }
 
+/// Pure helper — unit-tested; mirrors the Windows CIM AdapterCompatibility check.
+fn adapter_compat_indicates_amd(stdout: &str) -> bool {
+    let lower = stdout.to_lowercase();
+    lower.contains("advanced micro devices") || lower.contains("amd")
+}
+
+/// Query Windows video adapter vendors via CIM (shared by AMD/Intel probes).
+#[cfg(target_os = "windows")]
+fn windows_video_adapter_compat() -> Option<String> {
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty AdapterCompatibility) -join ';'",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
+}
+
 fn check_amd_present() -> bool {
     // Check for ROCm SMI
     if let Ok(output) = std::process::Command::new("rocm-smi").output()
@@ -328,6 +351,11 @@ fn check_amd_present() -> bool {
         if std::path::Path::new("/dev/kfd").exists() {
             return true;
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(stdout) = windows_video_adapter_compat() {
+        return adapter_compat_indicates_amd(&stdout);
     }
 
     false
@@ -361,24 +389,9 @@ fn check_intel_present() -> bool {
         false
     }
     #[cfg(target_os = "windows")]
-    {
-        // Shell out to PowerShell's CIM API. WMIC is deprecated in
-        // Windows 11+ but Get-CimInstance is available on every supported
-        // Windows release. The query returns each video adapter's
-        // AdapterCompatibility field, which is "Intel Corporation" for
-        // Intel iGPUs/Arc, "NVIDIA" for NVIDIA, "Advanced Micro Devices, Inc." for AMD.
-        if let Ok(output) = std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                "(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty AdapterCompatibility) -join ';'",
-            ])
-            .output()
-            && output.status.success()
-            && let Ok(stdout) = String::from_utf8(output.stdout)
-        {
-            return stdout.to_lowercase().contains("intel");
-        }
+    if let Some(stdout) = windows_video_adapter_compat() {
+        return stdout.to_lowercase().contains("intel");
+    } else {
         return false;
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
@@ -859,5 +872,15 @@ mod tests {
         assert_eq!(parsed.os_family, OsFamily::Unknown);
         assert!(!parsed.is_wsl);
         assert_eq!(parsed.gpu_count, 0);
+    }
+
+    #[test]
+    fn test_adapter_compat_indicates_amd() {
+        assert!(adapter_compat_indicates_amd(
+            "NVIDIA;Advanced Micro Devices, Inc."
+        ));
+        assert!(adapter_compat_indicates_amd("AMD Radeon"));
+        assert!(!adapter_compat_indicates_amd("Intel Corporation"));
+        assert!(!adapter_compat_indicates_amd("NVIDIA"));
     }
 }

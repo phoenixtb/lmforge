@@ -77,7 +77,7 @@ detect_asset() {
                 *)        error "Unsupported Linux arch: $arch" ;;
             esac ;;
         *)
-            error "Unsupported OS: $os. For Windows, download lmforge-windows-x86_64.exe from GitHub Releases." ;;
+            error "Unsupported OS: $os. For Windows, run:\n  irm https://github.com/$REPO/releases/latest/download/install-core.ps1 | iex" ;;
     esac
 }
 
@@ -250,5 +250,11 @@ echo    "    lmforge pull <model>        — download a model"
 echo    "    lmforge service status      — show service health"
 echo ""
 echo    "  Install the desktop UI:"
-echo    "    curl -fsSL https://github.com/$REPO/releases/latest/download/install-ui.sh | bash"
+echo    "    macOS/Linux: curl -fsSL https://github.com/$REPO/releases/latest/download/install-ui.sh | bash"
+echo    "    Windows:     irm https://github.com/$REPO/releases/latest/download/install-ui.ps1 | iex"
+echo ""
+echo    "  Uninstall:"
+echo    "    UI only:  curl -fsSL https://github.com/$REPO/releases/latest/download/uninstall-ui.sh | bash"
+echo    "    Core:     curl -fsSL https://github.com/$REPO/releases/latest/download/uninstall-core.sh | bash"
+echo    "    Purge:    curl -fsSL https://github.com/$REPO/releases/latest/download/uninstall-core.sh | bash -s -- --purge"
 echo ""

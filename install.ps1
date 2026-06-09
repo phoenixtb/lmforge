@@ -1,7 +1,8 @@
 # =============================================================================
 # LMForge — Windows PowerShell Installer
 # Usage (run in PowerShell as your user):
-#   irm https://raw.githubusercontent.com/phoenixtb/lmforge/main/install.ps1 | iex
+#   irm https://github.com/phoenixtb/lmforge/releases/latest/download/install-core.ps1 | iex
+#   (alias of scripts/install-core.ps1 — kept at repo root for backwards compatibility)
 # =============================================================================
 $ErrorActionPreference = "Stop"
 
@@ -130,4 +131,7 @@ Write-Host "    lmforge pull qwen3-8b        # download your first model"
 Write-Host "    lmforge run qwen3-8b         # interactive chat"
 Write-Host "    lmforge status               # show engine + model status"
 Write-Host "    lmforge service status       # show service health"
+Write-Host ""
+Write-Host "  Install the desktop UI:" -ForegroundColor White
+Write-Host "    irm https://github.com/$Repo/releases/latest/download/install-ui.ps1 | iex"
 Write-Host ""

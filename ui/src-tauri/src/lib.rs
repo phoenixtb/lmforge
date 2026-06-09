@@ -288,22 +288,42 @@ async fn stop_engine() -> Result<(), String> {
 
 /// Find the `lmforge` binary. Checks:
 /// 1. Next to the current executable (production install)
-/// 2. PATH (developer install via `cargo install`)
+/// 2. Bundled `bin/` sibling (NSIS UI installer layout)
+/// 3. `%LOCALAPPDATA%\lmforge\bin` (install-core.ps1 default)
+/// 4. PATH (developer install via `cargo install`)
 fn find_lmforge_binary() -> String {
-    // Binary name differs by platform
+    use std::path::PathBuf;
+
     let bin_name = if cfg!(windows) {
         "lmforge.exe"
     } else {
         "lmforge"
     };
 
-    // 1. Sibling of the current exe (bundled install)
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
     if let Ok(exe) = std::env::current_exe() {
-        let sibling = exe.with_file_name(bin_name);
-        if sibling.exists() {
-            return sibling.to_string_lossy().to_string();
+        candidates.push(exe.with_file_name(bin_name));
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join("bin").join(bin_name));
         }
     }
-    // 2. Rely on PATH
+
+    #[cfg(windows)]
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        candidates.push(
+            PathBuf::from(local)
+                .join("lmforge")
+                .join("bin")
+                .join(bin_name),
+        );
+    }
+
+    for path in candidates {
+        if path.exists() {
+            return path.to_string_lossy().to_string();
+        }
+    }
+
     bin_name.to_string()
 }

@@ -79,9 +79,23 @@ html, body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Interactive chrome — keep click targets from stealing selection */
+button, .btn, .nav-item, .snav-item, label, summary {
   user-select: none;
 }
-input, textarea, [contenteditable] { user-select: text; }
+
+/* Copyable content */
+pre, code, .mono, .selectable,
+.log-pre, .err-tail, .ec-cmd-text, .path-input {
+  user-select: text;
+}
+
+/* Tauri drag regions: allow text selection inside toolbar children */
+[data-tauri-drag-region] > * {
+  -webkit-app-region: no-drag;
+}
 
 /* ── Scrollbars ─────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }

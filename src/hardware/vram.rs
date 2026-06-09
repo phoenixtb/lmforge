@@ -152,8 +152,42 @@ fn get_free_nvidia_vram() -> f32 {
     0.0
 }
 
+/// Windows AMD: read dedicated VRAM from Win32_VideoController.AdapterRAM.
+#[cfg(target_os = "windows")]
+fn windows_amd_adapter_ram_gb() -> Option<f32> {
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            r#"Get-CimInstance Win32_VideoController |
+              Where-Object { $_.AdapterCompatibility -match 'AMD|Advanced Micro Devices' } |
+              Select-Object -ExpandProperty AdapterRAM"#,
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let mut max_gb = 0.0f32;
+    for line in stdout.lines() {
+        if let Ok(bytes) = line.trim().parse::<u64>()
+            && bytes > 0
+        {
+            let gb = bytes as f32 / (1024.0 * 1024.0 * 1024.0);
+            max_gb = max_gb.max(gb);
+        }
+    }
+    if max_gb > 0.0 { Some(max_gb) } else { None }
+}
+
 /// AMD ROCm: parse rocm-smi for GPU memory.
 fn estimate_amd_vram() -> f32 {
+    #[cfg(target_os = "windows")]
+    if let Some(vram) = windows_amd_adapter_ram_gb() {
+        return vram;
+    }
+
     // Try rocm-smi
     if let Ok(output) = std::process::Command::new("rocm-smi")
         .args(["--showmeminfo", "vram"])
@@ -207,6 +241,13 @@ fn get_free_intel_vram(profile: &HardwareProfile) -> f32 {
 
 /// AMD ROCm free memory
 fn get_free_amd_vram() -> f32 {
+    #[cfg(target_os = "windows")]
+    if let Some(total) = windows_amd_adapter_ram_gb() {
+        // AdapterRAM is total dedicated memory; no free-memory API without ADL.
+        // Return total minus a conservative OS/driver pad.
+        return (total - 0.5).max(0.0);
+    }
+
     if let Ok(output) = std::process::Command::new("rocm-smi")
         .args(["--showmeminfo", "vram"])
         .output()

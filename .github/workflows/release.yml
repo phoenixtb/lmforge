@@ -244,21 +244,32 @@ jobs:
             ## Install
 
             ### Core (daemon + CLI)
+
+            **macOS / Linux:**
             ```bash
             curl -fsSL https://github.com/${{ env.REPO }}/releases/latest/download/install-core.sh | bash
             ```
 
-            ### Core on Windows (PowerShell)
+            **Windows (PowerShell):**
             ```powershell
-            irm https://github.com/${{ env.REPO }}/releases/latest/download/install.ps1 | iex
+            irm https://github.com/${{ env.REPO }}/releases/latest/download/install-core.ps1 | iex
             ```
 
             ### UI (desktop app) — install Core first
+
+            **macOS / Linux:**
             ```bash
             curl -fsSL https://github.com/${{ env.REPO }}/releases/latest/download/install-ui.sh | bash
             ```
 
+            **Windows (PowerShell):**
+            ```powershell
+            irm https://github.com/${{ env.REPO }}/releases/latest/download/install-ui.ps1 | iex
+            ```
+
             ### Uninstall
+
+            **macOS / Linux:**
             ```bash
             # Remove UI only (daemon keeps running)
             curl -fsSL https://github.com/${{ env.REPO }}/releases/latest/download/uninstall-ui.sh | bash
@@ -269,10 +280,38 @@ jobs:
             # Remove everything including models
             curl -fsSL https://github.com/${{ env.REPO }}/releases/latest/download/uninstall-core.sh | bash -s -- --purge
             ```
+
+            **Windows (PowerShell):**
+            ```powershell
+            # Remove UI only (daemon keeps running)
+            irm https://github.com/${{ env.REPO }}/releases/latest/download/uninstall-ui.ps1 | iex
+
+            # Remove Core (stops daemon; keeps models)
+            irm https://github.com/${{ env.REPO }}/releases/latest/download/uninstall-core.ps1 | iex
+
+            # Remove everything including models
+            $env:LMFORGE_PURGE = "1"; irm https://github.com/${{ env.REPO }}/releases/latest/download/uninstall-core.ps1 | iex
+            ```
+
+            ### Install / uninstall scripts (also attached as release assets)
+
+            | Script | Platform |
+            |--------|----------|
+            | `install-core.sh` | macOS / Linux |
+            | `install-core.ps1` | Windows |
+            | `install-ui.sh` | macOS / Linux |
+            | `install-ui.ps1` | Windows |
+            | `uninstall-core.sh` | macOS / Linux |
+            | `uninstall-core.ps1` | Windows |
+            | `uninstall-ui.sh` | macOS / Linux |
+            | `uninstall-ui.ps1` | Windows |
           files: |
             artifacts/*
             scripts/install-core.sh
+            scripts/install-core.ps1
             scripts/uninstall-core.sh
+            scripts/uninstall-core.ps1
             scripts/install-ui.sh
+            scripts/install-ui.ps1
             scripts/uninstall-ui.sh
-            install.ps1
+            scripts/uninstall-ui.ps1

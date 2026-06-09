@@ -1,0 +1,124 @@
+# =============================================================================
+# LMForge Core - Windows PowerShell Installer
+# Downloads the pre-built binary from GitHub Releases, installs it to the
+# current user's local bin directory, adds it to PATH, runs init, and
+# registers the system service.
+#
+# Usage (run in PowerShell as your user):
+#   irm https://github.com/phoenixtb/lmforge/releases/latest/download/install-core.ps1 | iex
+#
+# Environment variables:
+#   LMFORGE_VERSION     Pin a specific version, e.g. "v0.3.1" (default: latest)
+# =============================================================================
+$ErrorActionPreference = "Stop"
+
+function Info    { param($m) Write-Host "  [*] $m" -ForegroundColor Cyan }
+function Success { param($m) Write-Host "  [+] $m" -ForegroundColor Green }
+function Warn    { param($m) Write-Host "  [!] $m" -ForegroundColor Yellow }
+function Err     { param($m) Write-Host "  [x] $m" -ForegroundColor Red; exit 1 }
+
+Write-Host ""
+Write-Host "  LMForge Core - Installer" -ForegroundColor Cyan
+Write-Host ""
+
+$Repo       = "phoenixtb/lmforge"
+$Binary     = "lmforge.exe"
+$AssetName  = "lmforge-windows-x86_64.exe"
+$InstallDir = "$env:LOCALAPPDATA\lmforge\bin"
+$Version    = if ($env:LMFORGE_VERSION) { $env:LMFORGE_VERSION } else { "latest" }
+
+Write-Host "  Repo   : https://github.com/$Repo"
+Write-Host "  Version: $Version"
+Write-Host "  Install: $InstallDir\$Binary"
+Write-Host ""
+
+# --- Idempotency check ---
+$env:PATH = "$InstallDir;$env:PATH"
+$LmforgeCmd = Get-Command "lmforge" -ErrorAction SilentlyContinue
+if ($LmforgeCmd -or (Test-Path "$InstallDir\$Binary")) {
+    $CoreBin = if ($LmforgeCmd) { $LmforgeCmd.Source } else { "$InstallDir\$Binary" }
+    $CoreVerRaw = & $CoreBin --version 2>$null
+    $CoreVerMatch = [regex]::Match($CoreVerRaw, '(\d+\.\d+\.\d+)')
+    $CoreVer = if ($CoreVerMatch.Success) { $CoreVerMatch.Groups[1].Value } else { "unknown" }
+    Warn "lmforge $CoreVer is already installed at $CoreBin"
+    Warn "Use 'lmforge service status' to check the daemon."
+    Warn "To reinstall:"
+    Warn "  irm https://github.com/$Repo/releases/latest/download/uninstall-core.ps1 | iex"
+    exit 0
+}
+
+# --- Resolve download URL ---
+if ($Version -eq "latest") {
+    Info "Fetching latest release..."
+    try {
+        $ApiUrl  = "https://api.github.com/repos/$Repo/releases/latest"
+        $Headers = @{ "User-Agent" = "lmforge-installer" }
+        $Release = Invoke-RestMethod -Uri $ApiUrl -Headers $Headers
+        $Version = $Release.tag_name
+        Info "Latest release: $Version"
+    } catch {
+        Err "Could not fetch latest release from GitHub."
+    }
+}
+
+$DownloadUrl = "https://github.com/$Repo/releases/download/$Version/$AssetName"
+$TmpExe      = "$env:TEMP\lmforge-download.exe"
+
+Info "Downloading $AssetName..."
+try {
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $TmpExe -UseBasicParsing
+} catch {
+    Err "Download failed from $DownloadUrl`n  Check https://github.com/$Repo/releases for available versions."
+}
+
+New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+Copy-Item $TmpExe "$InstallDir\$Binary" -Force
+Remove-Item $TmpExe -ErrorAction SilentlyContinue
+Success "Binary installed to $InstallDir\$Binary"
+
+# --- Post-install: data directories ---
+Info "Creating LMForge data directories..."
+$DataDir = "$env:USERPROFILE\.lmforge"
+@("models", "engines", "logs") | ForEach-Object {
+    New-Item -ItemType Directory -Path "$DataDir\$_" -Force | Out-Null
+}
+
+# --- PATH update ---
+$UserPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+if ($UserPath -notlike "*$InstallDir*") {
+    [System.Environment]::SetEnvironmentVariable(
+        "PATH",
+        "$UserPath;$InstallDir",
+        "User"
+    )
+    $env:PATH += ";$InstallDir"
+    Success "Added $InstallDir to your user PATH (restart terminal to take effect)"
+}
+
+# --- Init + Service install ---
+Info "Running lmforge init..."
+& "$InstallDir\$Binary" init
+
+Info "Registering Windows Scheduled Task (auto-start at logon)..."
+& "$InstallDir\$Binary" service install
+
+Write-Host ""
+Success "LMForge $Version installed successfully!"
+Write-Host ""
+Write-Host "  The daemon is running and starts automatically at logon." -ForegroundColor White
+Write-Host "  API:  http://127.0.0.1:11430" -ForegroundColor White
+Write-Host ""
+Write-Host "  Next steps:" -ForegroundColor White
+Write-Host "    lmforge pull qwen3-8b        # download your first model"
+Write-Host "    lmforge run qwen3-8b         # interactive chat"
+Write-Host "    lmforge status               # show engine + model status"
+Write-Host "    lmforge service status       # show service health"
+Write-Host ""
+Write-Host "  Install the desktop UI:" -ForegroundColor White
+Write-Host "    irm https://github.com/$Repo/releases/latest/download/install-ui.ps1 | iex"
+Write-Host ""
+Write-Host "  Uninstall:" -ForegroundColor White
+Write-Host "    UI only:  irm https://github.com/$Repo/releases/latest/download/uninstall-ui.ps1 | iex"
+Write-Host "    Core:     irm https://github.com/$Repo/releases/latest/download/uninstall-core.ps1 | iex"
+Write-Host "    Purge:    `$env:LMFORGE_PURGE = '1'; irm https://github.com/$Repo/releases/latest/download/uninstall-core.ps1 | iex"
+Write-Host ""

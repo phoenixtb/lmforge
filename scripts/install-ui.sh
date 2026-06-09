@@ -108,7 +108,7 @@ detect_ui_asset() {
                 *)        error "Unsupported Linux arch: $ARCH. Only x86_64 is supported currently." ;;
             esac ;;
         *)
-            error "Unsupported OS: $OS. For Windows, download the NSIS installer (.exe) from GitHub Releases." ;;
+            error "Unsupported OS: $OS. For Windows, run:\n  irm https://github.com/$REPO/releases/latest/download/install-ui.ps1 | iex" ;;
     esac
 }
 
@@ -395,4 +395,12 @@ fi
 echo    ""
 echo    "  The UI connects to the daemon at http://127.0.0.1:11430"
 echo    "  Closing the UI window does NOT stop the daemon or your models."
+echo ""
+if [[ "$OS" == "Darwin" || "$OS" == "Linux" ]]; then
+    echo    "  Uninstall UI only:"
+    echo    "    curl -fsSL https://github.com/$REPO/releases/latest/download/uninstall-ui.sh | bash"
+elif [[ "$OS" == "MINGW"* || "$OS" == "MSYS"* || "$OS" == "CYGWIN"* ]]; then
+    echo    "  Uninstall UI only:"
+    echo    "    irm https://github.com/$REPO/releases/latest/download/uninstall-ui.ps1 | iex"
+fi
 echo ""

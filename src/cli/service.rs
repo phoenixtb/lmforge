@@ -297,19 +297,23 @@ fn install_scheduled_task(exe_path: &str, data_dir: &std::path::Path) -> Result<
     // Build the log directory so the task can redirect output immediately.
     let log_dir = data_dir.join("logs");
     std::fs::create_dir_all(&log_dir)?;
-    let log_out = log_dir.join("daemon.out.log");
+    let log_out_path = log_dir.join("daemon.out.log");
 
     // Storage dirs are intentionally NOT set as User env vars here.
     // The bootstrap config.toml (~/.lmforge/config.toml) holds those settings
     // and is read by the daemon on every startup. Baking stale env would shadow
     // any UI-driven config change until the user re-runs `lmforge service install`.
-    let env_prelude = String::new();
-
+    //
+    // Redirect stdout/stderr to daemon.out.log — bare ScheduledTaskAction
+    // does not tee output, so wrap lmforge via cmd.exe with append redirect.
+    let log_out = log_out_path.to_string_lossy().replace('\\', "\\\\");
+    let exe_esc = exe_path.replace('\\', "\\\\");
     let ps_script = format!(
         r#"
-{env_prelude}$action  = New-ScheduledTaskAction `
-    -Execute "{exe}" `
-    -Argument "start --foreground"
+$logOut = "{log_out}"
+$exe    = "{exe_esc}"
+$arg    = '/c ""' + $exe + '"" start --foreground >> ""' + $logOut + '"" 2>&1'
+$action  = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $arg
 $trigger = New-ScheduledTaskTrigger -AtLogon
 $settings = New-ScheduledTaskSettingsSet `
     -RestartCount 3 `
@@ -328,8 +332,8 @@ Register-ScheduledTask `
     -Force | Out-Null
 Start-ScheduledTask -TaskName "{task}"
 "#,
-        env_prelude = env_prelude,
-        exe = exe_path.replace('"', r#"\""#),
+        log_out = log_out,
+        exe_esc = exe_esc,
         task = WINDOWS_TASK_NAME,
     );
 
@@ -347,7 +351,7 @@ Start-ScheduledTask -TaskName "{task}"
 
     println!("✓ LMForge scheduled task registered and started.");
     println!("  It will now start automatically at logon.");
-    println!("  Logs: {}", log_out.display());
+    println!("  Logs: {}", log_out_path.display());
     Ok(())
 }
 

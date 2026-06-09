@@ -106,11 +106,12 @@ The daemon runs as a system service. Install once; it starts automatically on ev
 curl -fsSL https://github.com/phoenixtb/lmforge/releases/latest/download/install-core.sh | bash
 ```
 
-**Windows** — download `lmforge-windows-x86_64.exe` from [Releases](https://github.com/phoenixtb/lmforge/releases/latest), place it on your `PATH`, then:
+**Windows:**
 ```powershell
-lmforge init                   # detect hardware, install engine
-lmforge service install        # register Scheduled Task (auto-starts at logon)
+irm https://github.com/phoenixtb/lmforge/releases/latest/download/install-core.ps1 | iex
 ```
+
+Or download `lmforge-windows-x86_64.exe` from [Releases](https://github.com/phoenixtb/lmforge/releases/latest), place it on your `PATH`, then run `lmforge init` and `lmforge service install`.
 
 What the install script does on macOS/Linux:
 1. Downloads the pre-built `lmforge` binary for your platform/arch (~5 MB)
@@ -143,12 +144,18 @@ Install the core first, then:
 curl -fsSL https://github.com/phoenixtb/lmforge/releases/latest/download/install-ui.sh | bash
 ```
 
-**Windows:** Download `LMForge-UI-windows-x86_64.exe` from [Releases](https://github.com/phoenixtb/lmforge/releases/latest) and run the installer. WebView2 (pre-installed on Windows 11) is the only requirement.
+**Windows:**
+```powershell
+irm https://github.com/phoenixtb/lmforge/releases/latest/download/install-ui.ps1 | iex
+```
+
+WebView2 is required on Windows 10 (pre-installed on Windows 11). The installer downloads it automatically when internet is available.
 
 The UI is a pure client — closing it never affects the daemon or running models.
 
 ### Uninstall
 
+**macOS / Linux:**
 ```bash
 # Remove the desktop UI only (daemon keeps running)
 curl -fsSL https://github.com/phoenixtb/lmforge/releases/latest/download/uninstall-ui.sh | bash
@@ -162,8 +169,14 @@ curl -fsSL https://github.com/phoenixtb/lmforge/releases/latest/download/uninsta
 
 **Windows:**
 ```powershell
-lmforge service uninstall      # remove Scheduled Task
-# then delete lmforge.exe from PATH
+# Remove UI only (daemon keeps running)
+irm https://github.com/phoenixtb/lmforge/releases/latest/download/uninstall-ui.ps1 | iex
+
+# Remove Core (stops daemon; keeps models)
+irm https://github.com/phoenixtb/lmforge/releases/latest/download/uninstall-core.ps1 | iex
+
+# Remove everything including models
+$env:LMFORGE_PURGE = "1"; irm https://github.com/phoenixtb/lmforge/releases/latest/download/uninstall-core.ps1 | iex
 ```
 
 ---

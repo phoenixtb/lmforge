@@ -2,11 +2,18 @@
 
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
+  import { getVersion } from '@tauri-apps/api/app';
   import { open } from '@tauri-apps/plugin-dialog';
   import { onMount } from 'svelte';
+  import { type as osType, arch as osArch } from '@tauri-apps/plugin-os';
   import { dragOnEmpty } from '$lib/drag';
   import { toast } from '$lib/stores/toasts';
-  import { getEngines, getConfig, postConfig, applyStorage, type EngineInfo, type LfConfig } from '$lib/api';
+  import { statusStore } from '$lib/stores/status';
+  import {
+    getEngines, getConfig, postConfig, applyStorage,
+    getHealth, getHardware,
+    type EngineInfo, type LfConfig, type HardwareProfile,
+  } from '$lib/api';
 
   // ── Daemon config (storage dirs) ────────────────────────────────────────────
   let cfg = $state<LfConfig & { restart_required?: boolean }>({});
@@ -252,6 +259,62 @@
     { id: 'about',   label: 'About',          icon: 'ℹ' },
   ];
   let activeSection = $state('storage');
+
+  // ── About section ───────────────────────────────────────────────────────────
+  let uiVersion = $state('—');
+  let coreVersion = $state('—');
+  let minUiVersion = $state<string | null>(null);
+  let platformLabel = $state('—');
+  let aboutHardware = $state<HardwareProfile | null>(null);
+  let aboutLoading = $state(false);
+  let aboutLoaded = $state(false);
+
+  async function loadAbout() {
+    if (aboutLoaded || aboutLoading) return;
+    aboutLoading = true;
+    try {
+      try { uiVersion = await getVersion(); } catch { uiVersion = 'dev'; }
+      try {
+        platformLabel = `${osType()} ${osArch()}`;
+      } catch {
+        platformLabel = '—';
+      }
+      try {
+        const health = await getHealth();
+        coreVersion = health.version ?? '—';
+        minUiVersion = health.min_ui_version ?? null;
+      } catch {
+        coreVersion = 'offline';
+      }
+      try {
+        aboutHardware = await getHardware();
+      } catch {
+        aboutHardware = null;
+      }
+      aboutLoaded = true;
+    } finally {
+      aboutLoading = false;
+    }
+  }
+
+  let lastAboutFetch = $state(false);
+  $effect(() => {
+    if (activeSection === 'about' && !lastAboutFetch) {
+      lastAboutFetch = true;
+      void loadAbout();
+    } else if (activeSection !== 'about') {
+      lastAboutFetch = false;
+    }
+  });
+
+  function formatGpu(hw: HardwareProfile): string {
+    const vendor = hw.gpu_vendor && hw.gpu_vendor !== 'none' ? hw.gpu_vendor : 'none';
+    if (vendor === 'none') return 'CPU only';
+    const cap = hw.compute_cap ? ` sm_${hw.compute_cap[0]}${hw.compute_cap[1]}` : '';
+    const vram = hw.vram_gb > 0 ? ` · ${hw.vram_gb.toFixed(1)} GB VRAM` : '';
+    const count = hw.gpu_count && hw.gpu_count > 1 ? ` · ${hw.gpu_count} GPUs` : '';
+    return `${vendor}${cap}${vram}${count}`;
+  }
 </script>
 
 <div class="page">
@@ -781,6 +844,54 @@ lmforge service status          # show installation status`}</pre>
               <a href="https://github.com/phoenixtb/lmforge" target="_blank" rel="noopener" class="about-link">GitHub →</a>
             </div>
           </div>
+
+          {#if aboutLoading}
+            <div class="empty">Loading version info…</div>
+          {:else}
+            <div class="about-info">
+              <h3 class="about-info-title">Versions</h3>
+              <dl class="ec-grid">
+                <dt>UI</dt>
+                <dd>v{uiVersion}</dd>
+                <dt>Core</dt>
+                <dd>v{coreVersion}</dd>
+                <dt>Engine</dt>
+                <dd>{$statusStore.engine_id} v{$statusStore.engine_version}</dd>
+                {#if minUiVersion}
+                  <dt>Min UI</dt>
+                  <dd>v{minUiVersion} <span class="about-hint">(required by core)</span></dd>
+                {/if}
+              </dl>
+            </div>
+
+            <div class="about-info">
+              <h3 class="about-info-title">Runtime</h3>
+              <dl class="ec-grid">
+                <dt>Platform</dt>
+                <dd>{platformLabel}</dd>
+                <dt>API</dt>
+                <dd class="selectable">http://127.0.0.1:11430</dd>
+                <dt>Daemon</dt>
+                <dd>{$statusStore.overall_status}</dd>
+                {#if aboutHardware}
+                  <dt>CPU</dt>
+                  <dd>{aboutHardware.cpu_model} ({aboutHardware.cpu_cores} cores)</dd>
+                  <dt>RAM</dt>
+                  <dd>{aboutHardware.total_ram_gb.toFixed(1)} GB</dd>
+                  <dt>GPU</dt>
+                  <dd>{formatGpu(aboutHardware)}</dd>
+                  {#if aboutHardware.cuda_driver_version}
+                    <dt>CUDA driver</dt>
+                    <dd>{aboutHardware.cuda_driver_version}</dd>
+                  {/if}
+                  {#if aboutHardware.os_family}
+                    <dt>OS family</dt>
+                    <dd>{aboutHardware.os_family}</dd>
+                  {/if}
+                {/if}
+              </dl>
+            </div>
+          {/if}
         </section>
       {/if}
 
@@ -1205,4 +1316,22 @@ lmforge service status          # show installation status`}</pre>
   .about-links   { display: flex; gap: 12px; margin-top: 8px; }
   .about-link    { font-size: 12px; color: var(--accent-2); text-decoration: none; }
   .about-link:hover { text-decoration: underline; }
+
+  .about-info {
+    padding: 16px 18px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+  .about-info-title {
+    font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--text-3);
+    margin: 0 0 12px;
+  }
+  .about-hint {
+    font-family: var(--font-sans);
+    font-size: 10.5px;
+    color: var(--text-3);
+  }
 </style>

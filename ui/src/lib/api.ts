@@ -140,6 +140,16 @@ export interface HardwareProfile {
   unified_mem: boolean;
   total_ram_gb: number;
   is_tegra?: boolean;
+  os_family?: string;
+  compute_cap?: [number, number];
+  cuda_driver_version?: string | null;
+  gpu_count?: number;
+}
+
+export interface HealthInfo {
+  status: string;
+  version: string;
+  min_ui_version?: string;
 }
 
 export interface GpuStats {
@@ -214,6 +224,14 @@ async function del<T>(path: string): Promise<T> {
 }
 
 // ─── Typed endpoint wrappers ──────────────────────────────────────────────────
+
+/** GET /health — daemon reachability + core semver (version present even when not ready) */
+export async function getHealth(): Promise<HealthInfo> {
+  const res = await fetch(`${BASE}/health`);
+  const body = (await res.json()) as HealthInfo;
+  if (!body.version) throw new Error(`LF API /health: ${res.status}`);
+  return body;
+}
 
 /** GET /lf/status — one-shot snapshot (use Tauri Event listener for live updates) */
 export const getStatus = (): Promise<LfStatus> => get('/lf/status');

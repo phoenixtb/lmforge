@@ -414,5 +414,6 @@
     font-family: var(--font-mono); font-size: 11px; line-height: 1.45;
     color: var(--text-2); white-space: pre-wrap; word-break: break-all;
     overflow: auto;
+    user-select: text;
   }
 </style>
