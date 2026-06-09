@@ -41,11 +41,51 @@ if (-not $Yes) {
     }
 }
 
+function Stop-LmforgeUiProcesses {
+    Get-Process -Name "lmforge-ui" -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+    # Tray / child processes can outlive the main window briefly.
+    & taskkill.exe /F /IM lmforge-ui.exe 2>$null | Out-Null
+    $deadline = (Get-Date).AddSeconds(12)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Get-Process -Name "lmforge-ui" -ErrorAction SilentlyContinue)) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 400
+    }
+    return -not (Get-Process -Name "lmforge-ui" -ErrorAction SilentlyContinue)
+}
+
+function Remove-LmforgeUiDirectory {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return $true }
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            Info "Removed $Path"
+            return $true
+        } catch {
+            if ($attempt -lt 3) {
+                Warn "Could not remove $Path (attempt $attempt): $($_.Exception.Message)"
+                Stop-LmforgeUiProcesses | Out-Null
+                Start-Sleep -Seconds 2
+            } else {
+                Warn "Could not remove $Path : $($_.Exception.Message)"
+                Warn "Quit LMForge from the system tray, then re-run uninstall-ui.ps1"
+                return $false
+            }
+        }
+    }
+    return $false
+}
+
 # --- Quit running app ---
 Section "Quitting LMForge..."
-Get-Process -Name "lmforge-ui" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 1
-Info "App process stopped"
+if (Stop-LmforgeUiProcesses) {
+    Info "App process stopped"
+} else {
+    Warn "lmforge-ui.exe is still running (check system tray)"
+}
 
 # --- Run NSIS uninstaller if registered ---
 Section "Removing app..."
@@ -84,9 +124,10 @@ if ($UninstallEntry) {
 
 # --- Fallback: remove known install dir ---
 if (Test-Path $InstallDir) {
-    Remove-Item -Recurse -Force $InstallDir
-    Info "Removed $InstallDir"
-    $Removed = $true
+    Stop-LmforgeUiProcesses | Out-Null
+    if (Remove-LmforgeUiDirectory -Path $InstallDir) {
+        $Removed = $true
+    }
 } elseif (-not $Removed -and -not (Test-Path $AppExe)) {
     Warn "LMForge UI not found - may already be uninstalled"
 }
@@ -94,8 +135,12 @@ if (Test-Path $InstallDir) {
 # --- Remove app data (Tauri identifier: com.lmforge.app) ---
 $AppDataDir = "$env:APPDATA\com.lmforge.app"
 if (Test-Path $AppDataDir) {
-    Remove-Item -Recurse -Force $AppDataDir
-    Info "Removed $AppDataDir"
+    try {
+        Remove-Item -LiteralPath $AppDataDir -Recurse -Force -ErrorAction Stop
+        Info "Removed $AppDataDir"
+    } catch {
+        Warn "Could not remove $AppDataDir : $($_.Exception.Message)"
+    }
 }
 
 Write-Host ""

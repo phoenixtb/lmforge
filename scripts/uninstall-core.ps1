@@ -158,13 +158,21 @@ if (Test-Path "$DataDir\bin") {
 Section "Data directory..."
 if ($Purge) {
     if (Test-Path $DataDir) {
-        Remove-Item $DataDir -Recurse -Force
-        Info "Data directory removed"
+        try {
+            Remove-Item -LiteralPath $DataDir -Recurse -Force -ErrorAction Stop
+            Info "Data directory removed"
+        } catch {
+            Warn "Could not remove $DataDir : $($_.Exception.Message)"
+        }
     }
     $uiData = "$env:APPDATA\com.lmforge.app"
     if (Test-Path $uiData) {
-        Remove-Item $uiData -Recurse -Force
-        Info "Removed $uiData"
+        try {
+            Remove-Item -LiteralPath $uiData -Recurse -Force -ErrorAction Stop
+            Info "Removed $uiData"
+        } catch {
+            Warn "Could not remove $uiData : $($_.Exception.Message)"
+        }
     }
 } else {
     Info "Keeping $DataDir (set LMFORGE_PURGE=1 to remove)"
