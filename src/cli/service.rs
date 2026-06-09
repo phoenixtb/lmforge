@@ -291,7 +291,7 @@ fn uninstall_systemd() -> Result<()> {
 static WINDOWS_TASK_NAME: &str = "LMForge Daemon";
 
 #[cfg(windows)]
-static WINDOWS_TASK_LAUNCHER: &str = "daemon-task.cmd";
+static WINDOWS_TASK_LAUNCHER: &str = "daemon-task.vbs";
 
 /// True when the daemon API port accepts a TCP connection.
 #[cfg(windows)]
@@ -348,16 +348,23 @@ fn install_scheduled_task(exe_path: &str, data_dir: &std::path::Path) -> Result<
     // and is read by the daemon on every startup. Baking stale env would shadow
     // any UI-driven config change until the user re-runs `lmforge service install`.
     //
-    // Redirect stdout/stderr to daemon.out.log via a small .cmd launcher.
-    // Inlining cmd.exe /c with nested quotes breaks under Task Scheduler
-    // (Last Run Result 1); a launcher file avoids that quoting trap.
+    // Hidden VBS launcher: Task Scheduler must not run cmd.exe or .cmd directly —
+    // each attempt flashes a console window.  WshShell.Run style 0 hides the
+    // console; `lmforge start` (daemon mode) spawns a detached no-window child.
+    // Drop legacy launchers from earlier installs.
+    for legacy in ["daemon-task.cmd", "daemon-task.vbs"] {
+        let p = data_dir.join(legacy);
+        if p != data_dir.join(WINDOWS_TASK_LAUNCHER) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
     let launcher_path = data_dir.join(WINDOWS_TASK_LAUNCHER);
-    let launcher_content = format!(
-        "@echo off\r\n\"{exe}\" start --foreground >> \"{log}\" 2>&1\r\n",
-        exe = exe_path,
-        log = log_out_path.display()
+    let vbs_content = format!(
+        "CreateObject(\"Wscript.Shell\").Run \"\"\"{exe}\"\" start\", 0, False\r\n",
+        exe = exe_path
     );
-    std::fs::write(&launcher_path, launcher_content).with_context(|| {
+    std::fs::write(&launcher_path, vbs_content).with_context(|| {
         format!(
             "Cannot write scheduled-task launcher: {}",
             launcher_path.display()
@@ -369,8 +376,12 @@ fn install_scheduled_task(exe_path: &str, data_dir: &std::path::Path) -> Result<
         .replace('\\', "\\\\");
     let ps_script = format!(
         r#"
+$task     = "{task}"
 $launcher = "{launcher_esc}"
-$action   = New-ScheduledTaskAction -Execute $launcher
+# Remove stale task definition (old installs used cmd.exe and flashed windows).
+Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
+schtasks.exe /Delete /TN $task /F 2>$null | Out-Null
+$action   = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B `"$launcher`""
 $trigger  = New-ScheduledTaskTrigger -AtLogon
 $settings = New-ScheduledTaskSettingsSet `
     -RestartCount 3 `
@@ -383,20 +394,30 @@ $principal = New-ScheduledTaskPrincipal `
     -RunLevel Limited `
     -LogonType Interactive
 Register-ScheduledTask `
-    -TaskName "{task}" `
+    -TaskName $task `
     -Action $action `
     -Trigger $trigger `
     -Settings $settings `
     -Principal $principal `
     -Force | Out-Null
-Start-ScheduledTask -TaskName "{task}"
+Start-ScheduledTask -TaskName $task
 "#,
         launcher_esc = launcher_esc,
         task = WINDOWS_TASK_NAME,
     );
 
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &ps_script,
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .context("Failed to run PowerShell")?;
 
@@ -445,9 +466,11 @@ fn uninstall_scheduled_task() -> Result<()> {
         .context("Failed to run PowerShell")?;
 
     if let Ok(data_dir) = home_dir().map(|h| h.join(".lmforge")) {
-        let launcher = data_dir.join(WINDOWS_TASK_LAUNCHER);
-        if launcher.exists() {
-            let _ = std::fs::remove_file(launcher);
+        for name in [WINDOWS_TASK_LAUNCHER, "daemon-task.cmd"] {
+            let launcher = data_dir.join(name);
+            if launcher.exists() {
+                let _ = std::fs::remove_file(launcher);
+            }
         }
     }
 

@@ -28,11 +28,11 @@ foreach ($name in $scripts) {
 & (Join-Path $utilDir "test-ps1-syntax.ps1")
 if ($LASTEXITCODE -ne 0) { $fail++ }
 
-$launcher = Join-Path $env:USERPROFILE ".lmforge\daemon-task.cmd"
+$launcher = Join-Path $env:USERPROFILE ".lmforge\daemon-task.vbs"
 if (Test-Path -LiteralPath $launcher) {
-    Write-Host "OK   daemon-task.cmd present at $launcher"
+    Write-Host "OK   daemon-task.vbs present at $launcher"
 } else {
-    Write-Host "SKIP daemon-task.cmd (created by lmforge service install)"
+    Write-Host "SKIP daemon-task.vbs (created by lmforge service install)"
 }
 
 if ($fail -gt 0) {
