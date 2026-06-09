@@ -1,6 +1,6 @@
 @echo off
 setlocal
-set "PATH=%USERPROFILE%\.cargo\bin;C:\Program Files\nodejs;%PATH%"
+set "PATH=%USERPROFILE%\.cargo\bin;C:\Program Files\Volta;%USERPROFILE%\AppData\Local\Volta\bin;%PATH%"
 cd /d "%~dp0..\..\ui"
 if not exist node_modules (
   call npm ci
