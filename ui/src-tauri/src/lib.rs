@@ -49,7 +49,13 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![start_engine, stop_engine])
+        .invoke_handler(tauri::generate_handler![
+            start_engine,
+            stop_engine,
+            restart_engine,
+            restart_service,
+            get_service_status,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running LMForge");
 }
@@ -64,18 +70,26 @@ pub fn run() {
 ///  2. Emit lf:health EVERY cycle — not just on state change — so any
 ///     late-registering listener is caught on the next tick.
 async fn status_bridge(app: tauri::AppHandle) {
+    // Generous timeout: during a large model pull the daemon saturates the
+    // link/CPU and a short timeout makes /health or /lf/status flap. A single
+    // flap must NOT wipe the in-flight pull snapshot from the UI.
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(std::time::Duration::from_secs(8))
         .build()
         .unwrap_or_default();
 
     let base_url = "http://127.0.0.1:11430";
 
+    // Number of consecutive failed health probes before we declare the daemon
+    // offline. Tolerating a transient blip keeps the status store (and the
+    // active_pull snapshot it carries) intact under heavy download load.
+    const OFFLINE_THRESHOLD: u32 = 3;
+    let mut consecutive_fail: u32 = 0;
+
     // Let the WebView mount and register listen() before the first event.
     tokio::time::sleep(std::time::Duration::from_millis(800)).await;
 
     loop {
-        // 1. Health check — emit every cycle; the store handles idempotent updates.
         let health_ok = client
             .get(format!("{}/health", base_url))
             .send()
@@ -83,34 +97,44 @@ async fn status_bridge(app: tauri::AppHandle) {
             .map(|r| r.status().is_success())
             .unwrap_or(false);
 
-        let _ = app.emit("lf:health", serde_json::json!({ "online": health_ok }));
+        if health_ok {
+            consecutive_fail = 0;
+            let _ = app.emit("lf:health", serde_json::json!({ "online": true }));
 
-        if !health_ok {
-            let _ = app.emit(
-                "lf:status",
-                serde_json::json!({
-                    "overall_status": "stopped",
-                    "engine_id": "—",
-                    "engine_version": "—",
-                    "running_models": {},
-                    "metrics": {
-                        "requests_total": 0,
-                        "ttft_avg_ms": 0.0,
-                        "uptime_secs": 0,
-                        "restart_count": 0
+            // Fetch the full status snapshot (includes active_pull). If this
+            // request itself fails, emit nothing — the store retains its last
+            // good value rather than dropping the in-flight pull.
+            if let Ok(resp) = client.get(format!("{}/lf/status", base_url)).send().await {
+                if let Ok(body) = resp.text().await {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+                        let _ = app.emit("lf:status", &json);
                     }
-                }),
-            );
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            continue;
-        }
-
-        // 2. Fetch full status snapshot when online.
-        if let Ok(resp) = client.get(format!("{}/lf/status", base_url)).send().await {
-            if let Ok(body) = resp.text().await {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
-                    let _ = app.emit("lf:status", &json);
                 }
+            }
+        } else {
+            consecutive_fail = consecutive_fail.saturating_add(1);
+            // Only declare offline (and wipe status) after sustained failures.
+            // A single timeout under download load is treated as transient and
+            // leaves the existing status — and its active_pull — untouched.
+            if consecutive_fail >= OFFLINE_THRESHOLD {
+                let _ = app.emit("lf:health", serde_json::json!({ "online": false }));
+                let _ = app.emit(
+                    "lf:status",
+                    serde_json::json!({
+                        "overall_status": "stopped",
+                        "engine_id": "—",
+                        "engine_version": "—",
+                        "running_models": {},
+                        "metrics": {
+                            "requests_total": 0,
+                            "ttft_avg_ms": 0.0,
+                            "uptime_secs": 0,
+                            "restart_count": 0
+                        },
+                        "last_errors": {},
+                        "active_pull": null
+                    }),
+                );
             }
         }
 
@@ -136,6 +160,111 @@ async fn start_engine() -> Result<String, String> {
         Ok(stdout)
     } else {
         Err(format!("{stdout}{stderr}"))
+    }
+}
+
+/// Tauri command: restart the LMForge daemon (run-mode aware).
+///
+/// If a service unit is installed, delegates to `lmforge service restart` to
+/// avoid KeepAlive / `Restart=always` respawn races. Otherwise falls back to
+/// `lmforge stop` + `lmforge start` (foreground mode).
+#[tauri::command]
+async fn restart_engine() -> Result<String, String> {
+    let lmforge_bin = find_lmforge_binary();
+
+    if is_service_installed(&lmforge_bin).await {
+        let output = tokio::process::Command::new(&lmforge_bin)
+            .args(["service", "restart"])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to spawn lmforge: {e}"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return if output.status.success() {
+            Ok(stdout)
+        } else {
+            Err(format!("{stdout}{stderr}"))
+        };
+    }
+
+    // Foreground mode: graceful stop + start.
+    let _ = tokio::process::Command::new(&lmforge_bin)
+        .arg("stop")
+        .output()
+        .await;
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+
+    let output = tokio::process::Command::new(&lmforge_bin)
+        .arg("start")
+        .output()
+        .await
+        .map_err(|e| format!("Failed to spawn lmforge: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() || stdout.contains("already running") {
+        Ok(stdout)
+    } else {
+        Err(format!("{stdout}{stderr}"))
+    }
+}
+
+/// Tauri command: restart the LMForge service via the native service manager.
+/// Requires the service to be installed; returns an error otherwise.
+#[tauri::command]
+async fn restart_service() -> Result<String, String> {
+    let lmforge_bin = find_lmforge_binary();
+    let output = tokio::process::Command::new(&lmforge_bin)
+        .args(["service", "restart"])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to spawn lmforge: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        Err(format!("{stdout}{stderr}"))
+    }
+}
+
+/// Tauri command: query the service installation and running state.
+/// Returns `{ installed: bool, running: bool, output: string }`.
+#[tauri::command]
+async fn get_service_status() -> serde_json::Value {
+    let lmforge_bin = find_lmforge_binary();
+    match tokio::process::Command::new(&lmforge_bin)
+        .args(["service", "status"])
+        .output()
+        .await
+    {
+        Ok(o) => {
+            let out = String::from_utf8_lossy(&o.stdout).to_string();
+            // macOS/Linux print "installed ✓"; Windows prints "registered ✓".
+            let installed = out.contains("installed ✓") || out.contains("registered ✓");
+            let running = out.contains("running ✓") || out.contains("active (running) ✓");
+            serde_json::json!({ "installed": installed, "running": running, "output": out })
+        }
+        Err(e) => {
+            serde_json::json!({ "installed": false, "running": false, "error": e.to_string() })
+        }
+    }
+}
+
+/// Check if a LMForge service unit is installed on this host.
+async fn is_service_installed(lmforge_bin: &str) -> bool {
+    match tokio::process::Command::new(lmforge_bin)
+        .args(["service", "status"])
+        .output()
+        .await
+    {
+        Ok(o) => {
+            let out = String::from_utf8_lossy(&o.stdout);
+            // macOS/Linux print "installed ✓"; Windows prints "registered ✓".
+            out.contains("installed ✓") || out.contains("registered ✓")
+        }
+        Err(_) => false,
     }
 }
 

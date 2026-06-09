@@ -1,15 +1,37 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::config::LmForgeConfig;
+use crate::engine::registry::EngineRegistry;
 use crate::model::{downloader, index, resolver};
 
-/// `lmforge pull <model>` — Download a model
-pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
+/// `lmforge pull <model> [--engine <id>] [--refresh]` — Download a model.
+///
+/// When `engine_override` is `None`, the format is determined by the
+/// hardware-aware auto-selector (same as `lmforge run` / `lmforge catalog`).
+/// When set, the registry's `select_explicit` is used so the user can pull
+/// safetensors for vLLM on a host where llamacpp is the default.
+///
+/// `refresh` re-evaluates capabilities for an already-present model without
+/// re-downloading the weights. Migration story for users who pulled a model
+/// before a capability detector landed (e.g. MTP detection in S-1).
+pub async fn run(
+    config: &LmForgeConfig,
+    model_input: &str,
+    engine_override: Option<&str>,
+    refresh: bool,
+) -> Result<()> {
     let data_dir = config.data_dir();
-    std::fs::create_dir_all(data_dir.join("models"))?;
+    let models_dir = config.models_dir();
+    std::fs::create_dir_all(&models_dir)?;
 
-    // Determine the engine format (default to mlx on this platform)
-    let engine_format = detect_engine_format(&data_dir);
+    // Determine the engine format. Shared with `run`, `catalog`, and the UI
+    // so a fresh-pull / fresh-run / fresh-list never disagree — UNLESS the
+    // user explicitly forces an engine, in which case the format follows
+    // that engine's `model_format` field.
+    let engine_format = match engine_override {
+        Some(id) => resolve_format_for_engine(id, &data_dir)?,
+        None => crate::model::catalog::detect_engine_format(&data_dir),
+    };
 
     // Resolve model input
     println!("⚙ Resolving model: {}", model_input);
@@ -22,7 +44,7 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
     println!("  Files:  {}", resolved.files.len());
     println!();
 
-    if resolved.format.to_string() != engine_format {
+    if !formats_compatible(&resolved.format.to_string(), &engine_format) {
         anyhow::bail!(
             "❌ INCOMPATIBLE MODEL FORMAT: You are attempting to pull a '{}' model, \
              but the engine selected for your hardware requires '{}'.\n  \
@@ -34,10 +56,75 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
     }
 
     // Check if already downloaded
-    let model_dir = data_dir.join("models").join(&resolved.dir_name);
-    let mut idx = index::ModelIndex::load(&data_dir)?;
+    let model_dir = models_dir.join(&resolved.dir_name);
+    let mut idx = index::ModelIndex::load(&data_dir, &models_dir)?;
 
     if let Some(existing) = idx.get(&resolved.id) {
+        // VLM repos ship an mmproj sidecar alongside the main quant. Older
+        // pulls only downloaded the backbone — backfill any resolved files
+        // that are still missing on disk without forcing a full re-download.
+        if download_missing_files(&resolved, &model_dir).await? {
+            let caps = detect_and_print_capabilities(
+                &model_dir,
+                &resolved.id,
+                &resolved.hf_repo,
+                &resolved.format,
+                resolved.mtp,
+            );
+            let entry = index::ModelEntry {
+                id: resolved.id.clone(),
+                path: existing.path.clone(),
+                format: resolved.format.to_string(),
+                engine: engine_format.clone(),
+                hf_repo: Some(resolved.hf_repo.clone()),
+                size_bytes: index::dir_size(&model_dir),
+                capabilities: caps,
+                added_at: existing.added_at.clone(),
+            };
+            idx.add(entry);
+            idx.save(&data_dir, &models_dir)?;
+            println!(
+                "\n✓ Model '{}' sidecar(s) fetched. Start with:",
+                resolved.id
+            );
+            println!("  lmforge start --model {}", resolved.id);
+            return Ok(());
+        }
+
+        if refresh {
+            // Re-evaluate capabilities for an already-downloaded model.
+            // Same detection pipeline as a fresh pull (incl. layered MTP),
+            // but no network I/O — we only touch the on-disk weights and
+            // the catalog metadata that came with `resolved`.
+            println!(
+                "  Model '{}' present at {} — refreshing capabilities (no re-download)",
+                resolved.id, existing.path
+            );
+
+            let caps = detect_and_print_capabilities(
+                &model_dir,
+                &resolved.id,
+                &resolved.hf_repo,
+                &resolved.format,
+                resolved.mtp,
+            );
+
+            let entry = index::ModelEntry {
+                id: resolved.id.clone(),
+                path: existing.path.clone(),
+                format: resolved.format.to_string(),
+                engine: engine_format.clone(),
+                hf_repo: Some(resolved.hf_repo.clone()),
+                size_bytes: index::dir_size(&model_dir),
+                capabilities: caps,
+                added_at: existing.added_at.clone(),
+            };
+            idx.add(entry);
+            idx.save(&data_dir, &models_dir)?;
+
+            println!("\n✓ Model '{}' capabilities refreshed.", resolved.id);
+            return Ok(());
+        }
         println!(
             "  Model '{}' already installed at {}",
             resolved.id, existing.path
@@ -46,7 +133,19 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
             "  To re-download, remove it first: lmforge models remove {}",
             resolved.id
         );
+        println!(
+            "  To update capabilities (e.g. mtp) without re-downloading: lmforge pull {} --refresh",
+            resolved.id
+        );
         return Ok(());
+    }
+
+    if refresh {
+        anyhow::bail!(
+            "--refresh requires an already-installed model. \
+             '{}' is not in the index — drop --refresh to download it.",
+            resolved.id
+        );
     }
 
     // Download
@@ -120,14 +219,13 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
     println!("\n  ✓ Downloaded {} MB", size_mb);
 
     // Detect capabilities
-    let caps = index::detect_capabilities(&model_dir, Some(&resolved.id), Some(&resolved.hf_repo));
-    println!(
-        "  Capabilities: chat={} embeddings={} reranking={} thinking={} vision={} dims={:?}",
-        caps.chat, caps.embeddings, caps.reranking, caps.thinking, caps.vision, caps.embedding_dims
+    let caps = detect_and_print_capabilities(
+        &model_dir,
+        &resolved.id,
+        &resolved.hf_repo,
+        &resolved.format,
+        resolved.mtp,
     );
-    if let Some(mmproj) = caps.mmproj_path.as_deref() {
-        println!("  mmproj:       {}", mmproj);
-    }
 
     // Add to index
     let entry = index::ModelEntry {
@@ -142,7 +240,7 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
     };
 
     idx.add(entry);
-    idx.save(&data_dir)?;
+    idx.save(&data_dir, &models_dir)?;
 
     println!("\n✓ Model '{}' is ready. Start with:", resolved.id);
     println!("  lmforge start --model {}", resolved.id);
@@ -150,37 +248,138 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
     Ok(())
 }
 
-/// Detect engine format by selecting the active engine from the registry against
-/// the cached hardware profile. Falls back to legacy GPU-vendor heuristic on
-/// error, and finally to "gguf" so behaviour stays predictable on fresh installs.
-fn detect_engine_format(data_dir: &std::path::Path) -> String {
-    let hw_path = data_dir.join("hardware.json");
-    let profile_json = match std::fs::read_to_string(&hw_path) {
-        Ok(c) => c,
-        Err(_) => return "gguf".to_string(),
-    };
+/// Download any resolved files that are not yet present under `model_dir`.
+/// Returns `true` when at least one file was fetched (sidecar backfill).
+async fn download_missing_files(
+    resolved: &resolver::ResolvedModel,
+    model_dir: &std::path::Path,
+) -> Result<bool> {
+    let missing: Vec<String> = resolved
+        .files
+        .iter()
+        .filter(|f| {
+            let name = f.rsplit('/').next().unwrap_or(f.as_str());
+            !model_dir.join(name).exists()
+        })
+        .cloned()
+        .collect();
 
-    if let Ok(profile) =
-        serde_json::from_str::<crate::hardware::probe::HardwareProfile>(&profile_json)
-    {
-        let user_override = data_dir.join("engines.toml");
-        let override_path = if user_override.exists() {
-            Some(user_override.as_path())
-        } else {
-            None
-        };
-        if let Ok(registry) = crate::engine::registry::EngineRegistry::load(override_path)
-            && let Ok(selected) = registry.select(&profile)
-        {
-            return selected.model_format.clone();
-        }
+    if missing.is_empty() {
+        return Ok(false);
     }
 
-    // Legacy fallback: trust gpu_vendor=apple → mlx; otherwise gguf
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&profile_json)
-        && v["gpu_vendor"].as_str() == Some("apple")
-    {
-        return "mlx".to_string();
+    println!(
+        "  Missing {} file(s) on disk — downloading sidecar(s)…",
+        missing.len()
+    );
+    for f in &missing {
+        println!("    • {}", f);
     }
-    "gguf".to_string()
+
+    let bytes = downloader::download_model(&resolved.hf_repo, &missing, model_dir, None).await?;
+    let size_mb = bytes / (1024 * 1024);
+    println!("  ✓ Fetched {} MB of sidecar data", size_mb);
+    Ok(true)
+}
+
+fn detect_and_print_capabilities(
+    model_dir: &std::path::Path,
+    model_id: &str,
+    hf_repo: &str,
+    format: &resolver::ModelFormat,
+    catalog_mtp: Option<bool>,
+) -> index::ModelCapabilities {
+    let mut caps = index::detect_capabilities(model_dir, Some(model_id), Some(hf_repo));
+    if matches!(format, resolver::ModelFormat::Gguf) {
+        caps.mtp = crate::model::gguf_inspect::resolve_mtp_for_model(model_dir, catalog_mtp);
+    }
+    println!(
+        "  Capabilities: chat={} embeddings={} reranking={} thinking={} vision={} dims={:?} mtp={:?}",
+        caps.chat,
+        caps.embeddings,
+        caps.reranking,
+        caps.thinking,
+        caps.vision,
+        caps.embedding_dims,
+        caps.mtp,
+    );
+    if let Some(mmproj) = caps.mmproj_path.as_deref() {
+        println!("  mmproj:       {}", mmproj);
+    }
+    caps
+}
+
+// `detect_engine_format` lives in `crate::model::catalog` so pull / run /
+// catalog / init / UI all agree on which catalog the host should resolve
+// against. Phase 2.1 (catalog priority flip).
+
+/// When the user passes `--engine <id>` to `pull`, route the format through
+/// that engine's `model_format` directly rather than the auto-selector.
+///
+/// Why a stand-alone helper rather than calling `select_explicit` and reading
+/// `cfg.model_format`: hardware probing has its own error surface ("CUDA
+/// driver missing"). At pull-time the user only cares about format. We honour
+/// hardware gates implicitly because the user must `engine install <id>`
+/// first — which DOES enforce the gates.
+/// Whether a detected on-disk format is loadable by an engine that
+/// advertises `engine_format`. Strict equality used to be the rule, but
+/// EXL3 broke that: EXL3 model dirs are physically `safetensors` files
+/// (`model.safetensors` + `config.json` + `quantization_config.json`),
+/// the "exl3" label is a quantization-method tag, not a file-layout tag.
+///
+/// Keep this allowlist explicit so future format aliases (e.g. "gptq" or
+/// "awq" living inside safetensors) need a conscious decision to add.
+fn formats_compatible(detected: &str, engine: &str) -> bool {
+    if detected == engine {
+        return true;
+    }
+    // TabbyAPI / ExLlamaV3.
+    if engine == "exl3" && detected == "safetensors" {
+        return true;
+    }
+    false
+}
+
+fn resolve_format_for_engine(id: &str, data_dir: &std::path::Path) -> Result<String> {
+    let user_engines = data_dir.join("engines.toml");
+    let registry = EngineRegistry::load(if user_engines.exists() {
+        Some(user_engines.as_path())
+    } else {
+        None
+    })
+    .context("Failed to load engine registry")?;
+    let engine = registry
+        .get(id)
+        .with_context(|| format!("Unknown engine id: {}", id))?;
+    Ok(engine.model_format.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::formats_compatible;
+
+    #[test]
+    fn formats_compatible_strict_equality() {
+        assert!(formats_compatible("safetensors", "safetensors"));
+        assert!(formats_compatible("gguf", "gguf"));
+        assert!(formats_compatible("mlx", "mlx"));
+    }
+
+    #[test]
+    fn formats_compatible_exl3_accepts_safetensors() {
+        // EXL3 repos store weights as safetensors on disk.
+        assert!(formats_compatible("safetensors", "exl3"));
+    }
+
+    #[test]
+    fn formats_compatible_no_other_aliases() {
+        // Don't silently accept other cross-format pulls.
+        assert!(!formats_compatible("gguf", "safetensors"));
+        assert!(!formats_compatible("safetensors", "gguf"));
+        assert!(!formats_compatible("mlx", "safetensors"));
+        assert!(!formats_compatible("safetensors", "mlx"));
+        // Reverse direction is not allowed — safetensors engine must not
+        // accept an exl3 label without explicit thought.
+        assert!(!formats_compatible("exl3", "safetensors"));
+    }
 }

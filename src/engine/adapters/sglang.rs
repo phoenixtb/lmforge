@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::process::Command;
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, error, info, warn};
@@ -9,6 +9,9 @@ use crate::model::downloader::DownloadProgress;
 
 #[derive(Clone)]
 pub struct SglangAdapter {
+    /// Fallback executable when the managed venv hasn't been resolved yet.
+    /// At runtime [`resolve_python`] is used in preference; this is only the
+    /// last-resort default if data_dir layout can't be detected.
     pub executable: String,
 }
 
@@ -16,6 +19,32 @@ impl Default for SglangAdapter {
     fn default() -> Self {
         Self {
             executable: "python3".to_string(),
+        }
+    }
+}
+
+impl SglangAdapter {
+    /// Resolve the Python interpreter to spawn SGLang with.
+    ///
+    /// The installer creates an isolated venv at
+    /// `<data_dir>/engines/sglang/venv/bin/python3` and pip-installs SGLang
+    /// there. Spawning the system `python3` would invariably fail with
+    /// `ModuleNotFoundError: sglang`, so we always prefer the venv path.
+    ///
+    /// Falls back to `self.executable` only if the venv binary is missing
+    /// (which means the install never completed and the daemon should
+    /// re-run `lmforge init`).
+    fn resolve_python(&self, data_dir: &Path) -> PathBuf {
+        let venv = data_dir
+            .join("engines")
+            .join("sglang")
+            .join("venv")
+            .join("bin")
+            .join("python3");
+        if venv.is_file() {
+            venv
+        } else {
+            PathBuf::from(&self.executable)
         }
     }
 }
@@ -38,6 +67,7 @@ impl EngineAdapter for SglangAdapter {
         &self,
         repo: &str,
         dest_dir: &Path,
+        data_dir: &Path,
         progress_tx: Sender<DownloadProgress>,
     ) -> Result<bool> {
         std::fs::create_dir_all(dest_dir)
@@ -64,11 +94,14 @@ impl EngineAdapter for SglangAdapter {
             dest = dest_dir.to_string_lossy(),
         );
 
-        let output = Command::new(&self.executable)
+        let python = self.resolve_python(data_dir);
+        debug!(python = %python.display(), "SGLang pull: using interpreter");
+
+        let output = Command::new(&python)
             .args(["-c", &python_snippet])
             .output()
             .await
-            .context("Failed to spawn python3 for huggingface_hub pull")?;
+            .context("Failed to spawn python for huggingface_hub pull")?;
 
         if output.status.success() {
             let total_bytes = dir_size(dest_dir);
@@ -107,7 +140,7 @@ impl EngineAdapter for SglangAdapter {
         model_id: &str,
         model_dir: &Path,
         port: u16,
-        _data_dir: &Path,
+        data_dir: &Path,
         logs_dir: &Path,
         role: ModelRole,
     ) -> Result<ActiveEngine> {
@@ -175,7 +208,10 @@ impl EngineAdapter for SglangAdapter {
         args.push("--mem-fraction-static".to_string());
         args.push(format!("{:.3}", mem_fraction));
 
-        let child = Command::new(&self.executable)
+        let python = self.resolve_python(data_dir);
+        info!(python = %python.display(), "SGLang start: using interpreter");
+
+        let child = Command::new(&python)
             .args(&args)
             // Future parity params: --tp 2 --chunked-prefill-size
             .stdout(std::process::Stdio::from(stdout_file))
@@ -187,6 +223,8 @@ impl EngineAdapter for SglangAdapter {
         Ok(ActiveEngine {
             process: child,
             model_id: model_id.to_string(),
+            spec_observer: None,
+            spec_mode: crate::engine::speculative::SpecMode::Off,
         })
     }
 
@@ -329,6 +367,33 @@ mod tests {
         std::fs::write(dir.join("b.bin"), vec![0u8; 512]).unwrap();
         assert_eq!(dir_size(&dir), 1536);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_resolve_python_prefers_venv_when_present() {
+        let data_dir = std::env::temp_dir().join("lmforge_sglang_test_venv_present");
+        let venv_bin = data_dir
+            .join("engines")
+            .join("sglang")
+            .join("venv")
+            .join("bin");
+        std::fs::create_dir_all(&venv_bin).unwrap();
+        let venv_python = venv_bin.join("python3");
+        std::fs::write(&venv_python, b"#!/bin/sh\nexit 0\n").unwrap();
+
+        let adapter = SglangAdapter::default();
+        let resolved = adapter.resolve_python(&data_dir);
+        assert_eq!(resolved, venv_python);
+        std::fs::remove_dir_all(&data_dir).unwrap();
+    }
+
+    #[test]
+    fn test_resolve_python_falls_back_when_venv_missing() {
+        let data_dir = std::env::temp_dir().join("lmforge_sglang_test_venv_missing");
+        // No venv created — fallback should be the default `python3`.
+        let adapter = SglangAdapter::default();
+        let resolved = adapter.resolve_python(&data_dir);
+        assert_eq!(resolved, PathBuf::from("python3"));
     }
 
     #[test]

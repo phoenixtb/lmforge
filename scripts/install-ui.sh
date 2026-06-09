@@ -13,7 +13,7 @@
 set -euo pipefail
 
 REPO="phoenixtb/lmforge"
-VERSION="${LMFORGE_VERSION:-latest}"
+LMFORGE_RELEASE="${LMFORGE_VERSION:-latest}"
 MIN_CORE_VERSION="0.1.0"
 
 # macOS — install to user Applications (no sudo required)
@@ -26,6 +26,69 @@ info()    { echo -e "${GREEN}  ✓${NC} $*"; }
 warn()    { echo -e "${YELLOW}  ⚠${NC} $*"; }
 error()   { echo -e "${RED}  ✗${NC} $*" >&2; exit 1; }
 section() { echo -e "\n${BOLD}$*${NC}"; }
+
+# shellcheck source=banner.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/banner.sh" 2>/dev/null || true
+if ! declare -F print_lmforge_banner &>/dev/null; then
+    print_lmforge_banner() {
+        echo ""
+        echo "  ██╗     ███╗   ███╗███████╗ ██████╗ ██████╗  ██████╗ ███████╗"
+        echo "  ██║     ████╗ ████║██╔════╝██╔═══██╗██╔══██╗██╔════╝ ██╔════╝"
+        echo "  ██║     ██╔████╔██║█████╗  ██║   ██║██████╔╝██║  ███╗█████╗  "
+        echo "  ██║     ██║╚██╔╝██║██╔══╝  ██║   ██║██╔══██╗██║   ██║██╔══╝  "
+        echo "  ███████╗██║ ╚═╝ ██║██║     ╚██████╔╝██║  ██║╚██████╔╝███████╗"
+        echo "  ╚══════╝╚═╝     ╚═╝╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝"
+        echo ""
+        echo "  ${1:-Hardware-aware LLM inference orchestrator}"
+        echo ""
+    }
+fi
+
+# Install hicolor icons + .desktop entry for the AppImage (matches Tauri bundle).
+install_linux_ui_launcher() {
+    local appimage_path="$1"
+    local desktop_dir="${HOME}/.local/share/applications"
+    local icon_theme="${HOME}/.local/share/icons/hicolor"
+    local extract_dir icon_src size name
+
+    extract_dir=$(mktemp -d)
+    (
+        cd "$extract_dir"
+        "$appimage_path" --appimage-extract usr/share/icons >/dev/null 2>&1 \
+            || "$appimage_path" --appimage-extract >/dev/null 2>&1
+    )
+
+    if [[ -d "$extract_dir/squashfs-root/usr/share/icons/hicolor" ]]; then
+        while IFS= read -r -d '' icon_src; do
+            size=$(basename "$(dirname "$(dirname "$icon_src")")")
+            name=$(basename "$icon_src")
+            mkdir -p "$icon_theme/$size/apps"
+            cp "$icon_src" "$icon_theme/$size/apps/$name"
+        done < <(find "$extract_dir/squashfs-root/usr/share/icons/hicolor" -path '*/apps/*.png' -print0)
+        if command -v gtk-update-icon-cache &>/dev/null; then
+            gtk-update-icon-cache -f -t "$icon_theme" 2>/dev/null || true
+        fi
+        info "Icons installed to $icon_theme"
+    else
+        warn "Could not extract icons from AppImage; launcher may show a generic icon."
+    fi
+    rm -rf "$extract_dir"
+
+    mkdir -p "$desktop_dir"
+    cat > "$desktop_dir/lmforge.desktop" <<EOF
+[Desktop Entry]
+Name=LMForge
+Comment=LMForge — Local LLM Orchestrator UI
+Exec=$appimage_path %u
+Icon=lmforge-ui
+StartupWMClass=lmforge-ui
+Terminal=false
+Type=Application
+Categories=Development;AI;
+EOF
+    update-desktop-database "$desktop_dir" 2>/dev/null || true
+    info "Desktop entry created"
+}
 
 # ── Detect platform ───────────────────────────────────────────────────────────
 OS=$(uname -s)
@@ -51,19 +114,17 @@ detect_ui_asset() {
 
 resolve_url() {
     local asset="$1"
-    if [[ "$VERSION" == "latest" ]]; then
+    if [[ "$LMFORGE_RELEASE" == "latest" ]]; then
         echo "https://github.com/${REPO}/releases/latest/download/${asset}"
     else
-        echo "https://github.com/${REPO}/releases/download/${VERSION}/${asset}"
+        echo "https://github.com/${REPO}/releases/download/${LMFORGE_RELEASE}/${asset}"
     fi
 }
 
 # ── Banner ────────────────────────────────────────────────────────────────────
-echo ""
-echo -e "${BOLD}  LMForge UI — Installer${NC}"
-echo    "  ─────────────────────────────────────────"
+print_lmforge_banner "LMForge UI — Installer"
 echo    "  Repo   : https://github.com/$REPO"
-echo    "  Version: $VERSION"
+echo    "  Version: $LMFORGE_RELEASE"
 echo    "  OS/Arch: $OS/$ARCH"
 echo ""
 
@@ -109,6 +170,147 @@ else
     warn "Daemon not currently running. Starting it now..."
     lmforge start || true
     sleep 2
+fi
+
+# ── Linux UI runtime deps (Tauri 2 needs webkit2gtk on the host) ──────────────
+# The AppImage bundles most libraries but webkit2gtk/webkitgtk MUST come from
+# the host system — it's the HTML rendering engine and cannot be relocated.
+# Package names differ by distro AND distro version (Tauri 2 needs webkit 4.1+,
+# the 4.0 series was deprecated). We probe `/etc/os-release` and install
+# conservatively, with explicit confirmation. Unknown distros: print
+# instructions and continue (the AppImage may still launch if libs are
+# pre-installed, or fail with a clear message).
+if [[ "$OS" == "Linux" ]]; then
+    section "Checking UI runtime dependencies..."
+
+    # Default — overridden per distro below.
+    LINUX_DEPS=()
+    PKG_INSTALL_CMD=""
+
+    DISTRO_ID=""
+    DISTRO_VER=""
+    if [[ -f /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        DISTRO_ID="${ID:-}"
+        DISTRO_VER="${VERSION_ID:-}"
+    fi
+
+    # Choose webkit + tray package names per distro/version.
+    case "$DISTRO_ID" in
+        ubuntu|debian|pop|linuxmint)
+            # Map to webkit major version.
+            # Ubuntu 22.04 = jammy (4.0, EOL for Tauri 2),
+            # Ubuntu 24.04 = noble (4.1), Ubuntu 26.04 = ? (6.0),
+            # Debian 12 = bookworm (4.1), Debian 13 = trixie (6.0/4.1).
+            WEBKIT_PKG=""
+            # First, query apt-cache to see what's actually available — this
+            # is the most reliable signal across distro forks (Pop!_OS, Mint).
+            if apt-cache show libwebkitgtk-6.0-0 &>/dev/null; then
+                WEBKIT_PKG="libwebkitgtk-6.0-0"
+            elif apt-cache show libwebkit2gtk-4.1-0 &>/dev/null; then
+                WEBKIT_PKG="libwebkit2gtk-4.1-0"
+            elif apt-cache show libwebkit2gtk-4.0-37 &>/dev/null; then
+                # Ubuntu 22.04 fallback — Tauri 2 nominally needs 4.1, but
+                # the AppImage *may* run if upstream still links 4.0.
+                WEBKIT_PKG="libwebkit2gtk-4.0-37"
+                warn "Detected older Ubuntu/Debian (${DISTRO_VER}). Tauri 2 prefers webkit 4.1+; upgrading distro recommended."
+            fi
+            LINUX_DEPS=("libayatana-appindicator3-1")
+            [[ -n "$WEBKIT_PKG" ]] && LINUX_DEPS+=("$WEBKIT_PKG")
+            PKG_INSTALL_CMD="sudo apt-get install -y"
+            ;;
+        fedora|rhel|centos|rocky|almalinux)
+            # Fedora 39+ ships webkit2gtk4.1; older RHEL/Rocky needs EPEL.
+            if command -v dnf &>/dev/null; then
+                if dnf list available webkitgtk6.0 &>/dev/null 2>&1; then
+                    LINUX_DEPS=("webkitgtk6.0" "libayatana-appindicator-gtk3")
+                elif dnf list available webkit2gtk4.1 &>/dev/null 2>&1; then
+                    LINUX_DEPS=("webkit2gtk4.1" "libayatana-appindicator-gtk3")
+                else
+                    warn "Could not find webkit2gtk4.1+ in dnf repos. You may need EPEL or COPR."
+                fi
+                PKG_INSTALL_CMD="sudo dnf install -y"
+            fi
+            ;;
+        arch|manjaro|endeavouros)
+            # Arch keeps both 4.1 and 6.0 in the official repos.
+            if pacman -Si webkitgtk-6.0 &>/dev/null; then
+                LINUX_DEPS=("webkitgtk-6.0" "libayatana-appindicator")
+            else
+                LINUX_DEPS=("webkit2gtk-4.1" "libayatana-appindicator")
+            fi
+            PKG_INSTALL_CMD="sudo pacman -S --noconfirm"
+            ;;
+        opensuse*|suse|sles)
+            # openSUSE uses underscores in versioned suffixes.
+            if zypper se -x libwebkitgtk-6_0-0 &>/dev/null; then
+                LINUX_DEPS=("libwebkitgtk-6_0-0" "libayatana-appindicator3-1")
+            else
+                LINUX_DEPS=("libwebkit2gtk-4_1-0" "libayatana-appindicator3-1")
+            fi
+            PKG_INSTALL_CMD="sudo zypper install -y"
+            ;;
+        *)
+            warn "Unknown distro '$DISTRO_ID' — cannot auto-install UI runtime deps."
+            echo ""
+            echo "  Manually install (whichever your package manager exposes):"
+            echo "    • webkit2gtk-4.1 OR webkitgtk-6.0  (HTML renderer)"
+            echo "    • libayatana-appindicator3        (system tray)"
+            echo ""
+            echo "  The AppImage may still launch if these are already present."
+            ;;
+    esac
+
+    # Filter to only the missing packages and prompt before installing.
+    if [[ ${#LINUX_DEPS[@]} -gt 0 && -n "$PKG_INSTALL_CMD" ]]; then
+        MISSING_DEPS=()
+        for dep in "${LINUX_DEPS[@]}"; do
+            case "$DISTRO_ID" in
+                ubuntu|debian|pop|linuxmint)
+                    dpkg -s "$dep" &>/dev/null 2>&1 || MISSING_DEPS+=("$dep")
+                    ;;
+                fedora|rhel|centos|rocky|almalinux)
+                    rpm -q "$dep" &>/dev/null 2>&1 || MISSING_DEPS+=("$dep")
+                    ;;
+                arch|manjaro|endeavouros)
+                    pacman -Q "$dep" &>/dev/null 2>&1 || MISSING_DEPS+=("$dep")
+                    ;;
+                opensuse*|suse|sles)
+                    rpm -q "$dep" &>/dev/null 2>&1 || MISSING_DEPS+=("$dep")
+                    ;;
+            esac
+        done
+
+        if [[ ${#MISSING_DEPS[@]} -eq 0 ]]; then
+            info "All UI runtime deps already present."
+        else
+            warn "Missing UI runtime deps (${DISTRO_ID} ${DISTRO_VER}):"
+            for d in "${MISSING_DEPS[@]}"; do echo "    • $d"; done
+            echo ""
+            echo "  Install command:"
+            echo "    $PKG_INSTALL_CMD ${MISSING_DEPS[*]}"
+            echo ""
+
+            if [ -t 0 ]; then
+                printf "  Run this now (requires sudo)? [Y/n] "
+                read -r REPLY </dev/tty
+                REPLY="${REPLY:-Y}"
+                if [[ "$REPLY" == "y" || "$REPLY" == "Y" ]]; then
+                    if eval "$PKG_INSTALL_CMD ${MISSING_DEPS[*]}"; then
+                        info "UI runtime deps installed."
+                    else
+                        warn "Install failed. The AppImage will still download but may fail to launch."
+                    fi
+                else
+                    warn "Skipped. Install the deps manually before launching the UI."
+                fi
+            else
+                warn "Non-interactive shell — skipping auto-install. Run manually:"
+                echo "    $PKG_INSTALL_CMD ${MISSING_DEPS[*]}"
+            fi
+        fi
+    fi
 fi
 
 # ── Download ──────────────────────────────────────────────────────────────────
@@ -175,20 +377,7 @@ if [[ "$OS" == "Linux" ]]; then
     cp "$TMP_FILE" "$APPIMAGE_PATH"
     info "Installed: $APPIMAGE_PATH"
 
-    # Create .desktop entry
-    DESKTOP_DIR="${HOME}/.local/share/applications"
-    mkdir -p "$DESKTOP_DIR"
-    cat > "$DESKTOP_DIR/lmforge.desktop" <<EOF
-[Desktop Entry]
-Name=LMForge
-Comment=Local LLM Orchestrator
-Exec=$APPIMAGE_PATH %u
-Icon=lmforge
-Terminal=false
-Type=Application
-Categories=Development;AI;
-EOF
-    info "Desktop entry created"
+    install_linux_ui_launcher "$APPIMAGE_PATH"
 
     echo ""
     echo    "  Launch: $APPIMAGE_PATH"

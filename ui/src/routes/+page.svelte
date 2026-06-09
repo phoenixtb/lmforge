@@ -12,6 +12,10 @@
   $: engine  = $statusStore.engine_id;
   $: version = $statusStore.engine_version;
   $: slots   = Object.values($statusStore.running_models);
+  // model_id → ModelLoadError. Empty when every recent load succeeded.
+  // Surfaces below the Model Processes panel so failed loads aren't silent.
+  $: lastErrors = Object.entries($statusStore.last_errors ?? {});
+  $: hasLoadErrors = lastErrors.length > 0;
   $: hw      = $hardwareStore;
   $: sys     = $sysInfoStore;
   // Live metrics from /lf/metrics (5 s poll). Replaces the legacy
@@ -38,6 +42,36 @@
     if (s < 60)   return `${s}s`;
     if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`;
     return fmtUptime(s);
+  }
+
+  // Tracks which last_errors cards have their stderr_tail expanded. Keyed by
+  // model_id so toggle state survives reactive re-renders of the list.
+  let expandedErrors = new Set<string>();
+  function toggleError(id: string) {
+    if (expandedErrors.has(id)) expandedErrors.delete(id);
+    else                        expandedErrors.add(id);
+    expandedErrors = new Set(expandedErrors); // trigger Svelte reactivity
+  }
+
+  function fmtSpecMode(mode?: string): string {
+    if (!mode || mode === 'off') return 'off';
+    return mode;
+  }
+
+  function fmtAcceptRate(stats?: import('$lib/api').SpecStats | null): string {
+    if (!stats || stats.samples === 0) return '—';
+    return `${Math.round(stats.cumulative_accept_rate * 100)}%`;
+  }
+  function fmtRelative(iso: string): string {
+    try {
+      const d = new Date(iso);
+      const now = Date.now();
+      const delta = Math.round((now - d.getTime()) / 1000);
+      if (delta < 60)   return `${delta}s ago`;
+      if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
+      if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
+      return d.toLocaleString();
+    } catch { return iso; }
   }
 
   // ── Metrics ────────────────────────────────────────────────────────────────
@@ -213,6 +247,12 @@
                 <div class="slot-r2">
                   <span class="sd"><span class="dk">port</span><span class="dv mono">{slot.port}</span></span>
                   <span class="sd"><span class="dk">vram</span><span class="dv mono">{slot.vram_est_gb.toFixed(2)} GB</span></span>
+                  {#if slot.spec_mode && slot.spec_mode !== 'off'}
+                    <span class="sd" title="Speculative decoding">
+                      <span class="dk">spec</span>
+                      <span class="dv mono">{fmtSpecMode(slot.spec_mode)} · {fmtAcceptRate(slot.spec_stats)}</span>
+                    </span>
+                  {/if}
                   <div class="svt"><div class="svf" style="width:{slotP}%;background:{vramBarColor}"></div></div>
                   {#if idle}<span class="ib">idle {fmtSecs(slot.idle_secs??0)}</span>
                   {:else}<span class="ab">active</span>{/if}
@@ -227,6 +267,46 @@
           </div>
         {/if}
       </section>
+
+      <!-- ── Engine Load Errors ─────────────────────────────────────────────
+           Only mounts when last_errors is non-empty. Surfaces the daemon's
+           most recent failure per model with a collapsible stderr tail —
+           saves users from grep'ing ~/.lmforge/logs/. -->
+      {#if hasLoadErrors}
+        <section class="panel panel--err" aria-label="Engine Load Errors">
+          <header class="panel-hd">
+            <div class="panel-hd-l">
+              <h2>Engine Load Errors</h2>
+              <span class="ps">{lastErrors.length} model{lastErrors.length === 1 ? '' : 's'} · most recent failures</span>
+            </div>
+          </header>
+          <div class="err-cards">
+            {#each lastErrors as [modelId, err] (modelId)}
+              {@const isOpen = expandedErrors.has(modelId)}
+              <div class="err-card">
+                <div class="err-r1">
+                  <span class="dot dot--err" style="margin-top:3px"></span>
+                  <span class="sn mono">{modelId}</span>
+                  <span class="err-when ps">{fmtErrorAt(err.at)}</span>
+                </div>
+                <div class="err-msg">{err.message}</div>
+                {#if err.stderr_tail && err.stderr_tail.length > 0}
+                  <button
+                    class="err-toggle"
+                    onclick={() => toggleError(modelId)}
+                    aria-expanded={isOpen}
+                  >
+                    {isOpen ? '▾' : '▸'} stderr tail ({err.stderr_tail.length.toLocaleString()} bytes)
+                  </button>
+                  {#if isOpen}
+                    <pre class="err-tail">{err.stderr_tail}</pre>
+                  {/if}
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </section>
+      {/if}
 
       <!-- ── Hardware / System panel (scrollable) ──────────────────────────── -->
       <section class="panel panel--hw" aria-label="Hardware">
@@ -487,6 +567,47 @@
   .cap-track { flex: 1; height: 4px; background: rgba(255,255,255,0.07); border-radius: 99px; overflow: hidden; }
   .cap-fill  { height: 100%; border-radius: 99px; transition: width 600ms; }
   .cap-nums  { font-size: 10.5px; color: var(--text-2); flex-shrink: 0; }
+
+  /* ── Engine load errors ─────────────────────────────────────────────────── */
+  .panel--err {
+    border-color: rgba(248, 113, 113, 0.35);
+    background: rgba(248, 113, 113, 0.04);
+  }
+  .panel--err .panel-hd h2 { color: #fcaaaa; }
+  .err-cards { display: flex; flex-direction: column; gap: 8px; }
+  .err-card {
+    background: rgba(0, 0, 0, 0.20);
+    border: 1px solid rgba(248, 113, 113, 0.25);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .err-r1 { display: flex; align-items: center; gap: 8px; }
+  .err-when { color: var(--text-3); font-size: 10.5px; margin-left: auto; }
+  .err-msg {
+    font-size: 12px; color: #fcaaaa; line-height: 1.5;
+    font-family: var(--font-mono); white-space: pre-wrap; word-break: break-word;
+  }
+  .err-toggle {
+    align-self: flex-start;
+    background: none; border: none; cursor: pointer;
+    font-size: 11px; color: var(--text-2);
+    padding: 2px 0;
+    font-family: var(--font-mono);
+  }
+  .err-toggle:hover { color: var(--text); }
+  .err-tail {
+    font-family: var(--font-mono); font-size: 10.5px; line-height: 1.45;
+    color: var(--text-2);
+    background: rgba(0, 0, 0, 0.40);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    margin: 0;
+    max-height: 220px; overflow: auto;
+    white-space: pre;
+    user-select: text;
+  }
 
   /* ── Hardware resource cards ─────────────────────────────────────────────── */
   .hw-card {

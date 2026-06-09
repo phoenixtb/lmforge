@@ -89,8 +89,11 @@ fn sample_sys() -> (f32, Vec<f32>, f32, f32, f32, f32) {
 /// We walk all processes whose PPID == our PID and match them to model slots
 /// by port (the slot port is embedded in the process command-line).
 ///
-/// If a process cannot be matched to a slot, it is still counted but shown as
-/// "engine / other".
+/// Phase 2.4: results are **aggregated by `model_id`** — multiple worker
+/// processes for the same model (llama.cpp + downloader, or vLLM's TP
+/// workers) collapse to a single row whose `rss_mb` is the sum. Unmatched
+/// children all roll up into a single `"engine/other"` row instead of
+/// producing one row per PID.
 fn sample_model_procs(slot_info: &[(String, u16)]) -> Vec<ModelProcMem> {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
@@ -105,8 +108,6 @@ fn sample_model_procs(slot_info: &[(String, u16)]) -> Vec<ModelProcMem> {
             .with_cmd(UpdateKind::Always),
     );
 
-    let b2mb = |bytes: u64| bytes as f32 / 1_048_576.0;
-
     // Find all direct children of this process.
     let children: Vec<_> = sys
         .processes()
@@ -118,10 +119,9 @@ fn sample_model_procs(slot_info: &[(String, u16)]) -> Vec<ModelProcMem> {
         return Vec::new();
     }
 
-    children
+    let raw: Vec<(String, f32)> = children
         .iter()
         .map(|proc| {
-            // Try to match to a model slot by finding the slot port in the cmdline.
             let cmdline: String = proc
                 .cmd()
                 .iter()
@@ -133,13 +133,36 @@ fn sample_model_procs(slot_info: &[(String, u16)]) -> Vec<ModelProcMem> {
                 .find(|(_, port)| cmdline.contains(&port.to_string()))
                 .map(|(id, _)| id.clone())
                 .unwrap_or_else(|| "engine/other".to_string());
-
-            ModelProcMem {
-                model_id,
-                rss_mb: b2mb(proc.memory()),
-            }
+            (model_id, proc.memory() as f32 / 1_048_576.0)
         })
-        .collect()
+        .collect();
+
+    aggregate_by_model(raw)
+}
+
+/// Pure helper: sum `rss_mb` per `model_id`. Stable ordering — known model ids
+/// first (alphabetical), `engine/other` last so the UI table is predictable.
+/// Exposed for unit tests.
+fn aggregate_by_model(rows: Vec<(String, f32)>) -> Vec<ModelProcMem> {
+    use std::collections::HashMap;
+
+    let mut acc: HashMap<String, f32> = HashMap::new();
+    for (id, mb) in rows {
+        *acc.entry(id).or_insert(0.0) += mb;
+    }
+
+    let mut out: Vec<ModelProcMem> = acc
+        .into_iter()
+        .map(|(model_id, rss_mb)| ModelProcMem { model_id, rss_mb })
+        .collect();
+
+    out.sort_by(|a, b| match (a.model_id.as_str(), b.model_id.as_str()) {
+        ("engine/other", "engine/other") => std::cmp::Ordering::Equal,
+        ("engine/other", _) => std::cmp::Ordering::Greater,
+        (_, "engine/other") => std::cmp::Ordering::Less,
+        _ => a.model_id.cmp(&b.model_id),
+    });
+    out
 }
 
 // ── GPU probe (macOS) ─────────────────────────────────────────────────────────
@@ -400,4 +423,59 @@ pub async fn sysinfo(State(state): State<AppState>) -> impl IntoResponse {
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(json))
         .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aggregate_sums_rss_per_model_id() {
+        // vLLM-style tensor parallelism: same model_id appears N times.
+        let rows = vec![
+            ("qwen3:8b:4bit".to_string(), 1500.0),
+            ("qwen3:8b:4bit".to_string(), 1500.0),
+            ("qwen3:8b:4bit".to_string(), 1500.0),
+        ];
+        let out = aggregate_by_model(rows);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].model_id, "qwen3:8b:4bit");
+        assert!((out[0].rss_mb - 4500.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn aggregate_keeps_distinct_models_separate() {
+        let rows = vec![
+            ("qwen3-embed:0.6b".to_string(), 800.0),
+            ("qwen3:8b:4bit".to_string(), 4500.0),
+        ];
+        let out = aggregate_by_model(rows);
+        assert_eq!(out.len(), 2);
+        // Alphabetical (excluding engine/other).
+        assert_eq!(out[0].model_id, "qwen3-embed:0.6b");
+        assert_eq!(out[1].model_id, "qwen3:8b:4bit");
+    }
+
+    #[test]
+    fn aggregate_engine_other_always_sorted_last() {
+        let rows = vec![
+            ("engine/other".to_string(), 50.0),
+            ("engine/other".to_string(), 75.0),
+            ("zzz-last-alpha".to_string(), 100.0),
+            ("aaa-first-alpha".to_string(), 200.0),
+        ];
+        let out = aggregate_by_model(rows);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].model_id, "aaa-first-alpha");
+        assert_eq!(out[1].model_id, "zzz-last-alpha");
+        assert_eq!(out[2].model_id, "engine/other");
+        // engine/other entries were merged.
+        assert!((out[2].rss_mb - 125.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn aggregate_empty_input_returns_empty() {
+        let out = aggregate_by_model(vec![]);
+        assert!(out.is_empty());
+    }
 }

@@ -25,6 +25,8 @@ const initial: LfStatus = {
     uptime_secs: 0,
     restart_count: 0,
   },
+  last_errors: {},
+  active_pull: null,
 };
 
 /** The primary status store. Written by the Tauri event listener in +layout.svelte */
@@ -54,3 +56,7 @@ export const activeModelId = derived(statusStore, ($s) => {
   const slots = Object.values($s.running_models);
   return slots.length > 0 ? slots[0].model_id : null;
 });
+
+/** The in-flight model pull (or null). Driven by GET /lf/status, so it stays
+ *  visible even after the originating pull's SSE stream is gone. */
+export const activePull = derived(statusStore, ($s) => $s.active_pull ?? null);

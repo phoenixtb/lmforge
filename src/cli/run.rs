@@ -9,14 +9,15 @@ use crate::engine::daemon;
 
 /// Start an interactive chat session with the specified model
 pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
-    // 1. Resolve model to get its exact ID
-    let engine_format = detect_engine_format(&config.data_dir());
+    // 1. Resolve model to get its exact ID. Shared helper so pull / run /
+    //    catalog always agree on the catalog format for this host.
+    let engine_format = crate::model::catalog::detect_engine_format(&config.data_dir());
     let catalogs_dir = config.catalogs_dir();
     let resolved =
         crate::model::resolver::resolve(model_input, &engine_format, &catalogs_dir).await?;
     let model_id = resolved.id;
 
-    let idx = crate::model::index::ModelIndex::load(&config.data_dir())?;
+    let idx = crate::model::index::ModelIndex::load(&config.data_dir(), &config.models_dir())?;
     if idx.get(&model_id).is_none() {
         println!("\nModel '{}' is not installed locally.", model_id);
         print!("Would you like to pull it now? [y/N]: ");
@@ -26,7 +27,7 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
         std::io::stdin().read_line(&mut input)?;
         if input.trim().eq_ignore_ascii_case("y") {
             println!();
-            crate::cli::pull::run(config, model_input).await?;
+            crate::cli::pull::run(config, model_input, None, false).await?;
         } else {
             anyhow::bail!("Model required to start interactive session. Exiting.");
         }
@@ -209,13 +210,5 @@ pub async fn run(config: &LmForgeConfig, model_input: &str) -> Result<()> {
     Ok(())
 }
 
-fn detect_engine_format(data_dir: &std::path::Path) -> String {
-    let hw_path = data_dir.join("hardware.json");
-    if let Ok(content) = std::fs::read_to_string(&hw_path)
-        && let Ok(profile) = serde_json::from_str::<serde_json::Value>(&content)
-        && profile["gpu_vendor"].as_str() == Some("apple")
-    {
-        return "mlx".to_string();
-    }
-    "gguf".to_string()
-}
+// `detect_engine_format` now lives in `crate::model::catalog` so every CLI
+// command + the daemon agree on the format. Phase 2.1 (catalog priority flip).

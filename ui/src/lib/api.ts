@@ -11,6 +11,28 @@ const BASE = 'http://localhost:11430';
 
 export type EngineStatus = 'stopped' | 'starting' | 'ready' | 'degraded' | 'error';
 
+/**
+ * Speculative-decoding mode the slot was started with. Mirrors `SpecMode`
+ * in src/engine/speculative.rs. `auto` is a config value only — the Rust
+ * resolver normalises it to one of the concrete modes before spawn, so
+ * runtime slots will only ever see `mtp` / `draft-model` / `off`.
+ */
+export type SpecMode = 'auto' | 'mtp' | 'draft-model' | 'off';
+
+/**
+ * Cumulative speculative-decoding telemetry parsed from `llama-server`
+ * stderr. Mirrors `SpecStats` in src/engine/spec_observer.rs. `null` /
+ * undefined for slots that haven't served a spec-active request yet, and
+ * for non-llamacpp engines.
+ */
+export interface SpecStats {
+  drafted_total: number;
+  accepted_total: number;
+  samples: number;
+  last_accept_rate: number;
+  cumulative_accept_rate: number;
+}
+
 export interface ModelSlot {
   model_id: string;
   port: number;
@@ -18,6 +40,10 @@ export interface ModelSlot {
   idle_secs: number;
   vram_est_gb: number;
   role: string;
+  /** What spec-dec mode this slot was spawned with. Defaults to 'off'. */
+  spec_mode?: SpecMode;
+  /** Cumulative spec-dec stats — undefined until first sample arrives. */
+  spec_stats?: SpecStats | null;
 }
 
 export interface EngineMetrics {
@@ -28,15 +54,40 @@ export interface EngineMetrics {
 }
 
 /**
+ * Last failed-load context for a model. Mirrors ModelLoadError in
+ * src/engine/manager.rs. Surfaced on Overview when present so users don't
+ * have to grep ~/.lmforge/logs/ for a failed `lmforge pull` or cold load.
+ */
+export interface ModelLoadError {
+  at: string;                     // ISO timestamp
+  message: string;                // short human-readable failure
+  stderr_tail?: string | null;    // last N lines of engine stderr (may be null)
+}
+
+/**
  * Normalised frontend status — always use this shape in stores/components.
  * The daemon returns a slightly different JSON shape; normalizeStatus() maps it.
  */
+/** In-flight model pull snapshot from GET /lf/status (or null when idle). */
+export interface ActivePull {
+  model: string;
+  file: string;
+  downloaded_bytes: number;
+  total_bytes: number;
+  done: boolean;
+  error?: string | null;
+}
+
 export interface LfStatus {
   overall_status: EngineStatus;
   engine_id: string;
   engine_version: string;
   running_models: Record<string, ModelSlot>;
   metrics: EngineMetrics;
+  /** model_id → last failure context. Empty when every recent load succeeded. */
+  last_errors: Record<string, ModelLoadError>;
+  /** Currently in-flight model pull, or null. Survives SSE-client disconnects. */
+  active_pull?: ActivePull | null;
 }
 
 /** Raw shape from GET /lf/status and the SSE stream */
@@ -47,6 +98,8 @@ interface RawStatus {
   engine_version?: string;
   running_models: ModelSlot[] | Record<string, ModelSlot>;
   metrics: EngineMetrics;
+  last_errors?: Record<string, ModelLoadError> | null;
+  active_pull?: ActivePull | null;
 }
 
 /** Normalise the raw daemon response to a stable LfStatus shape */
@@ -66,7 +119,15 @@ export function normalizeStatus(raw: RawStatus): LfStatus {
     running_models = raw.running_models as Record<string, ModelSlot>;
   }
 
-  return { overall_status: raw.overall_status, engine_id, engine_version, running_models, metrics: raw.metrics };
+  return {
+    overall_status: raw.overall_status,
+    engine_id,
+    engine_version,
+    running_models,
+    metrics: raw.metrics,
+    last_errors: raw.last_errors ?? {},
+    active_pull: raw.active_pull ?? null,
+  };
 }
 
 export interface HardwareProfile {
@@ -179,19 +240,85 @@ export const unloadModel = (modelId?: string): Promise<{ status: string }> =>
 export const deleteModel = (id: string): Promise<{ status: string }> =>
   del(`/lf/model/delete/${encodeURIComponent(id)}`);
 
+/** Daemon configuration (subset the UI reads/writes; extra fields preserved on round-trip). */
+export interface LfConfig {
+  catalogs_dir?: string | null;
+  /** Data root (engines, logs, models.json). null/absent = default ~/.lmforge. */
+  data_dir?: string | null;
+  /** Model weights directory. null/absent = {data_dir}/models. */
+  models_dir?: string | null;
+  [key: string]: unknown;
+}
+
 /** GET /lf/config — current daemon config */
-export const getConfig = (): Promise<unknown> => get('/lf/config');
+export const getConfig = (): Promise<LfConfig> => get('/lf/config');
+
+/** POST /lf/config — persist config. `restart_required` is true when a storage
+ *  dir changed (takes effect on next daemon start). */
+export const postConfig = (
+  cfg: LfConfig
+): Promise<{ status: string; restart_required?: boolean }> => post('/lf/config', cfg);
 
 /** POST /lf/shutdown — graceful daemon shutdown */
 export const shutdown = (): Promise<{ status: string }> => post('/lf/shutdown');
+
+/** Request body for POST /lf/storage/apply */
+export interface StorageApplyRequest {
+  /** New models directory (absolute path). Omit to keep current. */
+  models_dir?: string | null;
+  /** New data directory (absolute path). Omit to keep current. */
+  data_dir?: string | null;
+  /** Reset models_dir to its built-in default ({data_dir}/models). Wins over models_dir. */
+  reset_models_dir?: boolean;
+  /** Reset data_dir to its built-in default (~/.lmforge). Wins over data_dir. */
+  reset_data_dir?: boolean;
+  /** How to handle existing models in the old models_dir. Default: "adopt". */
+  models_action?: 'adopt' | 'delete' | 'repull';
+  /** How to handle regenerable artifacts in the old data_dir. Default: "keep". */
+  data_action?: 'relocate' | 'keep';
+  /** Copy logs/ when relocating data_dir. Default: false. */
+  copy_logs?: boolean;
+  /** Model IDs to skip re-downloading (they will be lost). Only relevant for models_action="repull". */
+  exclude_from_repull?: string[];
+}
+
+/** Response from POST /lf/storage/apply */
+export interface StorageApplyResponse {
+  status: string;
+  restart_required: boolean;
+  /** Model IDs that cannot be re-downloaded (no hf_repo) — only when models_action="repull". */
+  would_lose: string[];
+}
+
+/**
+ * POST /lf/storage/apply — apply a storage directory change.
+ * May return 422 with `{ would_lose: [...] }` when models_action="repull" and
+ * some models have no hf_repo. Caller should re-submit with those IDs in
+ * `exclude_from_repull` after user confirmation.
+ */
+export async function applyStorage(req: StorageApplyRequest): Promise<StorageApplyResponse> {
+  const res = await fetch(`${BASE}/lf/storage/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  const body = await res.json();
+  if (!res.ok) throw Object.assign(new Error(body?.error ?? `HTTP ${res.status}`), { status: res.status, body });
+  return body as StorageApplyResponse;
+}
 
 /** A single entry from the curated model catalog */
 export interface CatalogEntry {
   shortcut: string;     // e.g. "qwen3:8b:4bit"
   hf_repo: string;      // e.g. "mlx-community/Qwen3-8B-4bit"
-  format: string;       // "mlx" | "gguf"
+  format: string;       // "mlx" | "gguf" | "safetensors"
   tags: string[];       // ["qwen3", "8b", "4bit"]
   role: string;         // "chat" | "embed" | "rerank" | "vision" | "code"
+  /** GGUF-only: exact .gguf filename to download. Used to fetch the size
+   *  of just this quant rather than summing every quant in the repo. */
+  file?: string | null;
+  /** GGUF-only: VLM multimodal projector filename (llama.cpp --mmproj). */
+  mmproj?: string | null;
 }
 
 export interface CatalogResponse {
@@ -201,6 +328,48 @@ export interface CatalogResponse {
 /** GET /lf/catalog[?format=mlx|gguf] — curated model shortcuts */
 export const getCatalog = (format?: string): Promise<CatalogResponse> =>
   get(`/lf/catalog${format ? `?format=${encodeURIComponent(format)}` : ''}`);
+
+// ─── Engine registry (Settings → Engine) ──────────────────────────────────────
+
+/** Tier strings match `lmforge engine list` exactly. Wire badges off this string. */
+export type EngineTier = 'default' | 'opt-in' | 'experimental' | 'default*';
+
+/**
+ * One engine row from GET /lf/engines. Shape mirrors `cli::engine::list`
+ * augmented with the daemon's compatibility verdict for THIS host.
+ *
+ * - `compatible: null` means the hardware profile is missing (user hasn't run
+ *   `lmforge init` yet). UI should suppress install actions in that case.
+ * - `active: true` for the engine currently selected by the running daemon.
+ */
+export interface EngineInfo {
+  id: string;
+  name: string;
+  version: string;
+  tier: EngineTier;
+  install_method: 'binary' | 'pip' | 'brew' | string;
+  model_format: string;
+  matches_gpu: string;
+  min_compute_cap: string | null;
+  max_compute_cap: string | null;
+  min_vram_gb: number | null;
+  supported_os_families: string[];
+  supports_embeddings: boolean;
+  supports_reranking: boolean;
+  installed: boolean;
+  compatible: boolean | null;
+  incompatible_reason: string | null;
+  active: boolean;
+}
+
+export interface EnginesResponse {
+  engines: EngineInfo[];
+  active_engine_id: string;
+  has_hardware_profile: boolean;
+}
+
+/** GET /lf/engines — full engine roster + per-host compatibility verdict. */
+export const getEngines = (): Promise<EnginesResponse> => get('/lf/engines');
 
 // ─── SSE: model pull progress ─────────────────────────────────────────────────
 
@@ -254,7 +423,17 @@ export function pullModel(
       });
 
       if (!res.ok || !res.body) {
-        onError(`Server error ${res.status}`);
+        if (res.status === 409) {
+          let busy = '';
+          try { busy = (await res.json())?.model ?? ''; } catch { /* ignore */ }
+          onError(
+            busy
+              ? `A download is already in progress (${busy}). Wait for it to finish.`
+              : 'A download is already in progress. Wait for it to finish.'
+          );
+        } else {
+          onError(`Server error ${res.status}`);
+        }
         return;
       }
 
@@ -354,49 +533,198 @@ export function fmtBytes(bytes: number): string {
 }
 
 /**
- * Fetch the total disk size (in bytes) for a single HuggingFace model repo.
- *
- * Important: HF's `usedStorage` field double-counts LFS blobs (once for the
- * LFS pointer, once for the actual stored bytes), so it is ~2× the real size.
- * Summing `siblings[].size` from the `?blobs=true` endpoint gives the correct
- * on-disk figure that matches what LMForge actually downloads.
- *
- * Returns null on error or if no size data is available.
+ * Fetch HuggingFace repo siblings (filenames + sizes).
  */
-export async function fetchHfModelSize(hfRepo: string): Promise<number | null> {
+async function fetchHfSiblings(
+  hfRepo: string,
+): Promise<{ rfilename?: string; size?: number }[] | null> {
   try {
     const res = await fetch(`https://huggingface.co/api/models/${hfRepo}?blobs=true`, {
       headers: { Accept: 'application/json' },
     });
     if (!res.ok) return null;
     const data = await res.json();
-    const siblings: { size?: number }[] = data.siblings ?? [];
-    const total = siblings.reduce((sum, s) => sum + (s.size ?? 0), 0);
-    return total > 0 ? total : null;
+    return data.siblings ?? [];
   } catch {
     return null;
   }
 }
 
+function ggufBasename(path: string): string {
+  return path.split('/').pop() ?? path;
+}
+
+function isMmprojSidecar(filename: string): boolean {
+  return ggufBasename(filename).startsWith('mmproj-');
+}
+
+/** Mirrors `gguf_patterns_for_quant` in src/model/resolver.rs. */
+function ggufPatternsForQuant(quant: string): string[] {
+  switch (quant.toLowerCase()) {
+    case '4bit':
+    case 'q4':
+      return ['UD-Q4_K_XL', 'Q4_K_M', 'Q4_K_S', 'Q4_K'];
+    case '5bit':
+    case 'q5':
+      return ['UD-Q5_K_XL', 'Q5_K_M', 'Q5_K_S', 'Q5_K'];
+    case '6bit':
+    case 'q6':
+      return ['UD-Q6_K_XL', 'Q6_K'];
+    case '8bit':
+    case 'q8':
+      return ['UD-Q8_K_XL', 'Q8_0'];
+    case 'f16':
+    case 'bf16':
+      return ['F16', 'BF16', 'f16', 'bf16'];
+    default:
+      return [];
+  }
+}
+
+function matchesGgufPattern(files: string[], pat: string): string[] {
+  const patUp = pat.toUpperCase();
+  return files.filter((f) => f.toUpperCase().includes(patUp));
+}
+
+/** Mirrors `select_gguf_files` in src/model/resolver.rs (size-estimate path). */
+function selectGgufFiles(allGguf: string[], quantHint?: string | null): string[] {
+  const weights = allGguf.filter((f) => !isMmprojSidecar(f));
+  const patterns = quantHint ? ggufPatternsForQuant(quantHint) : ['Q4_K_S', 'Q4_K_M'];
+  for (const pat of patterns) {
+    const found = matchesGgufPattern(weights, pat);
+    if (found.length > 0) return found;
+  }
+  return weights.length > 0 ? [weights[0]] : [];
+}
+
+function isVlmTarget(shortcut: string, repo: string): boolean {
+  const h = shortcut.toLowerCase();
+  if (h.includes(':vl:') || h.includes('-vl-') || h.includes('vision')) return true;
+  const r = repo.toLowerCase();
+  return (
+    r.includes('-vl-') ||
+    r.includes('-vl') ||
+    r.includes('vl-instruct') ||
+    r.includes('qwen2.5-vl') ||
+    r.includes('qwen3-vl') ||
+    r.includes('minicpm-v')
+  );
+}
+
+function selectMmprojSidecar(allGguf: string[]): string | null {
+  const mmprojs = allGguf.filter(isMmprojSidecar);
+  if (mmprojs.length === 0) return null;
+  for (const tag of ['F16', 'BF16', 'F32']) {
+    const hit = mmprojs.find((f) => {
+      const base = ggufBasename(f).toUpperCase();
+      return base.includes(`-${tag}.`) || base.endsWith(`-${tag}`);
+    });
+    if (hit) return hit;
+  }
+  return mmprojs[0];
+}
+
+function sumSiblingSizes(
+  siblings: { rfilename?: string; size?: number }[],
+  filenames: string[],
+): number {
+  let total = 0;
+  for (const fname of filenames) {
+    const match = siblings.find((s) => s.rfilename === fname);
+    if (match?.size && match.size > 0) total += match.size;
+  }
+  return total;
+}
+
 /**
- * Batch-fetch HF model sizes for a list of repos in parallel.
- * Returns a map of hfRepo → bytes.  Failed lookups are silently omitted.
+ * Fetch the disk size (in bytes) for a HuggingFace model repo.
+ *
+ * - When `fileName` is provided (GGUF entries), returns the size of just
+ *   that one file. mradermacher / lmstudio-community style repos pack
+ *   8+ quant variants per repo; summing all of them inflates the figure
+ *   by ~10× and bears no relation to what the user will actually download.
+ *
+ * - Without `fileName` (MLX / safetensors — whole repo is downloaded),
+ *   returns the sum of all `siblings[].size`. `usedStorage` is not used
+ *   because it double-counts LFS blobs.
+ *
+ * Returns null on error or if no size data is available.
+ */
+export async function fetchHfModelSize(
+  hfRepo: string,
+  fileName?: string | null,
+): Promise<number | null> {
+  const siblings = await fetchHfSiblings(hfRepo);
+  if (!siblings) return null;
+  if (fileName) {
+    const match = siblings.find((s) => s.rfilename === fileName);
+    return match?.size && match.size > 0 ? match.size : null;
+  }
+  const total = siblings.reduce((sum, s) => sum + (s.size ?? 0), 0);
+  return total > 0 ? total : null;
+}
+
+/** Size lookup input. `key` is the map key in the batch result (use catalog shortcut). */
+export interface HfSizeQuery {
+  key: string;
+  repo: string;
+  file?: string | null;
+  format?: string;
+  /** Last `:segment` of the shortcut, e.g. `4bit` / `f16`. */
+  quant?: string | null;
+  shortcut?: string;
+}
+
+/**
+ * Batch-fetch HF model sizes.
+ * Returns a map of `key` → bytes. Failed lookups are silently omitted.
+ * For GGUF catalog entries pass `{ format: 'gguf', quant, shortcut }` so the
+ * size reflects the quant-specific `.gguf` (+ mmproj for VLMs), not the whole repo.
  */
 export async function fetchHfSizesBatch(
-  hfRepos: string[]
+  queries: HfSizeQuery[],
 ): Promise<Record<string, number>> {
-  const results = await Promise.allSettled(
-    hfRepos.map(async (repo) => {
-      const bytes = await fetchHfModelSize(repo);
-      return { repo, bytes };
-    })
-  );
-  const map: Record<string, number> = {};
-  for (const r of results) {
-    if (r.status === 'fulfilled' && r.value.bytes != null) {
-      map[r.value.repo] = r.value.bytes;
+  const siblingsCache = new Map<string, { rfilename?: string; size?: number }[] | null>();
+
+  async function siblingsFor(repo: string) {
+    if (!siblingsCache.has(repo)) {
+      siblingsCache.set(repo, await fetchHfSiblings(repo));
     }
+    return siblingsCache.get(repo) ?? null;
   }
+
+  const map: Record<string, number> = {};
+
+  await Promise.all(
+    queries.map(async ({ key, repo, file, format, quant, shortcut }) => {
+      const siblings = await siblingsFor(repo);
+      if (!siblings) return;
+
+      if (file) {
+        const bytes = sumSiblingSizes(siblings, [file]);
+        if (bytes > 0) map[key] = bytes;
+        return;
+      }
+
+      if (format === 'gguf' && quant) {
+        const allGguf = siblings
+          .map((s) => s.rfilename)
+          .filter((f): f is string => !!f && f.endsWith('.gguf'));
+        let files = selectGgufFiles(allGguf, quant);
+        if (shortcut && isVlmTarget(shortcut, repo)) {
+          const mmproj = selectMmprojSidecar(allGguf);
+          if (mmproj && !files.includes(mmproj)) files = [...files, mmproj];
+        }
+        const bytes = sumSiblingSizes(siblings, files);
+        if (bytes > 0) map[key] = bytes;
+        return;
+      }
+
+      const total = siblings.reduce((sum, s) => sum + (s.size ?? 0), 0);
+      if (total > 0) map[key] = total;
+    }),
+  );
+
   return map;
 }
 

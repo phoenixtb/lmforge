@@ -1,0 +1,98 @@
+# Run all commands from the repo root (lmforge/)
+
+# ── state / audit ────────────────────────────────────────────────────────────
+scripts/util/dev_status.sh
+
+# ── clean only (interactive) ─────────────────────────────────────────────────
+scripts/util/dev-clean-core.sh              # stop processes, engines, symlinks, …
+scripts/util/dev-clean-core.sh --yes --full   # + cargo target + cursor sandbox
+scripts/util/dev-clean-ui.sh                # AppImage, node_modules, tauri target, …
+scripts/util/dev-clean-ui.sh --yes --full
+
+# ── core: clean-rebuild-init-start (one shot) ────────────────────────────────
+scripts/util/dev-reinstall-core.sh                    # interactive (cuda12 default)
+scripts/util/dev-reinstall-core.sh --yes              # defaults, no prompts
+scripts/util/dev-reinstall-core.sh --yes --smoke      # + background start + qwen3:1.7b:4bit pull
+scripts/util/dev-reinstall-core.sh --cuda13           # force cuda13 variant
+scripts/util/dev-reinstall-core.sh --keep-engines     # skip engine wipe (fast Rust loop)
+scripts/util/dev-reinstall-core.sh --no-cargo-clean   # incremental cargo build
+scripts/util/dev-reinstall-core.sh --no-init --no-start   # rebuild + symlink only
+scripts/util/dev-reinstall-core.sh --release          # release profile
+scripts/util/dev-reinstall-core.sh --wipe-models      # also nuke ~/.lmforge/models
+
+# ── UI: clean-reinstall-launch (one shot) ────────────────────────────────────
+scripts/util/dev-clean-reinstall-ui.sh                              # auto-detect distro → wipe ui artefacts → npm ci → tauri dev
+scripts/util/dev-clean-reinstall-ui.sh --build                      # AppImage build instead of `tauri dev`
+scripts/util/dev-clean-reinstall-ui.sh --keep-node --keep-rust      # iterate fast (only stop+launch)
+scripts/util/dev-clean-reinstall-ui.sh --no-launch                  # just clean + npm ci, don't run
+scripts/util/dev-clean-reinstall-ui.sh --distro fedora              # force distro variant
+
+# ── UI: distro-specific launchers (called by the combo script too) ──────────
+scripts/util/dev_ui_ubuntu24.sh                # apt-based (Ubuntu / Debian / Mint)
+scripts/util/dev_ui_fedora.sh                  # dnf-based (Fedora / RHEL / Rocky / Alma)
+scripts/util/dev_ui_arch.sh                    # pacman-based (Arch / Manjaro / EndeavourOS)
+scripts/util/dev_ui_ubuntu24.sh --build        # any of the above accept --build (AppImage)
+scripts/util/dev_ui_ubuntu24.sh --skip-deps    # skip webkit/appindicator probe (faster restart)
+scripts/util/dev_ui_ubuntu24.sh --skip-daemon-check  # launch even if no daemon on :11430
+
+# ── catalog (after `lmforge init` / dev rebuild) ─────────────────────────────
+lmforge catalog                       # uses host's current engine format (GGUF on most boxes post-Phase 1)
+lmforge catalog --format mlx          # Apple Silicon — omlx
+lmforge catalog --format gguf         # Linux/Windows/CPU/low-VRAM — llamacpp (DEFAULT for everyone except Apple)
+lmforge catalog --format safetensors  # opt-in: vLLM / SGLang (--engine flag)
+lmforge catalog --format gguf --search qwen3.5
+lmforge catalog --format safetensors --search embed
+lmforge pull qwen3:1.7b:4bit                # uses current engine's catalog (GGUF unless --engine flips it)
+lmforge pull unsloth/Qwen3-8B-GGUF          # direct HF repo (escape hatch if no shortcut)
+
+# ── engine tier overrides (Phase 5.1) ────────────────────────────────────────
+lmforge start                                       # auto-selects llamacpp on every non-Apple host
+lmforge start --engine vllm  --model qwen3:8b:4bit  # opt-in tier (requires safetensors catalog)
+lmforge start --engine sglang --yes-experimental    # experimental: known-broken on sm_120; needs explicit opt-in
+LMFORGE_YES_EXPERIMENTAL=1 lmforge start --engine sglang   # same, for systemd/scripts
+
+# ── tests ────────────────────────────────────────────────────────────────────
+scripts/util/dev_test.sh                    # interactive test matrix
+scripts/util/dev_test.sh --yes              # unit+integration+cli+api+inference
+scripts/util/dev_test.sh --yes --full       # + VLM + MTP + rerank
+scripts/util/dev_test.sh --e2e-only --yes   # live daemon only
+scripts/util/release_binary_test.sh         # cuda12/cuda13 release binary matrix
+
+# ── load / bench ─────────────────────────────────────────────────────────────
+scripts/util/dev_bench.sh -n 50 -c 8 --csv /tmp/bench.csv
+scripts/util/dev_bench.sh --stream --max-tokens 256
+scripts/util/dev_bench.sh -m qwen3:8b:4bit -n 100 -c 16
+
+# ── logs (in another terminal) ───────────────────────────────────────────────
+scripts/util/dev_logs.sh                          # default dev.log
+scripts/util/dev_logs.sh --daemon                 # daemon out+err split
+scripts/util/dev_logs.sh --filter ERROR           # only errors, colored
+scripts/util/dev_logs.sh --all                    # everything in ~/.lmforge/logs/
+
+# ── pre-commit safety ────────────────────────────────────────────────────────
+scripts/util/pre-commit-check-catalog.sh                  # full: JSON + drift + gated probe (safetensors+gguf) + quant suffix
+scripts/util/pre-commit-check-catalog.sh --no-network     # offline-only (JSON + drift + suffix)
+scripts/util/pre-commit-check-catalog.sh --fix-drift      # auto-resolve repo→live drift
+
+# ── cleanup (audit by default; --yes to skip prompts) ────────────────────────
+scripts/util/dev_clean.sh                         # audit only (dry-run)
+scripts/util/dev_clean.sh --target --yes          # cargo + ui rust target (~3–6 GB)
+scripts/util/dev_clean.sh --node --yes            # ui/node_modules + ui/dist + .svelte-kit
+scripts/util/dev_clean.sh --engines --yes         # ~/.lmforge/{engines,bin}  (re-init: ~5 min)
+scripts/util/dev_clean.sh --logs --yes            # truncate ~/.lmforge/logs/*
+scripts/util/dev_clean.sh --engines --logs --yes  # frees ~8.6 GB, keeps models
+scripts/util/dev_clean.sh --all --yes             # everything except models + HF cache
+scripts/util/dev_clean.sh --models                # ALWAYS prompts (forces re-pull)
+scripts/util/dev_clean.sh --hf-cache              # ALWAYS prompts (shared with all HF tools)
+scripts/util/dev_clean.sh --nuke                  # full wipe (always prompts)
+
+# ── in-binary cleanup (complements dev_clean.sh) ─────────────────────────────
+lmforge clean                          # audit only
+lmforge clean --target --yes           # cargo target via the binary
+lmforge clean --engines --yes          # ~/.lmforge/engines (same effect)
+
+# ── Cursor-sandbox stale-binary workaround (if cargo build looks ignored) ────
+# Cursor's sandboxed shells redirect target/ writes to /tmp/cursor-sandbox-cache.
+# Manually copy the fresh binary back if you suspect a stale ~/.cargo/bin/lmforge:
+ls /tmp/cursor-sandbox-cache/*/target/debug/lmforge 2>/dev/null
+# cp <that path> target/debug/lmforge

@@ -378,9 +378,23 @@
   .log-hd { gap: 12px; }
   .log-controls { display: flex; align-items: center; gap: 6px; }
   .log-controls select {
-    background: var(--surface-2); color: var(--text);
-    border: 1px solid var(--border); border-radius: var(--radius-sm);
-    padding: 4px 8px; font-size: 11.5px; font-family: var(--font-mono);
+    background: var(--surface-2);
+    color: var(--text);
+    color-scheme: dark;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 4px 24px 4px 8px;
+    font-size: 11.5px;
+    font-family: var(--font-mono);
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23ffffff99' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+  }
+  .log-controls select option {
+    background: var(--surface-2);
+    color: var(--text);
   }
   .btn {
     background: var(--surface-2); color: var(--text);

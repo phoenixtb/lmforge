@@ -31,8 +31,8 @@
 set -euo pipefail
 
 # ─── Configuration ────────────────────────────────────────────────────────────
-EMBED_MODEL="${EMBED_MODEL:-qwen3-embed:0.6b:4bit}"
-CHAT_MODEL="${CHAT_MODEL:-qwen3.5:4b:4bit}"
+EMBED_MODEL="${EMBED_MODEL:-qwen3-embed:0.6b:f16}"
+CHAT_MODEL="${CHAT_MODEL:-qwen3.5:4b:6bit}"
 LF_HOST="${LF_HOST:-http://127.0.0.1:11430}"
 LF_BIN="${LF_BIN:-./target/debug/lmforge}"
 N="${N_REQUESTS:-10}"
@@ -103,7 +103,13 @@ sparkline() {
         empty=$(printf '%*s' $(( bar_max - filled )) '')
         printf "   ${DIM}%s[%02d]${NC}  ${colour}%s${NC}${DIM}%s${NC}  ${DIM}%sms${NC}\n" \
             "$prefix" $((i+1)) "$bar" "$empty" "$v"
-        (( i++ ))
+        # Use pre-increment / explicit form — under `set -e` a bare
+        # `(( i++ ))` aborts the script when i was 0, because the post-
+        # increment expression evaluates to the OLD value (0) and bash
+        # treats arithmetic-zero as exit 1. This previously truncated the
+        # sparkline after one row and made the suite "succeed silently"
+        # on the trap with no final report.
+        i=$(( i + 1 ))
     done
 }
 

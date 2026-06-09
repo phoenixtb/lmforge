@@ -14,7 +14,7 @@
 Run multiple LLMs simultaneously on your local hardware.  
 LMForge is a persistent daemon that manages model loading, VRAM allocation, and engine selection automatically — then exposes a single OpenAI-compatible REST API to every app on your machine.
 
-[**Install**](#install) · [**Quick Start**](#quick-start) · [**CLI Reference**](#cli-reference) · [**REST API**](#rest-api) · [**Model Catalog**](#model-catalog) · [**Developer Guide**](#developer-guide) · [**Contributing**](#contributing)
+[**Install**](#install) · [**Quick Start**](#quick-start) · [**Verify Installation**](#verify-installation) · [**CLI Reference**](#cli-reference) · [**REST API**](#rest-api) · [**Model Catalog**](#model-catalog) · [**Developer Guide**](#developer-guide) · [**Contributing**](#contributing)
 
 </div>
 
@@ -58,7 +58,7 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 - **Multi-model orchestration** — run inference *and* embedding models simultaneously, each independently managed with its own keep-alive lifecycle
 - **Hardware-aware engine selection** — automatically picks the best engine:
   - 🍎 **Apple Silicon** → [oMLX](https://github.com/jundot/omlx) — OpenAI-compatible server, runs natively on Metal via MLX
-  - 🖥️ **NVIDIA GPU (Linux)** → [SGLang](https://github.com/sgl-project/sglang) — CUDA, high-concurrency (24 GB+ VRAM recommended)
+  - 🖥️ **NVIDIA GPU (Linux)** → [SGLang](https://github.com/sgl-project/sglang) — CUDA, high-concurrency (8 GB+ VRAM; tune `LMFORGE_SGLANG_MEM_FRACTION` down on 8 GB cards)
   - 🪟 **NVIDIA GPU (Windows)** → [llama.cpp](https://github.com/ggerganov/llama.cpp) with CUDA prebuilts — SGLang is Linux-only upstream; use WSL2 if you need it
   - 💻 **CPU / any hardware** → [llama.cpp](https://github.com/ggerganov/llama.cpp) — universal cross-platform fallback
 - **VRAM-aware LRU eviction** — loads models up to detected VRAM budget; evicts least-recently-used when full
@@ -78,8 +78,8 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 | Platform | Architecture | Engine | Core | Desktop UI |
 |---|---|---|---|---|
 | macOS 13+ | Apple Silicon (arm64) | oMLX (Metal/MLX) | ✅ | ✅ DMG |
-| Ubuntu 22.04+ | x86_64 | SGLang (NVIDIA, 24 GB+) / llama.cpp | ✅ | ✅ AppImage |
-| Ubuntu 22.04+ | arm64 | llama.cpp | ✅ | 🔜 Planned |
+| Ubuntu 22.04 / 24.04 / 26.04 | x86_64 | SGLang (NVIDIA, 8 GB+) / llama.cpp | ✅ | ✅ AppImage |
+| Ubuntu 22.04 / 24.04 / 26.04 | arm64 | llama.cpp | ✅ | 🔜 Planned |
 | Windows 10/11 | x86_64 | llama.cpp (CPU + NVIDIA CUDA) | ✅ | ✅ NSIS installer |
 | Windows 10/11 + WSL2 | x86_64 | SGLang (NVIDIA via CUDA-on-WSL) | ✅ (inside WSL) | run via Linux build |
 
@@ -90,6 +90,8 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 > **Windows 10 users** must install the Edge WebView2 Runtime before launching the desktop UI (preinstalled on Windows 11). Get it from <https://developer.microsoft.com/microsoft-edge/webview2/>.
 
 > **Windows Firewall**: when LMForge first binds to a non-loopback address (e.g. `0.0.0.0` for LAN access), Windows will pop a Defender Firewall dialog asking to allow `lmforge.exe` on Private/Public networks. Allow it on **Private** networks only unless you intentionally want WAN exposure.
+
+> **Ubuntu 26.04 — building from source**: `libwebkit2gtk-4.1-dev` was removed in 26.04. Use `libwebkitgtk-6.0-dev` instead when installing Tauri build dependencies manually. The pre-built AppImage and core binary (released binaries built on Ubuntu 22.04) run on 26.04 without modification.
 
 ---
 
@@ -111,11 +113,21 @@ lmforge service install        # register Scheduled Task (auto-starts at logon)
 ```
 
 What the install script does on macOS/Linux:
-1. Downloads the pre-built binary for your platform/arch
+1. Downloads the pre-built `lmforge` binary for your platform/arch (~5 MB)
 2. Installs to `/usr/local/bin/lmforge`
-3. Runs `lmforge init` — detects hardware, selects and installs the right engine
+3. Runs `lmforge init` — probes hardware, pulls the matching inference engine:
+   - **macOS** → oMLX (MLX on Metal) via Homebrew
+   - **Linux NVIDIA (driver ≥ r570)** → custom **cuda12** tarball (~1 GB, bundled
+     CUDA runtime + llama.cpp). Opt-in **cuda13** via
+     `lmforge engine install llamacpp --variant cuda13`.
+   - **Linux NVIDIA (below r570) / AMD / Intel** → Vulkan upstream build
+   - **Linux / Windows, no GPU** → CPU build
+   - **Windows NVIDIA** → upstream CUDA prebuilts
 4. Registers a system service (`launchd` on macOS, `systemd --user` on Linux)
 5. Starts the daemon immediately
+
+Override variant: `LMFORGE_LLAMACPP_VARIANT={cuda12,cuda13,cpu,gpu}` before
+`lmforge init`. Run `lmforge doctor` to see installed variants and which is active.
 
 To pin a specific version:
 ```bash
@@ -195,6 +207,72 @@ curl http://127.0.0.1:11430/v1/chat/completions \
 curl http://127.0.0.1:11430/v1/embeddings \
   -H "Content-Type: application/json" \
   -d '{"model": "nomic-embed-text:v1.5", "input": "Hello world"}'
+```
+
+---
+
+## Verify Installation
+
+After `lmforge start`, run these smoke tests to confirm the daemon is healthy and models respond correctly.
+
+```bash
+# ── 1. Health / status ───────────────────────────────────────────────────────
+curl -s http://127.0.0.1:11430/health
+curl -s http://127.0.0.1:11430/lf/status | jq '{overall_status, engine, running_models}'
+
+# ── 2. Pull the recommended inference + embedding models ─────────────────────
+lmforge pull qwen3:8b:4bit           # chat / reasoning (~4.5 GB)
+lmforge pull qwen3-embed:0.6b:8bit   # embeddings (~0.6 GB)
+
+# ── 3. Chat completion (non-streaming) ───────────────────────────────────────
+curl -s http://127.0.0.1:11430/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3:8b:4bit",
+    "messages": [{"role": "user", "content": "Say: OK"}],
+    "max_tokens": 16
+  }' | jq '.choices[0].message.content'
+# Expected: "OK" (or similar short acknowledgement)
+
+# ── 4. Chat completion (streaming) ───────────────────────────────────────────
+curl -sN http://127.0.0.1:11430/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3:8b:4bit",
+    "messages": [{"role": "user", "content": "Count to 5."}],
+    "stream": true
+  }'
+# Expected: a series of data: {"choices":[{"delta":{"content":"..."}}]} lines
+
+# ── 5. Embeddings ─────────────────────────────────────────────────────────────
+curl -s http://127.0.0.1:11430/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3-embed:0.6b:8bit",
+    "input": "The quick brown fox"
+  }' | jq '.data[0].embedding | length'
+# Expected: 1024 (embedding dimension for the 0.6B model)
+
+# ── 6. List loaded models ─────────────────────────────────────────────────────
+curl -s http://127.0.0.1:11430/v1/models | jq '[.data[] | {id, capabilities}]'
+```
+
+> If you set an API key (`api_key` in `config.toml` or `LMFORGE_API_KEY` env), add `-H "Authorization: Bearer <your-key>"` to every request above.
+
+### Confirm the engine that was selected
+
+```bash
+curl -s http://127.0.0.1:11430/lf/status | jq '.engine'
+# Expected on Linux + NVIDIA ≥ 8 GB VRAM: { "id": "sglang", "version": "..." }
+# Expected on Apple Silicon:              { "id": "omlx", "version": "..." }
+# Anything else (incl. Windows + NVIDIA): { "id": "llamacpp", "version": "..." }
+```
+
+If you see `llamacpp` on a Linux machine with ≥ 8 GB NVIDIA VRAM, **restart the daemon — the engine is re-selected on every `start`**, so this is enough; SGLang will auto-install on first launch:
+
+```bash
+lmforge stop
+lmforge start   # logs will show "Engine not installed, running installer..." for SGLang
 ```
 
 ---
@@ -905,6 +983,23 @@ lmforge start --port 8080 --log-level debug
 
 **Requirements:** Rust 1.78+, Node.js 20+ (UI only)
 
+The quick-start below works on every supported OS. For platform-specific
+notes (CUDA toolkit when needed, WSL2 vs native Windows, Apple Silicon
+quirks, opt-in engine installs, cleanup procedures) see the platform
+dev guides:
+
+- [`docs/INSTALL_LINUX_DEV.md`](docs/INSTALL_LINUX_DEV.md) — Linux +
+  NVIDIA (Ubuntu 24.04 / 26.04 reference, Proxmox passthrough notes).
+- [`docs/INSTALL_MACOS_DEV.md`](docs/INSTALL_MACOS_DEV.md) — Apple
+  Silicon (oMLX default, no opt-in tiers).
+- [`docs/INSTALL_WINDOWS_DEV.md`](docs/INSTALL_WINDOWS_DEV.md) — native
+  Windows + WSL2 paths.
+
+Engine architecture and tier rationale live in the ADRs:
+[ADR-001 — engine tiers](docs/architecture/ADR-001-engine-tiers.md),
+[ADR-002 — `/lf/engines` endpoint](docs/architecture/ADR-002-engines-endpoint.md),
+[ADR-003 — `last_errors` failure surface](docs/architecture/ADR-003-last-errors-surface.md).
+
 ```bash
 git clone https://github.com/phoenixtb/lmforge
 cd lmforge
@@ -1215,8 +1310,12 @@ Run this whenever you add or change a catalog entry.
 |---|---|---|
 | `RUST_LOG` | `info` | Log verbosity: `error`, `warn`, `info`, `debug`, `trace` |
 | `LMFORGE_CONFIG` | `~/.lmforge/config.toml` | Override config file path |
-| `LMFORGE_DATA_DIR` | `~/.lmforge` | Override the entire data directory |
+| `LMFORGE_DATA_DIR` | `~/.lmforge` | Override the data directory (engines, logs, `models.json`). Also settable via `--data-dir` or `data_dir` in config.toml. |
+| `LMFORGE_MODELS_DIR` | `{data_dir}/models` | Override the model **weights** directory only. Also settable via `--models-dir` or `models_dir` in config.toml. Point this at a shared volume to reuse one weights library across machines. |
 | `LMFORGE_PORT` | `11430` | Override the API port |
+
+Precedence for the storage dirs: CLI flag > env var > config.toml > default.
+Changing them via the UI / `POST /lf/config` is persisted but takes effect on the next daemon restart.
 
 ---
 
@@ -1240,6 +1339,26 @@ Everything LMForge writes at runtime lives in `~/.lmforge/`:
 └── logs/                # Daemon log files
     └── lmforge.log
 ```
+
+`models/` can be relocated independently of the data root via `models_dir`
+(`LMFORGE_MODELS_DIR` / `--models-dir` / config). The rest of the layout stays
+under `data_dir`.
+
+#### Sharing a weights library across VMs (virtio-fs)
+
+Keep `data_dir` local per machine (engines, venvs, logs, index) and share only
+the weights volume:
+
+```
+Host:     /srv/lmforge-models        (virtio-fs export)
+Linux VM: LMFORGE_MODELS_DIR=/mnt/lmforge-models
+Windows VM: LMFORGE_MODELS_DIR=D:\lmforge-models
+```
+
+The index (`models.json`) stores per-model paths **relative to `models_dir`**
+(schema v2), so the same physical volume works across OSes with different mount
+points. On a freshly pointed VM, run `lmforge models scan` to (re)build the
+index from the weights already present on the volume.
 
 ---
 

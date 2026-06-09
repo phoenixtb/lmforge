@@ -678,7 +678,7 @@ Each release publishes pre-built binaries via GitHub Actions CI:
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/you/lmforge/main/install.sh | bash
+curl -fsSL https://github.com/phoenixtb/lmforge/releases/latest/download/install-core.sh | bash
 
 # Windows (PowerShell)
 irm https://raw.githubusercontent.com/you/lmforge/main/install.ps1 | iex

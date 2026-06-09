@@ -2,7 +2,11 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-const SCHEMA_VERSION: u32 = 1;
+/// v2 stores per-model `path` (and `mmproj_path`) relative to `models_dir` so a
+/// shared weights volume is portable across hosts/OSes with different mount
+/// points. In memory we always expose absolute paths; relativization happens
+/// only on save. v1 (absolute) indexes load fine and migrate to v2 on next save.
+const SCHEMA_VERSION: u32 = 2;
 
 /// The models.json index
 #[derive(Debug, Serialize, Deserialize)]
@@ -49,11 +53,23 @@ pub struct ModelCapabilities {
     /// Used by SGLang to set --pooling-method. None means engine default.
     #[serde(default)]
     pub pooling: Option<String>,
+    /// Multi-Token Prediction (MTP / nextn) support — drives speculative
+    /// decoding on `llama-server`. Resolved with a layered precedence:
+    /// (1) catalog `mtp` flag, (2) `gguf_inspect::detect_mtp` probe at
+    /// pull time. `None` means "unknown / not yet probed" — the launch
+    /// path falls back to spec-dec OFF rather than guessing.
+    #[serde(default)]
+    pub mtp: Option<bool>,
 }
 
 impl ModelIndex {
-    /// Load from file, or create empty
-    pub fn load(data_dir: &std::path::Path) -> Result<Self> {
+    /// Load from file, or create empty.
+    ///
+    /// `models.json` lives in `data_dir`; per-model paths are resolved against
+    /// `models_dir`. Relative entries (schema v2) become absolute in memory;
+    /// absolute entries (schema v1, or weights outside `models_dir`) are kept
+    /// verbatim so existing installs and foreign mounts keep working.
+    pub fn load(data_dir: &std::path::Path, models_dir: &std::path::Path) -> Result<Self> {
         let path = data_dir.join("models.json");
         if !path.exists() {
             return Ok(Self {
@@ -63,21 +79,45 @@ impl ModelIndex {
         }
 
         let content = std::fs::read_to_string(&path).context("Failed to read models.json")?;
-        let index: Self = serde_json::from_str(&content).context("Failed to parse models.json")?;
+        let mut index: Self =
+            serde_json::from_str(&content).context("Failed to parse models.json")?;
+
+        for entry in &mut index.models {
+            entry.path = resolve_model_path(&entry.path, models_dir);
+            if let Some(mmproj) = entry.capabilities.mmproj_path.take() {
+                entry.capabilities.mmproj_path = Some(resolve_model_path(&mmproj, models_dir));
+            }
+        }
 
         Ok(index)
     }
 
-    /// Save atomically (write to temp, then rename)
-    pub fn save(&self, data_dir: &std::path::Path) -> Result<()> {
+    /// Save atomically (write to temp, then rename).
+    ///
+    /// Paths are stored relative to `models_dir` (schema v2) when they live
+    /// under it; weights outside `models_dir` are written absolute and logged.
+    pub fn save(&self, data_dir: &std::path::Path, models_dir: &std::path::Path) -> Result<()> {
         let path = data_dir.join("models.json");
         let tmp_path = data_dir.join("models.json.tmp");
 
-        let json = serde_json::to_string_pretty(self)?;
+        // Relativize a clone for on-disk persistence; the in-memory index keeps
+        // absolute paths so callers are unaffected.
+        let mut out = Self {
+            schema_version: SCHEMA_VERSION,
+            models: self.models.clone(),
+        };
+        for entry in &mut out.models {
+            entry.path = relativize_model_path(&entry.path, models_dir);
+            if let Some(mmproj) = entry.capabilities.mmproj_path.take() {
+                entry.capabilities.mmproj_path = Some(relativize_model_path(&mmproj, models_dir));
+            }
+        }
+
+        let json = serde_json::to_string_pretty(&out)?;
         std::fs::write(&tmp_path, &json)?;
         std::fs::rename(&tmp_path, &path)?;
 
-        debug!(path = %path.display(), count = self.models.len(), "Saved models.json");
+        debug!(path = %path.display(), count = out.models.len(), "Saved models.json");
         Ok(())
     }
 
@@ -125,6 +165,38 @@ impl ModelIndex {
     /// Get the first available model (for default selection)
     pub fn first(&self) -> Option<&ModelEntry> {
         self.models.first()
+    }
+}
+
+/// Resolve a stored model path to absolute. Relative paths are joined onto
+/// `models_dir`; absolute paths (v1 indexes or weights outside `models_dir`)
+/// pass through unchanged.
+fn resolve_model_path(stored: &str, models_dir: &std::path::Path) -> String {
+    let p = std::path::Path::new(stored);
+    if p.is_absolute() {
+        stored.to_string()
+    } else {
+        models_dir.join(p).to_string_lossy().to_string()
+    }
+}
+
+/// Inverse of [`resolve_model_path`]: strip the `models_dir` prefix to store a
+/// portable relative path. Paths outside `models_dir` are kept absolute (and a
+/// warning logged) so cross-OS shared volumes remain self-describing.
+fn relativize_model_path(abs: &str, models_dir: &std::path::Path) -> String {
+    let p = std::path::Path::new(abs);
+    match p.strip_prefix(models_dir) {
+        Ok(rel) => rel.to_string_lossy().to_string(),
+        Err(_) => {
+            if p.is_absolute() {
+                tracing::warn!(
+                    path = %abs,
+                    models_dir = %models_dir.display(),
+                    "Model path is outside models_dir — keeping absolute in index (not portable across hosts)"
+                );
+            }
+            abs.to_string()
+        }
     }
 }
 
@@ -507,6 +579,33 @@ pub fn detect_capabilities(
     }
 
     // =========================================================================
+    // Signal E — GGUF chat fallback.
+    //
+    // GGUF model dirs typically contain just the `.gguf` weights file and no
+    // `config.json`, so the architecture-based chat detection above never
+    // fires. Without this fallback, every GGUF chat model would land here
+    // with `chat=false` and the OpenAI API would refuse chat completions
+    // ("Model 'foo' is an embedding model and cannot be used for chat
+    // completions.") — see src/server/openai.rs::check_model_role.
+    //
+    // Rule: a model directory containing one or more `.gguf` weight files
+    // (excluding `mmproj-*.gguf`) and no `config.json` is presumed to be a
+    // chat model UNLESS earlier signals already classified it as embed or
+    // rerank. This matches the curated catalog: gguf.json's `chat`,
+    // `embed`, and `rerank` namespaces are explicit, and Signal A/B already
+    // tagged non-chat shortcuts before we get here.
+    // =========================================================================
+    if !caps.chat
+        && !caps.embeddings
+        && !caps.reranking
+        && !config_path.exists()
+        && has_gguf_weights(model_dir)
+    {
+        caps.chat = true;
+        debug!("Signal E: GGUF-only dir with no embed/rerank markers — defaulting chat=true");
+    }
+
+    // =========================================================================
     // VLM mmproj sidecar lookup (llama.cpp-served VLMs only).
     // Convention: `mmproj-*.gguf` next to the main weights file. If we already
     // know vision=true we look unconditionally; if vision is unset but a
@@ -531,6 +630,25 @@ pub fn detect_capabilities(
     caps
 }
 
+/// True when `model_dir` contains at least one `.gguf` weights file that is
+/// *not* a multimodal projector sidecar. Used by the GGUF chat fallback in
+/// `detect_capabilities`.
+fn has_gguf_weights(model_dir: &std::path::Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(model_dir) else {
+        return false;
+    };
+    entries.filter_map(|e| e.ok()).any(|e| {
+        let path = e.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("gguf") {
+            return false;
+        }
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| !n.starts_with("mmproj-"))
+            .unwrap_or(false)
+    })
+}
+
 /// Find the multimodal projector sidecar (`mmproj-*.gguf`) in the given dir.
 /// Returns the first match (sorted lexicographically for deterministic results).
 fn find_mmproj_file(model_dir: &std::path::Path) -> Option<std::path::PathBuf> {
@@ -553,6 +671,222 @@ fn find_mmproj_file(model_dir: &std::path::Path) -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── GGUF chat fallback (Signal E) ────────────────────────────────────────
+    //
+    // Regression guard: every GGUF chat model in the curated catalog must be
+    // classified as chat=true even though it ships with no config.json. If
+    // this breaks, /v1/chat/completions starts 400ing with "is an embedding
+    // model and cannot be used for chat completions."
+
+    fn make_gguf_dir(name: &str, files: &[(&str, &[u8])]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("lmforge_test_caps_{}", name));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (fname, body) in files {
+            std::fs::write(dir.join(fname), body).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn gguf_only_dir_defaults_to_chat() {
+        let dir = make_gguf_dir("gguf_chat", &[("Qwen3-1.7B-Q4_K_M.gguf", b"fake-weights")]);
+        let caps = detect_capabilities(
+            &dir,
+            Some("qwen3:1.7b:4bit"),
+            Some("unsloth/Qwen3-1.7B-GGUF"),
+        );
+        assert!(
+            caps.chat,
+            "GGUF model without embed/rerank markers must default chat=true"
+        );
+        assert!(!caps.embeddings);
+        assert!(!caps.reranking);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn gguf_embed_dir_stays_embed() {
+        let dir = make_gguf_dir(
+            "gguf_embed",
+            &[("Qwen3-Embedding-0.6B-Q8_0.gguf", b"fake-weights")],
+        );
+        let caps = detect_capabilities(
+            &dir,
+            Some("qwen3-embed:0.6b:8bit"),
+            Some("Qwen/Qwen3-Embedding-0.6B-GGUF"),
+        );
+        assert!(
+            caps.embeddings,
+            "Catalog 'embed' shortcut must keep embeddings=true"
+        );
+        assert!(!caps.chat, "Embedding model must not be flagged as chat");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn gguf_rerank_dir_stays_rerank() {
+        let dir = make_gguf_dir(
+            "gguf_rerank",
+            &[("Qwen3-Reranker-4B-Q4_K_M.gguf", b"fake-weights")],
+        );
+        let caps = detect_capabilities(
+            &dir,
+            Some("qwen3-rerank:4b:4bit"),
+            Some("Qwen/Qwen3-Reranker-4B-GGUF"),
+        );
+        assert!(caps.reranking);
+        assert!(!caps.chat, "Re-ranker must not be flagged as chat");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn safetensors_dir_with_no_config_does_not_get_chat_fallback() {
+        // The fallback is GGUF-only — a stray safetensors dir without
+        // config.json (broken state) must NOT get chat=true.
+        let dir = make_gguf_dir(
+            "safetensors_no_config",
+            &[("model.safetensors", b"fake-weights")],
+        );
+        let caps = detect_capabilities(&dir, Some("some-model:latest"), None);
+        assert!(
+            !caps.chat,
+            "Safetensors-only dir without config.json must not be flagged chat"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn has_gguf_weights_distinguishes_main_from_mmproj() {
+        let dir = make_gguf_dir(
+            "gguf_weights_probe",
+            &[
+                ("Qwen2.5-VL-7B-Q4_K_M.gguf", b"fake-weights"),
+                ("mmproj-Qwen2.5-VL-7B-f16.gguf", b"fake-proj"),
+            ],
+        );
+        assert!(has_gguf_weights(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let dir = make_gguf_dir("gguf_no_weights", &[]);
+        assert!(!has_gguf_weights(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let dir = make_gguf_dir(
+            "gguf_only_mmproj",
+            &[("mmproj-something-f16.gguf", b"fake-proj")],
+        );
+        assert!(!has_gguf_weights(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ── Relative-path index (schema v2) round-trip + migration ───────────────
+
+    fn make_index_test_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("lmforge_index_{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn sample_entry(id: &str, path: &str) -> ModelEntry {
+        ModelEntry {
+            id: id.to_string(),
+            path: path.to_string(),
+            format: "gguf".to_string(),
+            engine: "gguf".to_string(),
+            hf_repo: Some("org/repo".to_string()),
+            size_bytes: 10,
+            capabilities: ModelCapabilities {
+                chat: true,
+                ..Default::default()
+            },
+            added_at: "2025-01-01".to_string(),
+        }
+    }
+
+    #[test]
+    fn index_v2_round_trip_stores_relative_resolves_absolute() {
+        let data_dir = make_index_test_dir("v2_roundtrip_data");
+        let models_dir = make_index_test_dir("v2_roundtrip_models");
+        let abs = models_dir.join("qwen3-8b").to_string_lossy().to_string();
+
+        let idx = ModelIndex {
+            schema_version: 2,
+            models: vec![sample_entry("qwen3:8b", &abs)],
+        };
+        idx.save(&data_dir, &models_dir).unwrap();
+
+        // On disk the path must be relative to models_dir.
+        let raw = std::fs::read_to_string(data_dir.join("models.json")).unwrap();
+        assert!(
+            raw.contains("\"qwen3-8b\""),
+            "expected relative path on disk: {raw}"
+        );
+        assert!(!raw.contains(&abs), "absolute path must not be persisted");
+
+        // On load it resolves back to the absolute path under models_dir.
+        let loaded = ModelIndex::load(&data_dir, &models_dir).unwrap();
+        assert_eq!(loaded.get("qwen3:8b").unwrap().path, abs);
+
+        std::fs::remove_dir_all(&data_dir).ok();
+        std::fs::remove_dir_all(&models_dir).ok();
+    }
+
+    #[test]
+    fn index_v1_absolute_migrates_to_relative_on_save() {
+        let data_dir = make_index_test_dir("v1_migrate_data");
+        let models_dir = make_index_test_dir("v1_migrate_models");
+        let abs = models_dir.join("gemma3-4b").to_string_lossy().to_string();
+
+        // Simulate a v1 index file with an absolute path.
+        let v1 = format!(
+            r#"{{"schema_version":1,"models":[{{"id":"gemma3:4b","path":"{}","format":"gguf","engine":"gguf","hf_repo":null,"size_bytes":1,"capabilities":{{"chat":true,"embeddings":false,"thinking":false}},"added_at":"x"}}]}}"#,
+            abs.replace('\\', "\\\\")
+        );
+        std::fs::write(data_dir.join("models.json"), v1).unwrap();
+
+        // Load keeps it absolute in memory.
+        let idx = ModelIndex::load(&data_dir, &models_dir).unwrap();
+        assert_eq!(idx.get("gemma3:4b").unwrap().path, abs);
+
+        // Saving migrates to v2 relative.
+        idx.save(&data_dir, &models_dir).unwrap();
+        let raw = std::fs::read_to_string(data_dir.join("models.json")).unwrap();
+        assert!(raw.contains("\"schema_version\": 2"), "must be v2: {raw}");
+        assert!(raw.contains("\"gemma3-4b\""), "must be relative: {raw}");
+
+        std::fs::remove_dir_all(&data_dir).ok();
+        std::fs::remove_dir_all(&models_dir).ok();
+    }
+
+    #[test]
+    fn index_foreign_path_kept_absolute() {
+        let data_dir = make_index_test_dir("foreign_data");
+        let models_dir = make_index_test_dir("foreign_models");
+        let foreign = "/some/other/volume/llama-3".to_string();
+
+        let idx = ModelIndex {
+            schema_version: 2,
+            models: vec![sample_entry("llama3", &foreign)],
+        };
+        idx.save(&data_dir, &models_dir).unwrap();
+
+        // Outside models_dir → kept absolute on disk (portable across hosts only
+        // when standardized, but never silently broken).
+        let raw = std::fs::read_to_string(data_dir.join("models.json")).unwrap();
+        assert!(
+            raw.contains(&foreign),
+            "foreign abs path must be preserved: {raw}"
+        );
+
+        let loaded = ModelIndex::load(&data_dir, &models_dir).unwrap();
+        assert_eq!(loaded.get("llama3").unwrap().path, foreign);
+
+        std::fs::remove_dir_all(&data_dir).ok();
+        std::fs::remove_dir_all(&models_dir).ok();
+    }
 
     #[test]
     fn test_index_crud() {

@@ -13,6 +13,7 @@ pub fn estimate_vram(profile: &HardwareProfile) -> f32 {
         GpuVendor::Apple => estimate_apple_vram(profile),
         GpuVendor::Nvidia => estimate_nvidia_vram(),
         GpuVendor::Amd => estimate_amd_vram(),
+        GpuVendor::Intel => estimate_intel_vram(profile),
         GpuVendor::None => 0.0,
     };
 
@@ -61,6 +62,7 @@ pub fn get_free_vram(profile: &HardwareProfile) -> f32 {
         GpuVendor::Apple => get_free_apple_vram(),
         GpuVendor::Nvidia => get_free_nvidia_vram(),
         GpuVendor::Amd => get_free_amd_vram(),
+        GpuVendor::Intel => get_free_intel_vram(profile),
         GpuVendor::None => 0.0,
     };
     debug!(gpu_vendor = ?profile.gpu_vendor, free_vram_gb = free_vram, "Free VRAM probed");
@@ -174,6 +176,35 @@ fn estimate_amd_vram() -> f32 {
     0.0
 }
 
+/// Intel iGPU / Arc dGPU VRAM estimate.
+///
+/// Intel iGPUs share system RAM. Modern UEFIs allocate 1.5–2 GB as
+/// "dedicated" graphics memory, but the actual ceiling is much higher
+/// because the iGPU can grab any free system RAM dynamically. We treat
+/// the budget the same way we treat Apple Silicon (unified memory) but
+/// at a more conservative 50% of RAM, leaving headroom for the OS that
+/// has to share the same memory pool.
+///
+/// Discrete Arc dGPUs would ideally report their own VRAM via Intel's
+/// XPU-SMI, but we don't depend on that tooling — fall back to the
+/// shared-RAM heuristic which is the safer floor.
+fn estimate_intel_vram(profile: &HardwareProfile) -> f32 {
+    const INTEL_SHARED_FRACTION: f32 = 0.5;
+    (profile.total_ram_gb * INTEL_SHARED_FRACTION).max(0.0)
+}
+
+/// Intel iGPU free memory — same heuristic as the total estimate, scaled
+/// by currently-free system RAM rather than total.
+fn get_free_intel_vram(profile: &HardwareProfile) -> f32 {
+    use sysinfo::System;
+    let mut sys = System::new_all();
+    sys.refresh_memory();
+    let free_ram_gb = sys.available_memory() as f32 / (1024.0 * 1024.0 * 1024.0);
+    const INTEL_SHARED_FRACTION: f32 = 0.5;
+    let cap = profile.total_ram_gb * INTEL_SHARED_FRACTION;
+    free_ram_gb.min(cap).max(0.0)
+}
+
 /// AMD ROCm free memory
 fn get_free_amd_vram() -> f32 {
     if let Ok(output) = std::process::Command::new("rocm-smi")
@@ -214,13 +245,12 @@ mod tests {
         HardwareProfile {
             os: Os::Darwin,
             arch: Arch::Aarch64,
-            is_tegra: false,
             gpu_vendor: gpu,
-            vram_gb: 0.0,
             unified_mem: gpu == GpuVendor::Apple,
             total_ram_gb: ram_gb,
             cpu_cores: 10,
             cpu_model: "Test".to_string(),
+            ..Default::default()
         }
     }
 

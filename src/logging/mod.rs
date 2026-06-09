@@ -13,8 +13,21 @@ pub fn init(cli: &Cli) -> Result<()> {
 
     let env_filter = EnvFilter::try_new(log_level).unwrap_or_else(|_| EnvFilter::new("info"));
 
-    // Try to set up file logging if data dir exists
-    let data_dir = dirs::home_dir().map(|h| h.join(".lmforge").join("logs"));
+    // Resolve the logs dir from the same data-dir precedence the config uses
+    // (`--data-dir` flag > LMFORGE_DATA_DIR env > ~/.lmforge) so early logs land
+    // alongside the rest of the data root when it has been relocated.
+    let data_dir = cli
+        .data_dir
+        .as_deref()
+        .map(crate::config::normalize_dir)
+        .or_else(|| {
+            std::env::var("LMFORGE_DATA_DIR")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| crate::config::normalize_dir(&s))
+        })
+        .or_else(|| dirs::home_dir().map(|h| h.join(".lmforge")))
+        .map(|d| d.join("logs"));
 
     if let Some(ref logs_dir) = data_dir
         && (logs_dir.exists() || std::fs::create_dir_all(logs_dir).is_ok())

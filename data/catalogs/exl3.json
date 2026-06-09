@@ -1,0 +1,11 @@
+{
+    "_comment_policy": "--- EXL3 catalog (TabbyAPI / ExLlamaV3, opt-in tier). Every entry must be (1) PUBLIC, ungated HF repo, and (2) point to a directory containing actual EXL3 weights (model.safetensors + config + quantization_config). ---",
+
+    "_comment_branches": "--- IMPORTANT: turboderp's EXL3 repos publish each bits-per-weight as a SEPARATE GIT BRANCH (`4.0bpw`, `6.0bpw`, `8.0bpw_H8`, etc.) rather than separate repos. The `main` branch typically holds only README.md — no model weights. The current LMForge resolver does NOT yet support per-revision pulls from a catalog shortcut. Until that lands (tracked: M4-followup-catalog-revisions), this catalog is intentionally empty. To use TabbyAPI today: ---",
+
+    "_comment_manual_pull": "---  1) lmforge engine install tabbyapi  ---",
+    "_comment_manual_pull2": "---  2) huggingface-cli download turboderp/Qwen3-8B-exl3 --revision 6.0bpw --local-dir ~/.lmforge/models/Qwen3-8B-exl3-6bpw  ---",
+    "_comment_manual_pull3": "---  3) lmforge start --engine tabbyapi --model Qwen3-8B-exl3-6bpw  ---",
+
+    "_comment_recommended": "--- Recommended ungated EXL3 model repos (browse for branches you want):  turboderp/Qwen3-8B-exl3 · turboderp/Qwen3-32B-exl3 · turboderp/Llama-3.1-8B-Instruct-exl3 · turboderp/Mistral-Small-3.1-24B-Instruct-2503-exl3 · turboderp/gemma-3-27b-it-exl3 · turboderp/Qwen3-30B-A3B-exl3. Sweet-spot bpw: 6.0bpw for chat (matches GPTQ-int8 perplexity at ~75% the VRAM); 4.0bpw for tight VRAM. ---"
+}

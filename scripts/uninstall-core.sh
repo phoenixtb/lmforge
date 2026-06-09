@@ -100,12 +100,14 @@ sleep 1
 pkill -9 -x "$BINARY_NAME" 2>/dev/null || true
 info "No lmforge processes running"
 
-# ── 5. Remove binary from every known install location ───────────────────────
+# ── 5. Remove binary (or symlink) from every known install location ──────────
 section "Removing binary..."
 FOUND=false
 for dir in "${INSTALL_DIRS[@]}"; do
     bin="$dir/$BINARY_NAME"
-    if [[ -f "$bin" ]]; then
+    # `-f` follows the symlink; `-e || -L` covers both regular files and
+    # symlinks (including dangling ones left over from earlier installs).
+    if [[ -e "$bin" || -L "$bin" ]]; then
         rm -f "$bin"
         info "Removed $bin"
         FOUND=true
@@ -116,11 +118,20 @@ $FOUND || warn "lmforge binary not found in standard locations (may already be r
 # ── 6. Remove PATH injection lines from shell profiles ───────────────────────
 section "Cleaning up PATH entries..."
 for profile in "${HOME}/.zshrc" "${HOME}/.bashrc" "${HOME}/.profile"; do
-    if [[ -f "$profile" ]] && grep -qE "# LMForge|lmforge" "$profile"; then
-        # Remove the blank line, "# LMForge" comment, and the export PATH line we added.
-        sed -i.bak -e '/^# LMForge$/{ N; d; }' \
-                   -e '/\.local\/bin.*PATH/d' \
-                   -e '/lmforge.*PATH/d' "$profile" 2>/dev/null || true
+    [[ -f "$profile" ]] || continue
+    if grep -qE "^# >>> LMForge >>>$|^# LMForge$" "$profile"; then
+        # Remove ONLY the block we added:
+        #   • the sentinel-wrapped block  "# >>> LMForge >>>" … "# <<< LMForge <<<"
+        #   • the legacy two-line block    "# LMForge" + the following export line
+        # Crucially we must NOT delete arbitrary lines that merely mention
+        # ".local/bin" or "PATH": the stock ~/.profile contains
+        #   if [ -d "$HOME/.local/bin" ] ; then
+        #       PATH="$HOME/.local/bin:$PATH"
+        #   fi
+        # and nuking that inner line left an empty if/fi body → login shells
+        # broke with: syntax error near unexpected token `fi'.
+        sed -i.bak -e '/^# >>> LMForge >>>$/,/^# <<< LMForge <<<$/d' \
+                   -e '/^# LMForge$/{ N; d; }' "$profile" 2>/dev/null || true
         rm -f "${profile}.bak"
         info "Cleaned PATH entry from $profile"
     fi

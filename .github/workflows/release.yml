@@ -12,6 +12,12 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   REPO: phoenixtb/lmforge
+  # Opt into Node 24 for JS-based actions (actions/checkout, cache,
+  # upload-artifact, download-artifact, setup-node). Node 20 is forced
+  # off the runners on 2026-06-02. Safe to set today — newer runtime is
+  # backward-compatible with the bundled action code.
+  # See: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
@@ -140,9 +146,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y \
             pkg-config libssl-dev \
-            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
             libappindicator3-dev librsvg2-dev \
             patchelf libxdo-dev
+          # libwebkit2gtk-4.1-dev was dropped in Ubuntu 26.04 in favour of
+          # libwebkitgtk-6.0-dev. Try the 4.1 package first (22.04 / 24.04);
+          # fall back to the 6.0 package (26.04+). Tauri 2.x supports both.
+          sudo apt-get install -y libwebkit2gtk-4.1-dev \
+            || sudo apt-get install -y libwebkitgtk-6.0-dev
 
       # WebView2 is pre-installed on windows-2022; nothing extra needed.
 
@@ -237,6 +248,11 @@ jobs:
             curl -fsSL https://github.com/${{ env.REPO }}/releases/latest/download/install-core.sh | bash
             ```
 
+            ### Core on Windows (PowerShell)
+            ```powershell
+            irm https://github.com/${{ env.REPO }}/releases/latest/download/install.ps1 | iex
+            ```
+
             ### UI (desktop app) — install Core first
             ```bash
             curl -fsSL https://github.com/${{ env.REPO }}/releases/latest/download/install-ui.sh | bash
@@ -259,3 +275,4 @@ jobs:
             scripts/uninstall-core.sh
             scripts/install-ui.sh
             scripts/uninstall-ui.sh
+            install.ps1

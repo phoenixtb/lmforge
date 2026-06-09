@@ -2,50 +2,100 @@ use std::collections::HashMap;
 use std::path::Path;
 use tracing::debug;
 
+// ── Catalog value shape ───────────────────────────────────────────────────────
+
+/// A raw catalog value as it appears in the JSON file.
+///
+/// Backward-compatible: most entries are still plain strings
+/// (`"qwen3:8b:4bit": "unsloth/Qwen3-8B-GGUF"`). The object form carries
+/// extra hints like `mtp` that the resolver propagates into
+/// `ResolvedModel` so the launch path can flip on speculative decoding
+/// without re-probing the file.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(untagged)]
+enum CatalogValue {
+    /// Plain repo string — the historical shape.
+    Repo(String),
+    /// Structured entry with optional engine hints.
+    Object(CatalogObject),
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct CatalogObject {
+    repo: String,
+    #[serde(default)]
+    mtp: Option<bool>,
+}
+
+impl CatalogValue {
+    fn repo(&self) -> &str {
+        match self {
+            Self::Repo(r) => r,
+            Self::Object(o) => &o.repo,
+        }
+    }
+
+    fn mtp(&self) -> Option<bool> {
+        match self {
+            Self::Repo(_) => None,
+            Self::Object(o) => o.mtp,
+        }
+    }
+}
+
 /// The bundled default MLX catalog — embedded at compile time.
 /// This is the authoritative fallback used when no runtime catalog file exists.
 /// This means `lmforge pull <shortcut>` works on a fresh install without running `lmforge init` first.
 pub const BUNDLED_MLX: &str = include_str!("../../../data/catalogs/mlx.json");
 
-/// The bundled default GGUF catalog — embedded at compile time.
-pub const BUNDLED_GGUF: &str = include_str!("../../../data/catalogs/gguf.json");
-
 /// The bundled default safetensors catalog — used by SGLang on Linux + NVIDIA.
 /// Same `{ shortcut: "org/repo" }` shape as the MLX catalog.
 pub const BUNDLED_SAFETENSORS: &str = include_str!("../../../data/catalogs/safetensors.json");
 
-// ── GGUF raw catalog types ────────────────────────────────────────────────────
+/// The bundled default GGUF catalog — used by llama.cpp on every platform
+/// (Windows / CPU-only Linux / low-VRAM GPUs / macOS). Same `{ shortcut: "org/repo" }`
+/// shape; the resolver auto-picks the right `.gguf` file from the `:NNbit` quant
+/// suffix (see `gguf_patterns_for_quant` + `select_gguf_files` in resolver.rs).
+pub const BUNDLED_GGUF: &str = include_str!("../../../data/catalogs/gguf.json");
 
-/// A single GGUF catalog entry: repo + exact filename to download.
-/// `mmproj` is the multimodal projector file for VLMs (llama.cpp `--mmproj`);
-/// optional and absent for non-vision models.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-pub struct GgufEntry {
-    pub repo: String,
-    pub file: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mmproj: Option<String>,
-}
-
-/// Untagged serde type so we can handle both model entries (`{repo, file}`)
-/// and comment entries (plain strings like `"--- Chat models ---"`).
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(untagged)]
-enum RawGgufValue {
-    Entry(GgufEntry),
-    #[allow(dead_code)]
-    Comment(String),
-}
+/// The bundled default EXL3 catalog — used by TabbyAPI/ExLlamaV3 (opt-in).
+/// Currently a documentation-only stub; entries deferred to a follow-up that
+/// teaches the resolver to honour per-bpw branches.
+pub const BUNDLED_EXL3: &str = include_str!("../../../data/catalogs/exl3.json");
 
 // ── Public result type returned to the resolver ───────────────────────────────
 
 /// The result of resolving a catalog shortcut.
+///
+/// All three supported catalogs (MLX, safetensors, GGUF) share the same shape:
+/// `{ shortcut: "org/repo" }`. The downloader then pulls the format-matching
+/// files; for GGUF repos with multiple quants, the resolver further narrows
+/// the selection via the `:NNbit` suffix in the shortcut (see
+/// `gguf_patterns_for_quant` + `select_gguf_files` in `model::resolver`).
+///
+/// The optional `mtp` flag is carried through from the catalog so the
+/// launch path can enable speculative decoding without re-probing the
+/// downloaded GGUF (see `src/model/gguf_inspect.rs`).
 #[derive(Debug, Clone)]
 pub enum CatalogResult {
-    /// MLX: download all files from this HuggingFace repo.
-    AllFiles(String),
-    /// GGUF: download exactly this one file from this HuggingFace repo.
-    SingleFile(GgufEntry),
+    /// Download all format-matching files from this HuggingFace repo.
+    AllFiles { repo: String, mtp: Option<bool> },
+}
+
+impl CatalogResult {
+    /// Repository identifier (e.g. `"unsloth/Qwen3-8B-GGUF"`).
+    pub fn repo(&self) -> &str {
+        match self {
+            Self::AllFiles { repo, .. } => repo,
+        }
+    }
+
+    /// Catalog-declared MTP flag, if any.
+    pub fn mtp(&self) -> Option<bool> {
+        match self {
+            Self::AllFiles { mtp, .. } => *mtp,
+        }
+    }
 }
 
 // ── Resolution API ────────────────────────────────────────────────────────────
@@ -56,6 +106,9 @@ pub enum CatalogResult {
 /// Resolution order:
 /// 1. Runtime file at `catalogs_dir/{format}.json` (allows user overrides)
 /// 2. Bundled catalog embedded in the binary at compile time
+///
+/// Engine formats without a bundled catalog return `None`; the resolver then
+/// bails with an "unknown model" error unless the user provided a direct HF repo.
 pub async fn load_catalog_and_resolve(
     name: &str,
     format: &str,
@@ -88,17 +141,14 @@ fn resolve_from_content(
     format_str: &str,
 ) -> Option<CatalogResult> {
     match format_str {
-        // mlx and safetensors share the same `{ shortcut: "org/repo" }` shape.
-        "mlx" | "safetensors" => {
-            let map: HashMap<String, String> = serde_json::from_str(content).ok()?;
-            map.get(normalized).cloned().map(CatalogResult::AllFiles)
-        }
-        "gguf" => {
-            let map: HashMap<String, RawGgufValue> = serde_json::from_str(content).ok()?;
-            match map.get(normalized)? {
-                RawGgufValue::Entry(e) => Some(CatalogResult::SingleFile(e.clone())),
-                RawGgufValue::Comment(_) => None,
-            }
+        // All three catalogs share the same `{ shortcut: <CatalogValue> }` shape.
+        // CatalogValue is either a bare repo string or an object with optional hints.
+        "mlx" | "safetensors" | "gguf" => {
+            let map: HashMap<String, CatalogValue> = serde_json::from_str(content).ok()?;
+            map.get(normalized).map(|v| CatalogResult::AllFiles {
+                repo: v.repo().to_string(),
+                mtp: v.mtp(),
+            })
         }
         _ => None,
     }
@@ -108,8 +158,8 @@ fn resolve_from_content(
 pub fn resolve_from_bundled(normalized: &str, format_str: &str) -> Option<CatalogResult> {
     let content = match format_str {
         "mlx" => BUNDLED_MLX,
-        "gguf" => BUNDLED_GGUF,
         "safetensors" => BUNDLED_SAFETENSORS,
+        "gguf" => BUNDLED_GGUF,
         _ => return None,
     };
     resolve_from_content(content, normalized, format_str)
@@ -123,23 +173,93 @@ pub fn bundled_shortcuts(format_str: &str) -> Vec<String> {
     let format_lower = format_str.to_lowercase();
     let content = match format_lower.as_str() {
         "mlx" => BUNDLED_MLX,
-        "gguf" => BUNDLED_GGUF,
         "safetensors" => BUNDLED_SAFETENSORS,
+        "gguf" => BUNDLED_GGUF,
         _ => return vec![],
     };
 
-    let keys: Vec<String> = match format_lower.as_str() {
-        "mlx" | "safetensors" => serde_json::from_str::<HashMap<String, String>>(content)
-            .map(|m| m.into_keys().collect())
-            .unwrap_or_default(),
-        _ => serde_json::from_str::<HashMap<String, RawGgufValue>>(content)
-            .map(|m| m.into_keys().collect())
-            .unwrap_or_default(),
-    };
+    let keys: Vec<String> = serde_json::from_str::<HashMap<String, CatalogValue>>(content)
+        .map(|m| m.into_keys().collect())
+        .unwrap_or_default();
 
     let mut filtered: Vec<String> = keys.into_iter().filter(|k| !k.starts_with('_')).collect();
     filtered.sort();
     filtered
+}
+
+// ── Engine-format detection (shared between pull / run / catalog / init) ─────
+
+/// Decide which catalog format (`"mlx" | "safetensors" | "gguf"`) the
+/// caller should resolve against on this host.
+///
+/// Resolution order (fail-soft at every step):
+///   1. Read `<data_dir>/hardware.json` and try the registry's `select()`.
+///      Returns `selected.model_format` — the engine that *would* be picked
+///      for the current hardware, including the Phase-1 tier filter that
+///      keeps SGLang out of consumer Blackwell's default path.
+///   2. Fall back to a kernel-level heuristic: `gpu_vendor == "apple"` ⇒ MLX.
+///   3. Final fallback: GGUF — the universal catalog used by llama.cpp,
+///      which is now the default engine on every NVIDIA / AMD / CPU host.
+///
+/// We deliberately default to GGUF (not safetensors) because the post-Phase-1
+/// selector picks `llamacpp` on every non-Apple host until the user opts into
+/// `vllm` or `exl3`. Pulling safetensors weights on those hosts would leave the
+/// model unloadable by the active engine — the exact mismatch the catalog
+/// flip is designed to prevent.
+pub fn detect_engine_format(data_dir: &std::path::Path) -> String {
+    // 1. Registry-aware path (preferred).
+    let hw_path = data_dir.join("hardware.json");
+    if let Ok(json) = std::fs::read_to_string(&hw_path)
+        && let Ok(profile) = serde_json::from_str::<crate::hardware::probe::HardwareProfile>(&json)
+    {
+        let user_override = data_dir.join("engines.toml");
+        let override_path = if user_override.exists() {
+            Some(user_override.as_path())
+        } else {
+            None
+        };
+        if let Ok(registry) = crate::engine::registry::EngineRegistry::load(override_path)
+            && let Ok(selected) = registry.select(&profile)
+        {
+            return selected.model_format.clone();
+        }
+
+        // Registry load failed — fall back to gpu-vendor heuristic on the same profile.
+        return format_for_gpu_vendor(profile.gpu_vendor);
+    }
+
+    // 2. hardware.json missing OR malformed — try raw JSON for the vendor field
+    //    (handles hand-rolled or older-schema files).
+    if let Ok(json) = std::fs::read_to_string(&hw_path)
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(&json)
+        && let Some(vendor_str) = v["gpu_vendor"].as_str()
+    {
+        let vendor = match vendor_str {
+            "apple" => crate::hardware::probe::GpuVendor::Apple,
+            "nvidia" => crate::hardware::probe::GpuVendor::Nvidia,
+            "amd" => crate::hardware::probe::GpuVendor::Amd,
+            "intel" => crate::hardware::probe::GpuVendor::Intel,
+            _ => crate::hardware::probe::GpuVendor::None,
+        };
+        return format_for_gpu_vendor(vendor);
+    }
+
+    // 3. No hardware info at all — GGUF works on every platform.
+    "gguf".to_string()
+}
+
+/// Pure function: GPU vendor → bundled catalog format. Used as a fallback
+/// when the engine registry can't be loaded.
+pub fn format_for_gpu_vendor(vendor: crate::hardware::probe::GpuVendor) -> String {
+    use crate::hardware::probe::GpuVendor;
+    match vendor {
+        GpuVendor::Apple => "mlx".to_string(),
+        // Everything else lands on llama.cpp by default → GGUF catalog.
+        // Intel iGPUs included; they run llama.cpp via Vulkan, same as AMD.
+        GpuVendor::Nvidia | GpuVendor::Amd | GpuVendor::Intel | GpuVendor::None => {
+            "gguf".to_string()
+        }
+    }
 }
 
 // ── UI catalog listing ────────────────────────────────────────────────────────
@@ -151,7 +271,7 @@ pub struct CatalogEntry {
     pub shortcut: String,
     /// The resolved HuggingFace repo, e.g. `"mlx-community/Qwen3-8B-4bit"`.
     pub hf_repo: String,
-    /// Engine format: `"mlx"` or `"gguf"`.
+    /// Engine format: `"mlx"`, `"safetensors"`, or `"gguf"`.
     pub format: String,
     /// Tags derived by splitting the shortcut on `':'`, e.g. `["qwen3","8b","4bit"]`.
     pub tags: Vec<String>,
@@ -160,75 +280,68 @@ pub struct CatalogEntry {
 }
 
 /// Return all catalog entries for the requested format(s).
-/// Pass an empty string to get entries from both `mlx` and `gguf` catalogs.
+/// Pass an empty string to get entries from every bundled catalog.
+/// Any unknown format returns an empty vec — fail-closed rather than silently
+/// returning unrelated catalogs.
 /// `_comment_*` keys and entries without a '/' in the value are silently skipped.
 /// Results are sorted by shortcut name.
 pub fn list_for_ui(format: &str) -> Vec<CatalogEntry> {
+    list_for_ui_from_dir(format, None)
+}
+
+/// Like [`list_for_ui`] but, when `catalogs_dir` is `Some`, prefers the user's
+/// runtime catalog files (`{catalogs_dir}/{fmt}.json`) over the bundled copy
+/// for each format, falling back to bundled when a file is missing or unreadable.
+/// This keeps the UI "Recommended" tab in sync with a customised `catalogs_dir`.
+pub fn list_for_ui_from_dir(
+    format: &str,
+    catalogs_dir: Option<&std::path::Path>,
+) -> Vec<CatalogEntry> {
     let formats: &[(&str, &str)] = match format.to_lowercase().as_str() {
         "mlx" => &[("mlx", BUNDLED_MLX)],
-        "gguf" => &[("gguf", BUNDLED_GGUF)],
         "safetensors" => &[("safetensors", BUNDLED_SAFETENSORS)],
-        _ => &[
+        "gguf" => &[("gguf", BUNDLED_GGUF)],
+        "" => &[
             ("mlx", BUNDLED_MLX),
-            ("gguf", BUNDLED_GGUF),
             ("safetensors", BUNDLED_SAFETENSORS),
+            ("gguf", BUNDLED_GGUF),
         ],
+        _ => &[],
     };
 
     let mut entries: Vec<CatalogEntry> = Vec::new();
 
-    for &(fmt, content) in formats {
-        match fmt {
-            "mlx" | "safetensors" => {
-                let map: HashMap<String, String> = match serde_json::from_str(content) {
-                    Ok(m) => m,
-                    Err(_) => continue,
-                };
-                for (shortcut, hf_repo) in map {
-                    if shortcut.starts_with('_') {
-                        continue;
-                    }
-                    if !hf_repo.contains('/') {
-                        continue;
-                    }
-                    let tags = shortcut.split(':').map(str::to_string).collect();
-                    let role = infer_role(&shortcut, &hf_repo);
-                    entries.push(CatalogEntry {
-                        shortcut,
-                        hf_repo,
-                        format: fmt.to_string(),
-                        tags,
-                        role,
-                    });
-                }
+    for &(fmt, bundled) in formats {
+        // Prefer the on-disk catalog for this format when a catalogs_dir is set
+        // and the file parses; otherwise use the compiled-in bundled catalog.
+        let runtime = catalogs_dir.and_then(|dir| {
+            let path = dir.join(format!("{fmt}.json"));
+            std::fs::read_to_string(&path)
+                .ok()
+                .filter(|c| serde_json::from_str::<HashMap<String, CatalogValue>>(c).is_ok())
+        });
+        let content: &str = runtime.as_deref().unwrap_or(bundled);
+        let map: HashMap<String, CatalogValue> = match serde_json::from_str(content) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        for (shortcut, value) in map {
+            if shortcut.starts_with('_') {
+                continue;
             }
-            "gguf" => {
-                let map: HashMap<String, RawGgufValue> = match serde_json::from_str(content) {
-                    Ok(m) => m,
-                    Err(_) => continue,
-                };
-                for (shortcut, raw) in map {
-                    if shortcut.starts_with('_') {
-                        continue;
-                    }
-                    let RawGgufValue::Entry(entry) = raw else {
-                        continue;
-                    };
-                    if !entry.repo.contains('/') {
-                        continue;
-                    }
-                    let tags = shortcut.split(':').map(str::to_string).collect();
-                    let role = infer_role(&shortcut, &entry.repo);
-                    entries.push(CatalogEntry {
-                        shortcut,
-                        hf_repo: entry.repo,
-                        format: fmt.to_string(),
-                        tags,
-                        role,
-                    });
-                }
+            let hf_repo = value.repo().to_string();
+            if !hf_repo.contains('/') {
+                continue;
             }
-            _ => {}
+            let tags = shortcut.split(':').map(str::to_string).collect();
+            let role = infer_role(&shortcut, &hf_repo);
+            entries.push(CatalogEntry {
+                shortcut,
+                hf_repo,
+                format: fmt.to_string(),
+                tags,
+                role,
+            });
         }
     }
 
@@ -273,18 +386,8 @@ mod tests {
     // ── JSON validity ─────────────────────────────────────────────────────────
 
     #[test]
-    fn test_bundled_gguf_catalog_is_valid_json() {
-        let result: Result<HashMap<String, RawGgufValue>, _> = serde_json::from_str(BUNDLED_GGUF);
-        assert!(
-            result.is_ok(),
-            "GGUF catalog is not valid JSON: {:?}",
-            result.err()
-        );
-    }
-
-    #[test]
     fn test_bundled_mlx_catalog_is_valid_json() {
-        let result: Result<HashMap<String, String>, _> = serde_json::from_str(BUNDLED_MLX);
+        let result: Result<HashMap<String, CatalogValue>, _> = serde_json::from_str(BUNDLED_MLX);
         assert!(
             result.is_ok(),
             "MLX catalog is not valid JSON: {:?}",
@@ -293,59 +396,31 @@ mod tests {
     }
 
     #[test]
-    fn test_gguf_all_entries_have_repo_and_file() {
-        let map: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
-        for (key, val) in &map {
-            if key.starts_with('_') {
-                continue;
-            }
-            match val {
-                RawGgufValue::Entry(e) => {
-                    assert!(
-                        e.repo.contains('/'),
-                        "GGUF entry '{}' has invalid repo: '{}'",
-                        key,
-                        e.repo
-                    );
-                    assert!(
-                        e.file.ends_with(".gguf"),
-                        "GGUF entry '{}' file must end in .gguf: '{}'",
-                        key,
-                        e.file
-                    );
-                }
-                RawGgufValue::Comment(_) => {
-                    panic!(
-                        "Non-comment key '{}' has a string value — must be {{repo, file}} object",
-                        key
-                    );
-                }
-            }
-        }
+    fn test_bundled_safetensors_catalog_is_valid_json() {
+        let result: Result<HashMap<String, CatalogValue>, _> =
+            serde_json::from_str(BUNDLED_SAFETENSORS);
+        assert!(
+            result.is_ok(),
+            "safetensors catalog is not valid JSON: {:?}",
+            result.err()
+        );
     }
-
-    // ── Three critical shortcuts must exist in both catalogs ──────────────────
 
     #[test]
-    fn test_primary_models_exist_in_gguf() {
-        let map: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
+    fn test_bundled_gguf_catalog_is_valid_json() {
+        let result: Result<HashMap<String, CatalogValue>, _> = serde_json::from_str(BUNDLED_GGUF);
         assert!(
-            map.contains_key("qwen3.5:4b:4bit"),
-            "GGUF missing LLM_MODEL"
-        );
-        assert!(
-            map.contains_key("qwen3.5:2b:4bit"),
-            "GGUF missing LLM_FALLBACK_MODEL"
-        );
-        assert!(
-            map.contains_key("qwen3-embed:0.6b:8bit"),
-            "GGUF missing primary embed (0.6B 8bit)"
+            result.is_ok(),
+            "GGUF catalog is not valid JSON: {:?}",
+            result.err()
         );
     }
+
+    // ── Critical shortcuts present ────────────────────────────────────────────
 
     #[test]
     fn test_primary_models_exist_in_mlx() {
-        let map: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
+        let map: HashMap<String, CatalogValue> = serde_json::from_str(BUNDLED_MLX).unwrap();
         assert!(map.contains_key("qwen3.5:4b:4bit"), "MLX missing LLM_MODEL");
         assert!(
             map.contains_key("qwen3.5:2b:4bit"),
@@ -357,58 +432,45 @@ mod tests {
         );
     }
 
-    // ── Cross-catalog key consistency ─────────────────────────────────────────
-
     #[test]
-    fn test_embed_keys_are_consistent_across_catalogs() {
-        let gguf: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
-        let mlx: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
-        // 4B and 8B embed models exist in both catalogs with matching :4bit keys
-        for key in &["qwen3-embed:4b:4bit", "qwen3-embed:8b:4bit"] {
-            assert!(gguf.contains_key(*key), "GGUF missing embed key: {}", key);
-            assert!(mlx.contains_key(*key), "MLX  missing embed key: {}", key);
-        }
-        // 0.6B embed: GGUF uses :8bit (Q8_0 is the small available quant)
+    fn test_primary_models_exist_in_safetensors() {
+        let map: HashMap<String, CatalogValue> = serde_json::from_str(BUNDLED_SAFETENSORS).unwrap();
+        // Chat: catalog is quantized-only — every inference shortcut carries
+        // a `:4bit` or `:8bit` suffix (no bare `qwen3:8b` aliases).
         assert!(
-            gguf.contains_key("qwen3-embed:0.6b:8bit"),
-            "GGUF must have 0.6B :8bit key"
+            map.contains_key("qwen3:8b:4bit"),
+            "safetensors missing qwen3:8b:4bit"
+        );
+        assert!(
+            map.contains_key("qwen3:8b:8bit"),
+            "safetensors missing qwen3:8b:8bit"
+        );
+        // Embeddings stay at native precision (small models, quality-sensitive).
+        assert!(
+            map.contains_key("qwen3-embed:0.6b"),
+            "safetensors missing 0.6B embed"
         );
     }
 
     #[test]
-    fn test_inference_keys_are_consistent_across_catalogs() {
-        let gguf: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
-        let mlx: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
-        for key in &[
-            "qwen3:1.7b:4bit",
-            "qwen3:4b:4bit",
-            "qwen3:8b:4bit",
-            "qwen3-coder:next:4bit",
-            "qwen3-coder:next:8bit",
-        ] {
-            assert!(gguf.contains_key(*key), "GGUF missing key: {}", key);
-            assert!(mlx.contains_key(*key), "MLX  missing key: {}", key);
-        }
+    fn test_safetensors_has_vlm_entries() {
+        let map: HashMap<String, CatalogValue> = serde_json::from_str(BUNDLED_SAFETENSORS).unwrap();
+        // VLMs are quantized-only too — `:4bit` maps to the official AWQ build.
+        assert_eq!(
+            map.get("qwen2.5-vl:3b:4bit").unwrap().repo(),
+            "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
+        );
+        assert_eq!(
+            map.get("qwen2.5-vl:7b:4bit").unwrap().repo(),
+            "Qwen/Qwen2.5-VL-7B-Instruct-AWQ"
+        );
     }
 
     // ── Renamed keys must NOT appear in the live catalogs ─────────────────────
 
     #[test]
-    fn test_no_legacy_q_suffix_in_gguf() {
-        let map: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
-        for key in map.keys() {
-            assert!(!key.ends_with(":q4"), "GGUF has legacy :q4 key: {}", key);
-            assert!(
-                !key.ends_with(":q8"),
-                "GGUF has legacy :q8 key (should be :8bit): {}",
-                key
-            );
-        }
-    }
-
-    #[test]
-    fn test_no_legacy_q4_suffix_in_catalogs() {
-        let mlx: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
+    fn test_no_legacy_q4_suffix_in_mlx() {
+        let mlx: HashMap<String, CatalogValue> = serde_json::from_str(BUNDLED_MLX).unwrap();
         for key in mlx.keys() {
             assert!(
                 !key.ends_with(":q4"),
@@ -418,77 +480,126 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_no_qwencode3_keys_in_live_catalogs() {
-        let gguf: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
-        let mlx: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
-        for (fmt, keys) in &[
-            ("gguf", gguf.keys().map(|s| s.as_str()).collect::<Vec<_>>()),
-            ("mlx", mlx.keys().map(|s| s.as_str()).collect::<Vec<_>>()),
-        ] {
-            for key in keys {
-                assert!(
-                    !key.starts_with("qwencode3"),
-                    "{} catalog still has legacy qwencode3 key: {}",
-                    fmt,
-                    key
-                );
-            }
-        }
-    }
+    // ── detect_engine_format (Phase 2.1 catalog priority flip) ────────────────
 
-    // ── Reranker catalog correctness ──────────────────────────────────────────
-
-    #[test]
-    fn test_gguf_has_reranker_models() {
-        let map: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
-        assert!(
-            map.contains_key("qwen3-reranker:0.6b:4bit"),
-            "missing 0.6B reranker"
-        );
-        assert!(
-            map.contains_key("qwen3-reranker:4b:4bit"),
-            "missing 4B reranker"
-        );
+    fn write_hw(dir: &std::path::Path, json: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("hardware.json"), json).unwrap();
     }
 
     #[test]
-    fn test_mlx_has_jina_reranker_only() {
-        let map: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
-        assert!(
-            map.contains_key("jina-reranker-v2:multilingual"),
-            "MLX catalog must contain Jina reranker (oMLX 0.3.6 JinaForRanking support)"
-        );
-        assert!(
-            !map.contains_key("qwen3-reranker:0.6b:4bit"),
-            "Generative decoder rerankers must NOT be in MLX catalog (oMLX doesn't support them)"
-        );
+    fn detect_format_consumer_blackwell_picks_gguf() {
+        // The P0 fix: an RTX 5060 Ti box (sm_120) must pull GGUF, not safetensors.
+        // Pre-Phase-1, the registry would have picked SGLang here and this
+        // returned "safetensors". Now llamacpp wins → "gguf".
+        let dir = std::env::temp_dir().join("lmforge_test_detect_blackwell");
+        let _ = std::fs::remove_dir_all(&dir);
+        let hw = r#"{
+            "os": "linux", "arch": "x86_64", "is_tegra": false,
+            "gpu_vendor": "nvidia", "vram_gb": 15.4, "unified_mem": false,
+            "total_ram_gb": 15.6, "cpu_cores": 6, "cpu_model": "i7",
+            "schema_version": 2,
+            "compute_cap": [12, 0],
+            "os_family": "linux",
+            "is_wsl": false,
+            "gpu_count": 1
+        }"#;
+        write_hw(&dir, hw);
+        assert_eq!(detect_engine_format(&dir), "gguf");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    // ── Small models for 4 GB VRAM / Q4_K_S tier ─────────────────────────────
+    #[test]
+    fn detect_format_apple_silicon_picks_mlx() {
+        let dir = std::env::temp_dir().join("lmforge_test_detect_apple");
+        let _ = std::fs::remove_dir_all(&dir);
+        let hw = r#"{
+            "os": "darwin", "arch": "aarch64", "is_tegra": false,
+            "gpu_vendor": "apple", "vram_gb": 36.0, "unified_mem": true,
+            "total_ram_gb": 48.0, "cpu_cores": 14, "cpu_model": "M3",
+            "schema_version": 2,
+            "os_family": "darwin",
+            "is_wsl": false,
+            "gpu_count": 0
+        }"#;
+        write_hw(&dir, hw);
+        assert_eq!(detect_engine_format(&dir), "mlx");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
-    fn test_small_models_for_constrained_hardware() {
-        let gguf: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
-        assert!(
-            gguf.contains_key("qwen3:1.7b:4bit"),
-            "Missing 1.7B model for 4GB VRAM tier"
-        );
-        assert!(
-            gguf.contains_key("qwen3:4b:4bit"),
-            "Missing 4B model for 4GB VRAM tier"
-        );
-        assert!(
-            gguf.contains_key("gemma3:1b:4bit"),
-            "Missing 1B model for minimal hardware"
-        );
+    fn detect_format_linux_cpu_picks_gguf() {
+        let dir = std::env::temp_dir().join("lmforge_test_detect_cpu");
+        let _ = std::fs::remove_dir_all(&dir);
+        let hw = r#"{
+            "os": "linux", "arch": "x86_64", "is_tegra": false,
+            "gpu_vendor": "none", "vram_gb": 0.0, "unified_mem": false,
+            "total_ram_gb": 16.0, "cpu_cores": 4, "cpu_model": "i5",
+            "schema_version": 2,
+            "os_family": "linux",
+            "is_wsl": false,
+            "gpu_count": 0
+        }"#;
+        write_hw(&dir, hw);
+        assert_eq!(detect_engine_format(&dir), "gguf");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn detect_format_hopper_picks_gguf_post_phase1() {
+        // Even a beefy H100 box doesn't auto-select SGLang anymore — it's
+        // experimental. llamacpp wins → GGUF catalog.
+        let dir = std::env::temp_dir().join("lmforge_test_detect_hopper");
+        let _ = std::fs::remove_dir_all(&dir);
+        let hw = r#"{
+            "os": "linux", "arch": "x86_64", "is_tegra": false,
+            "gpu_vendor": "nvidia", "vram_gb": 80.0, "unified_mem": false,
+            "total_ram_gb": 256.0, "cpu_cores": 64, "cpu_model": "EPYC",
+            "schema_version": 2,
+            "compute_cap": [9, 0],
+            "os_family": "linux",
+            "is_wsl": false,
+            "gpu_count": 1
+        }"#;
+        write_hw(&dir, hw);
+        assert_eq!(detect_engine_format(&dir), "gguf");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn detect_format_missing_hardware_json_falls_back_to_gguf() {
+        // Fresh box where `lmforge init` hasn't run yet. GGUF works on every
+        // platform, so it's the safest universal default.
+        let dir = std::env::temp_dir().join("lmforge_test_detect_no_hw");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(detect_engine_format(&dir), "gguf");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn detect_format_malformed_hardware_json_falls_back_to_gguf() {
+        let dir = std::env::temp_dir().join("lmforge_test_detect_malformed");
+        let _ = std::fs::remove_dir_all(&dir);
+        write_hw(&dir, "this is not json {{{");
+        assert_eq!(detect_engine_format(&dir), "gguf");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn format_for_gpu_vendor_matrix() {
+        use crate::hardware::probe::GpuVendor;
+        assert_eq!(format_for_gpu_vendor(GpuVendor::Apple), "mlx");
+        assert_eq!(format_for_gpu_vendor(GpuVendor::Nvidia), "gguf");
+        assert_eq!(format_for_gpu_vendor(GpuVendor::Amd), "gguf");
+        assert_eq!(format_for_gpu_vendor(GpuVendor::None), "gguf");
     }
 
     // ── bundled_shortcuts filters comment keys ────────────────────────────────
 
     #[test]
     fn test_bundled_shortcuts_excludes_comment_keys() {
-        for fmt in &["gguf", "mlx"] {
+        for fmt in &["mlx", "safetensors", "gguf"] {
             let shortcuts = bundled_shortcuts(fmt);
             for key in &shortcuts {
                 assert!(
@@ -503,10 +614,80 @@ mod tests {
                 "{} shortcuts should not be empty",
                 fmt
             );
+        }
+    }
+
+    #[test]
+    fn test_bundled_shortcuts_returns_empty_for_unknown_format() {
+        assert!(bundled_shortcuts("ollama").is_empty());
+        assert!(bundled_shortcuts("").is_empty());
+    }
+
+    // ── MLX catalog bit suffix validation ─────────────────────────────────────
+
+    /// User-facing quant markers allowed in mlx.json shortcut keys.
+    const MLX_QUANT_SUFFIXES: &[&str] = &["4bit", "5bit", "6bit", "8bit", "f16"];
+
+    fn mlx_shortcut_quant(shortcut: &str) -> Option<&str> {
+        shortcut.split(':').find(|p| MLX_QUANT_SUFFIXES.contains(p))
+    }
+
+    /// Returns `Some(reason)` when the shortcut quant does not match the repo name.
+    fn mlx_quant_mismatch(shortcut: &str, repo: &str) -> Option<&'static str> {
+        let quant = mlx_shortcut_quant(shortcut)?;
+        let r = repo.to_ascii_lowercase();
+        let has_4 = r.contains("4bit")
+            || r.contains("mxfp4")
+            || r.contains("optiq-4")
+            || r.contains("dwq")
+            || r.contains("nvfp4");
+        let has_5 = r.contains("5bit");
+        let has_6 = r.contains("6bit");
+        let has_8 = r.contains("8bit") || r.contains("mxfp8");
+        let has_f16 = r.contains("f16") || r.contains("fp16") || r.contains("bf16");
+
+        match quant {
+            "4bit" if r.contains("mxfp8") => Some("4bit shortcut points at mxfp8 (8-bit) repo"),
+            "4bit" if !has_4 => Some("4bit shortcut missing 4bit-class repo name"),
+            "5bit" if !has_5 => Some("5bit shortcut missing 5bit repo name"),
+            "6bit" if !has_6 => Some("6bit shortcut missing 6bit repo name"),
+            "8bit" if !has_8 => Some("8bit shortcut missing 8bit/mxfp8 repo name"),
+            "f16" if r.contains("mxfp8") => Some("f16 shortcut points at mxfp8 repo"),
+            "f16" if !has_f16 => Some("f16 shortcut missing f16/fp16/bf16 repo name"),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn bundled_mlx_quant_suffixes_match_repos() {
+        let map: HashMap<String, CatalogValue> = serde_json::from_str(BUNDLED_MLX).unwrap();
+        let mut repos: HashMap<String, Vec<String>> = HashMap::new();
+        for (shortcut, value) in &map {
+            if shortcut.starts_with('_') {
+                continue;
+            }
+            let repo = value.repo();
             assert!(
-                shortcuts.contains(&"qwen3.5:4b:4bit".to_string()),
-                "{} shortcuts missing qwen3.5:4b:4bit",
-                fmt
+                repo.starts_with("mlx-community/"),
+                "{shortcut} must use mlx-community, got {repo}"
+            );
+            assert!(
+                !shortcut.contains("mxfp8"),
+                "{shortcut}: use :8bit for mxfp8 repos, not :mxfp8 in the shortcut"
+            );
+            if let Some(reason) = mlx_quant_mismatch(shortcut, repo) {
+                panic!("{shortcut} → {repo}: {reason}");
+            }
+            repos
+                .entry(repo.to_string())
+                .or_default()
+                .push(shortcut.clone());
+        }
+        for (repo, shortcuts) in repos {
+            assert_eq!(
+                shortcuts.len(),
+                1,
+                "duplicate shortcuts for one repo {repo}: {shortcuts:?}"
             );
         }
     }
@@ -516,21 +697,11 @@ mod tests {
     #[test]
     fn test_infer_role_embed() {
         assert_eq!(
-            infer_role("qwen3-embed:0.6b:8bit", "Qwen/Qwen3-Embedding-0.6B-GGUF"),
+            infer_role("qwen3-embed:0.6b", "Qwen/Qwen3-Embedding-0.6B"),
             "embed"
         );
         assert_eq!(
-            infer_role(
-                "nomic-embed-text:v1.5",
-                "nomic-ai/nomic-embed-text-v1.5-GGUF"
-            ),
-            "embed"
-        );
-        assert_eq!(
-            infer_role(
-                "snowflake-arctic-embed-l:v2:4bit",
-                "mlx-community/snowflake-arctic-embed-l-v2.0-4bit"
-            ),
+            infer_role("nomic-embed-text:v1.5", "nomic-ai/nomic-embed-text-v1.5"),
             "embed"
         );
     }
@@ -545,229 +716,149 @@ mod tests {
             "rerank"
         );
         assert_eq!(
-            infer_role("qwen3-reranker:0.6b:4bit", "Qwen/Qwen3-Reranker-0.6B-GGUF"),
-            "rerank"
-        );
-        assert_eq!(
-            infer_role("bge-reranker-v2-m3:f16", "gpustack/bge-reranker-v2-m3-GGUF"),
+            infer_role("bge-reranker-v2-m3", "BAAI/bge-reranker-v2-m3"),
             "rerank"
         );
     }
 
     #[test]
     fn test_infer_role_chat() {
-        assert_eq!(
-            infer_role("qwen3.5:4b:4bit", "mradermacher/Qwen3.5-4B-GGUF"),
-            "chat"
-        );
-        assert_eq!(
-            infer_role(
-                "llama3.1:8b:4bit",
-                "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF"
-            ),
-            "chat"
-        );
-        assert_eq!(
-            infer_role("gemma3:4b:4bit", "bartowski/gemma-3-4b-it-GGUF"),
-            "chat"
-        );
+        assert_eq!(infer_role("qwen3:8b:4bit", "Qwen/Qwen3-8B-AWQ"), "chat");
+        assert_eq!(infer_role("gemma3:4b", "google/gemma-3-4b-it"), "chat");
     }
 
     #[test]
-    fn test_infer_role_code() {
+    fn test_infer_role_vision_qwen25_vl() {
         assert_eq!(
-            infer_role("qwen3-coder:next:4bit", "bartowski/Qwen3-Coder-Next-GGUF"),
-            "code"
-        );
-    }
-
-    #[test]
-    fn test_infer_role_vision_vl_embed() {
-        assert_eq!(
-            infer_role(
-                "qwen3-vl-embed:2b:4bit",
-                "mlx-community/Qwen3-VL-Embedding-2B-4bit"
-            ),
-            "vision"
-        );
-    }
-
-    #[test]
-    fn test_infer_role_vision_qwen25_vl_chat() {
-        // The new Qwen2.5-VL chat-style VLM shortcuts must classify as "vision".
-        assert_eq!(
-            infer_role(
-                "qwen2.5-vl:7b:4bit",
-                "bartowski/Qwen2.5-VL-7B-Instruct-GGUF"
-            ),
+            infer_role("qwen2.5-vl:7b", "Qwen/Qwen2.5-VL-7B-Instruct"),
             "vision"
         );
         assert_eq!(
-            infer_role(
-                "qwen2.5-vl:3b:4bit",
-                "mlx-community/Qwen2.5-VL-3B-Instruct-4bit"
-            ),
+            infer_role("qwen2.5-vl:3b:4bit", "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"),
             "vision"
-        );
-        assert_eq!(
-            infer_role("minicpm-v:2.6:4bit", "openbmb/MiniCPM-V-2_6"),
-            "vision"
-        );
-    }
-
-    // ── safetensors catalog ───────────────────────────────────────────────────
-
-    #[test]
-    fn test_bundled_safetensors_catalog_is_valid_json() {
-        let result: Result<HashMap<String, String>, _> = serde_json::from_str(BUNDLED_SAFETENSORS);
-        assert!(
-            result.is_ok(),
-            "safetensors catalog is not valid JSON: {:?}",
-            result.err()
-        );
-    }
-
-    #[test]
-    fn test_safetensors_has_vlm_entries() {
-        let map: HashMap<String, String> = serde_json::from_str(BUNDLED_SAFETENSORS).unwrap();
-        assert_eq!(
-            map.get("qwen2.5-vl:3b").unwrap(),
-            "Qwen/Qwen2.5-VL-3B-Instruct"
-        );
-        assert_eq!(
-            map.get("qwen2.5-vl:7b").unwrap(),
-            "Qwen/Qwen2.5-VL-7B-Instruct"
-        );
-    }
-
-    #[test]
-    fn test_resolve_from_bundled_safetensors() {
-        let r = resolve_from_bundled("qwen2.5-vl:7b", "safetensors").unwrap();
-        let CatalogResult::AllFiles(repo) = r else {
-            panic!("expected AllFiles for safetensors");
-        };
-        assert_eq!(repo, "Qwen/Qwen2.5-VL-7B-Instruct");
-    }
-
-    #[test]
-    fn test_safetensors_shortcuts_listed() {
-        let s = bundled_shortcuts("safetensors");
-        assert!(s.contains(&"qwen2.5-vl:7b".to_string()));
-        assert!(s.iter().all(|k| !k.starts_with('_')));
-    }
-
-    // ── VLM mmproj field ──────────────────────────────────────────────────────
-
-    #[test]
-    fn test_gguf_vlm_entries_have_mmproj() {
-        let map: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
-        for key in &["qwen2.5-vl:3b:4bit", "qwen2.5-vl:7b:4bit"] {
-            let val = map.get(*key).unwrap_or_else(|| panic!("missing {key}"));
-            let RawGgufValue::Entry(entry) = val else {
-                panic!("{key} is a comment, not an entry");
-            };
-            assert!(
-                entry.mmproj.is_some(),
-                "{key} VLM entry must have mmproj field"
-            );
-            let mmproj = entry.mmproj.as_ref().unwrap();
-            assert!(
-                mmproj.starts_with("mmproj-") && mmproj.ends_with(".gguf"),
-                "{key} mmproj filename has unexpected shape: {mmproj}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_gguf_non_vlm_entries_have_no_mmproj() {
-        let map: HashMap<String, RawGgufValue> = serde_json::from_str(BUNDLED_GGUF).unwrap();
-        for key in &["qwen3:8b:4bit", "qwen3-embed:0.6b:8bit"] {
-            let RawGgufValue::Entry(entry) = map.get(*key).unwrap() else {
-                panic!()
-            };
-            assert!(
-                entry.mmproj.is_none(),
-                "{key} non-VLM entry must not have mmproj"
-            );
-        }
-    }
-
-    #[test]
-    fn test_resolve_qwen25_vl_gguf_carries_mmproj() {
-        let r = resolve_from_bundled("qwen2.5-vl:7b:4bit", "gguf").unwrap();
-        let CatalogResult::SingleFile(e) = r else {
-            panic!("expected SingleFile")
-        };
-        assert_eq!(e.repo, "bartowski/Qwen2.5-VL-7B-Instruct-GGUF");
-        assert_eq!(e.file, "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf");
-        assert_eq!(
-            e.mmproj.as_deref(),
-            Some("mmproj-Qwen2.5-VL-7B-Instruct-f16.gguf")
-        );
-    }
-
-    #[test]
-    fn test_mlx_has_vlm_entries() {
-        let map: HashMap<String, String> = serde_json::from_str(BUNDLED_MLX).unwrap();
-        assert_eq!(
-            map.get("qwen2.5-vl:3b:4bit").unwrap(),
-            "mlx-community/Qwen2.5-VL-3B-Instruct-4bit"
-        );
-        assert_eq!(
-            map.get("qwen2.5-vl:7b:4bit").unwrap(),
-            "mlx-community/Qwen2.5-VL-7B-Instruct-4bit"
         );
     }
 
     // ── resolve_from_bundled ──────────────────────────────────────────────────
 
     #[test]
-    fn test_resolve_from_bundled_gguf_finds_primary_models() {
-        let r = resolve_from_bundled("qwen3.5:4b:4bit", "gguf").unwrap();
-        let CatalogResult::SingleFile(e) = r else {
-            panic!("expected SingleFile")
-        };
-        assert_eq!(e.repo, "mradermacher/Qwen3.5-4B-GGUF");
-        assert_eq!(e.file, "Qwen3.5-4B.Q4_K_S.gguf");
-
-        let r2 = resolve_from_bundled("qwen3-embed:0.6b:8bit", "gguf").unwrap();
-        let CatalogResult::SingleFile(e2) = r2 else {
-            panic!("expected SingleFile")
-        };
-        assert_eq!(e2.repo, "Qwen/Qwen3-Embedding-0.6B-GGUF");
-        assert_eq!(e2.file, "Qwen3-Embedding-0.6B-Q8_0.gguf");
+    fn test_resolve_from_bundled_safetensors() {
+        let r = resolve_from_bundled("qwen2.5-vl:7b:4bit", "safetensors").unwrap();
+        assert_eq!(r.repo(), "Qwen/Qwen2.5-VL-7B-Instruct-AWQ");
+        assert_eq!(r.mtp(), None);
     }
 
     #[test]
-    fn test_resolve_from_bundled_mlx_finds_primary_models() {
+    fn test_resolve_from_bundled_mlx() {
         let r = resolve_from_bundled("qwen3.5:4b:4bit", "mlx").unwrap();
-        let CatalogResult::AllFiles(repo) = r else {
-            panic!("expected AllFiles")
-        };
-        assert_eq!(repo, "mlx-community/Qwen3.5-4B-4bit");
+        assert_eq!(r.repo(), "mlx-community/Qwen3.5-4B-4bit");
+        assert_eq!(r.mtp(), None);
+    }
 
-        let r2 = resolve_from_bundled("jina-reranker-v2:multilingual", "mlx").unwrap();
-        let CatalogResult::AllFiles(repo2) = r2 else {
-            panic!("expected AllFiles")
-        };
-        assert_eq!(repo2, "jinaai/jina-reranker-v2-base-multilingual");
+    #[test]
+    fn test_resolve_from_bundled_gguf() {
+        // GGUF catalog restored — same shape as MLX/safetensors. Resolver
+        // picks the right .gguf file from the :NNbit suffix downstream.
+        let r = resolve_from_bundled("qwen3.5:4b:4bit", "gguf").unwrap();
+        assert_eq!(r.repo(), "unsloth/Qwen3.5-4B-GGUF");
+
+        let r = resolve_from_bundled("qwen3.5:4b:6bit", "gguf").unwrap();
+        assert_eq!(r.repo(), "unsloth/Qwen3.5-4B-GGUF");
+
+        let r = resolve_from_bundled("qwen3-embed:0.6b:f16", "gguf").unwrap();
+        assert_eq!(r.repo(), "Qwen/Qwen3-Embedding-0.6B-GGUF");
+    }
+
+    #[test]
+    fn catalog_value_accepts_both_string_and_object_shapes() {
+        // Sanity: the new untagged enum still parses the legacy plain-string
+        // shape so all the bundled catalogs (which are still mostly strings)
+        // continue to deserialize without changes.
+        let json = r#"{
+            "old": "foo/bar",
+            "new":   { "repo": "foo/baz", "mtp": true },
+            "noflag": { "repo": "foo/qux" }
+        }"#;
+        let parsed: HashMap<String, CatalogValue> = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed["old"].repo(), "foo/bar");
+        assert_eq!(parsed["old"].mtp(), None);
+        assert_eq!(parsed["new"].repo(), "foo/baz");
+        assert_eq!(parsed["new"].mtp(), Some(true));
+        assert_eq!(parsed["noflag"].repo(), "foo/qux");
+        assert_eq!(parsed["noflag"].mtp(), None);
+    }
+
+    #[test]
+    fn bundled_gguf_qwen3_family_relies_on_probe_not_catalog_for_mtp() {
+        // S-2 live-test finding (2026-05-29): catalog hand-tagging
+        // `mtp:true` for Qwen3.5 / Qwen3-Coder-Next was misleading — the
+        // actual GGUF shards (Unsloth Q*_K_XL family) ship with zero
+        // nextn/mtp tensors, so trusting the catalog crashed every spawn
+        // with `model doesn't contain MTP layers`. Truth-source flipped:
+        // catalog stays editorial, the gguf_inspect probe is authoritative
+        // at pull time. These shortcuts must therefore carry `None` — the
+        // probe fills it in (positive or negative) when weights land.
+        for shortcut in &[
+            "qwen3-coder:next:4bit",
+            "qwen3-coder:next:6bit",
+            "qwen3-coder:next:8bit",
+            "qwen3.5:4b:4bit",
+            "qwen3.5:9b:4bit",
+            "qwen3.5:27b:8bit",
+        ] {
+            let r = resolve_from_bundled(shortcut, "gguf")
+                .unwrap_or_else(|| panic!("missing gguf shortcut {shortcut}"));
+            assert_eq!(
+                r.mtp(),
+                None,
+                "{shortcut} must rely on probe, not catalog tag (S-2 live finding)"
+            );
+        }
+    }
+
+    #[test]
+    fn bundled_gguf_legacy_string_entries_have_no_mtp() {
+        // Sanity: plain-Qwen3 entries (no MTP architecture) must NOT inherit
+        // an mtp flag from the catalog. They will fall through to the
+        // gguf_inspect probe at pull time, which should report `Some(false)`.
+        let r = resolve_from_bundled("qwen3:8b:4bit", "gguf").unwrap();
+        assert_eq!(r.mtp(), None);
+        let r = resolve_from_bundled("llama3.1:8b:4bit", "gguf").unwrap();
+        assert_eq!(r.mtp(), None);
+    }
+
+    #[test]
+    fn resolve_from_content_preserves_mtp_flag() {
+        let json = r#"{
+            "qwen-test:4bit": { "repo": "unsloth/Qwen3-Coder-Next-GGUF", "mtp": true },
+            "plain:4bit": "unsloth/Qwen3-4B-GGUF"
+        }"#;
+        let r1 = resolve_from_content(json, "qwen-test:4bit", "gguf").unwrap();
+        assert_eq!(r1.repo(), "unsloth/Qwen3-Coder-Next-GGUF");
+        assert_eq!(r1.mtp(), Some(true));
+
+        let r2 = resolve_from_content(json, "plain:4bit", "gguf").unwrap();
+        assert_eq!(r2.repo(), "unsloth/Qwen3-4B-GGUF");
+        assert_eq!(r2.mtp(), None);
+    }
+
+    #[test]
+    fn test_resolve_from_bundled_unknown_format_returns_none() {
+        assert!(resolve_from_bundled("qwen3.5:4b:4bit", "ollama").is_none());
+        assert!(resolve_from_bundled("qwen3.5:4b:4bit", "").is_none());
     }
 
     #[test]
     fn test_resolve_from_bundled_missing_key_returns_none() {
-        assert!(
-            resolve_from_bundled("qwen3-embed:0.6b:q8", "gguf").is_none(),
-            "old :q8 key must not resolve (renamed to :8bit)"
-        );
-        assert!(resolve_from_bundled("qwencode3:4bit", "gguf").is_none());
-        assert!(resolve_from_bundled("nonexistent:model", "gguf").is_none());
+        assert!(resolve_from_bundled("nonexistent:model", "safetensors").is_none());
+        assert!(resolve_from_bundled("nonexistent:model", "mlx").is_none());
     }
 
     // ── list_for_ui ───────────────────────────────────────────────────────────
 
     #[test]
     fn test_list_for_ui_excludes_comment_keys() {
-        let entries = list_for_ui("gguf");
+        let entries = list_for_ui("safetensors");
         for e in &entries {
             assert!(
                 !e.shortcut.starts_with('_'),
@@ -778,25 +869,8 @@ mod tests {
     }
 
     #[test]
-    fn test_list_for_ui_assigns_correct_roles() {
-        let entries = list_for_ui("gguf");
-        let find = |key: &str| {
-            entries
-                .iter()
-                .find(|e| e.shortcut == key)
-                .unwrap_or_else(|| panic!("list_for_ui missing entry: {}", key))
-        };
-
-        assert_eq!(find("qwen3-embed:0.6b:8bit").role, "embed");
-        assert_eq!(find("qwen3-reranker:0.6b:4bit").role, "rerank");
-        assert_eq!(find("jina-reranker-v2:multilingual:f16").role, "rerank");
-        assert_eq!(find("qwen3.5:4b:4bit").role, "chat");
-        assert_eq!(find("qwen3-coder:next:4bit").role, "code");
-    }
-
-    #[test]
     fn test_list_for_ui_is_sorted() {
-        let entries = list_for_ui("gguf");
+        let entries = list_for_ui("safetensors");
         let shortcuts: Vec<&str> = entries.iter().map(|e| e.shortcut.as_str()).collect();
         let mut sorted = shortcuts.clone();
         sorted.sort();
@@ -806,106 +880,23 @@ mod tests {
         );
     }
 
-    // ── Network integration tests (ignored by default) ────────────────────────
-    //
-    // Run with:
-    //   cargo test -p lmforge -- verify_gguf_catalog_files_exist --ignored --nocapture
-    //
-    // These tests hit the live HuggingFace CDN and verify that every file
-    // listed in gguf.json actually exists in the declared repo.
-    //
-    // Exit codes:
-    //   HTTP 200 / 206 / 302 / 301  →  OK (file found or redirected to CDN)
-    //   HTTP 401 / 403              →  OK (file exists but repo is gated / rate-limited)
-    //   HTTP 404                    →  FAIL  (file genuinely missing from repo)
-
-    #[tokio::test]
-    #[ignore = "requires network; run with: cargo test -- --ignored --nocapture"]
-    async fn verify_gguf_catalog_files_exist() {
-        let map: HashMap<String, RawGgufValue> =
-            serde_json::from_str(BUNDLED_GGUF).expect("GGUF catalog must be valid JSON");
-
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            // Follow up to 5 redirects (HF CDN uses 302 → LFS storage)
-            .redirect(reqwest::redirect::Policy::limited(5))
-            .user_agent("lmforge-catalog-verifier/1.0")
-            .build()
-            .expect("failed to build reqwest client");
-
-        let mut failures: Vec<String> = Vec::new();
-        let mut checked = 0usize;
-
-        // Collect entries sorted for deterministic output
-        let mut entries: Vec<(&String, &GgufEntry)> = map
-            .iter()
-            .filter(|(k, _)| !k.starts_with('_'))
-            .filter_map(|(k, v)| {
-                if let RawGgufValue::Entry(e) = v {
-                    Some((k, e))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        entries.sort_by_key(|(k, _)| k.as_str());
-
-        for (key, entry) in entries {
-            let url = format!(
-                "https://huggingface.co/{}/resolve/main/{}",
-                entry.repo, entry.file
-            );
-
-            match client.head(&url).send().await {
-                Ok(resp) => {
-                    let status = resp.status().as_u16();
-                    match status {
-                        200 | 206 | 301 | 302 | 307 | 308 => {
-                            println!("  ✓ [{status:3}]  {key}  →  {}", entry.file);
-                        }
-                        401 | 403 => {
-                            // Auth required — file exists but repo is gated or rate-limited.
-                            // Not a catalog error; the file is present.
-                            println!(
-                                "  ⚠ [{status:3}]  {key}  →  {} (gated/rate-limited, cannot verify)",
-                                entry.file
-                            );
-                        }
-                        404 => {
-                            let msg = format!(
-                                "  ✗ [404]  {key}\n         repo: {}\n         file: {}\n         url:  {}",
-                                entry.repo, entry.file, url
-                            );
-                            eprintln!("{msg}");
-                            failures.push(msg);
-                        }
-                        other => {
-                            println!(
-                                "  ? [{other:3}]  {key}  →  {} (unexpected status)",
-                                entry.file
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    let msg = format!("  ✗ [ERR]  {key}  →  {e}");
-                    eprintln!("{msg}");
-                    failures.push(msg);
-                }
-            }
-            checked += 1;
+    #[test]
+    fn test_list_for_ui_gguf_returns_entries() {
+        let entries = list_for_ui("gguf");
+        assert!(!entries.is_empty(), "gguf catalog should not be empty");
+        for e in &entries {
+            assert_eq!(e.format, "gguf");
+            assert!(!e.shortcut.starts_with('_'));
         }
+    }
 
-        println!("\nChecked {checked} GGUF catalog entries.");
-
-        if !failures.is_empty() {
-            panic!(
-                "\n\n{} GGUF catalog entr{} could not be verified:\n\n{}\n\
-                Fix gguf.json to point to the correct repo/filename.",
-                failures.len(),
-                if failures.len() == 1 { "y" } else { "ies" },
-                failures.join("\n\n")
-            );
-        }
+    #[test]
+    fn test_list_for_ui_empty_format_includes_all_three() {
+        let entries = list_for_ui("");
+        let formats: std::collections::HashSet<&str> =
+            entries.iter().map(|e| e.format.as_str()).collect();
+        assert!(formats.contains("mlx"));
+        assert!(formats.contains("safetensors"));
+        assert!(formats.contains("gguf"));
     }
 }

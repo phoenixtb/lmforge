@@ -25,6 +25,7 @@ impl EngineAdapter for OmlxAdapter {
         &self,
         _repo: &str,
         _dest_dir: &Path,
+        _data_dir: &Path,
         _progress_tx: Sender<DownloadProgress>,
     ) -> Result<bool> {
         // oMLX's downloader is internal/undocumented with no stable external streaming API.
@@ -99,6 +100,8 @@ impl EngineAdapter for OmlxAdapter {
         Ok(ActiveEngine {
             process: child,
             model_id: model_id.to_string(),
+            spec_observer: None,
+            spec_mode: crate::engine::speculative::SpecMode::Off,
         })
     }
 

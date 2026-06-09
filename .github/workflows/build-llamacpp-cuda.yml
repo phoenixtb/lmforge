@@ -1,0 +1,122 @@
+name: Build llama.cpp CUDA variants
+
+# Produces portable Linux CUDA tarballs and optionally uploads to Cloudflare R2.
+# Primary maintainer path: build locally (scripts/llamacpp-cuda/build-local.sh)
+# and publish-r2.sh — this workflow is the CI fallback (~60 min cold per variant).
+#
+# See docs/engineering/R2-ENGINE-ASSETS.md for bucket/CDN/security setup.
+
+on:
+  workflow_dispatch:
+    inputs:
+      llamacpp_tag:
+        description: "Upstream llama.cpp tag to build (e.g. b9351)"
+        required: true
+        default: "b9351"
+      upload_to_r2:
+        description: "Upload tarballs to R2 after build (requires repo secrets)"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    name: ${{ matrix.variant }} (${{ matrix.cuda }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: cuda12
+            cuda: "12.8.1"
+            image: "nvidia/cuda:12.8.1-devel-rockylinux8"
+          - variant: cuda13
+            cuda: "13.1.0"
+            image: "nvidia/cuda:13.1.0-devel-rockylinux8"
+
+    container:
+      image: ${{ matrix.image }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-${{ matrix.variant }}-${{ inputs.llamacpp_tag }}-v2
+          restore-keys: |
+            ccache-${{ matrix.variant }}-${{ inputs.llamacpp_tag }}-
+            ccache-${{ matrix.variant }}-
+
+      - name: Build variant tarball
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          LMFORGE_BUILD_JOBS: "4"
+        run: bash scripts/llamacpp-cuda/build-variant.sh "${{ matrix.variant }}" "${{ inputs.llamacpp_tag }}"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lmforge-llamacpp-${{ inputs.llamacpp_tag }}-${{ matrix.variant }}-linux-x64
+          path: |
+            dist/llamacpp/lmforge-llamacpp-${{ inputs.llamacpp_tag }}-${{ matrix.variant }}-linux-x64.tar.gz
+            dist/llamacpp/lmforge-llamacpp-${{ inputs.llamacpp_tag }}-${{ matrix.variant }}-linux-x64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  upload-r2:
+    name: R2 upload — ${{ matrix.variant }}
+    needs: build
+    if: inputs.upload_to_r2
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [cuda12, cuda13]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: lmforge-llamacpp-${{ inputs.llamacpp_tag }}-${{ matrix.variant }}-linux-x64
+          path: dist/llamacpp
+
+      - name: Install AWS CLI
+        run: sudo apt-get update -qq && sudo apt-get install -y awscli
+
+      - name: Upload tarball to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.llamacpp_tag }}"
+          variant="${{ matrix.variant }}"
+          base="lmforge-llamacpp-${tag}-${variant}-linux-x64"
+          tarball="dist/llamacpp/${base}.tar.gz"
+          object_key="llamacpp/${tag}/${base}.tar.gz"
+          aws s3 cp "$tarball" "s3://${R2_BUCKET}/${object_key}" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/gzip \
+            --cache-control "public, max-age=31536000, immutable"
+          aws s3 cp "${tarball}.sha256" "s3://${R2_BUCKET}/${object_key}.sha256" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --content-type text/plain \
+            --cache-control "public, max-age=31536000, immutable"
+          echo "sha256=$(cut -d' ' -f1 "${tarball}.sha256")" >> "$GITHUB_ENV"
+          echo "object_key=${object_key}" >> "$GITHUB_ENV"
+
+      - name: Job summary
+        run: |
+          echo "### ${{ matrix.variant }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- object_key: \`${object_key}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- sha256: \`${sha256}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Run \`scripts/llamacpp-cuda/update-manifest.sh\` locally with the tarball to patch variants-manifest.json, then cut an lmforge release." >> "$GITHUB_STEP_SUMMARY"
