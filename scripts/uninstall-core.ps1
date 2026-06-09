@@ -77,7 +77,10 @@ try {
 }
 
 if (-not $taskRemoved) {
-    $schtasksOut = & schtasks.exe /Delete /TN $TaskName /F 2>&1
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $schtasksOut = & schtasks.exe /Delete /TN $TaskName /F 2>&1 | Out-String
+    $ErrorActionPreference = $prevEap
     if ($LASTEXITCODE -eq 0) {
         $taskRemoved = $true
     } elseif ($schtasksOut -match 'cannot find|does not exist|not found') {

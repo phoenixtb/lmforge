@@ -15,7 +15,7 @@
 
 param(
     [Parameter(Position = 0, Mandatory = $true)]
-    [ValidateSet("install-core", "install-ui", "uninstall-core", "uninstall-ui")]
+    [ValidateSet("install-core", "install-ui", "uninstall-core", "uninstall-ui", "install-root")]
     [string]$Script,
 
     [switch]$Yes,
@@ -25,7 +25,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
-$scriptPath = Join-Path $repoRoot "scripts\$Script.ps1"
+$scriptPath = if ($Script -eq "install-root") {
+    Join-Path $repoRoot "install.ps1"
+} else {
+    Join-Path $repoRoot "scripts\$Script.ps1"
+}
 
 if (-not (Test-Path -LiteralPath $scriptPath)) {
     Write-Error "Script not found: $scriptPath"
@@ -48,6 +52,10 @@ if ($CheckSyntaxOnly) {
 if ($Yes) { $env:LMFORGE_YES = "1" }
 if ($Purge) { $env:LMFORGE_PURGE = "1" }
 
+# Avoid clashing with param([switch]$Yes/$Purge) inside iex'd scripts.
+Remove-Variable -Name Yes -Scope Script -ErrorAction SilentlyContinue
+Remove-Variable -Name Purge -Scope Script -ErrorAction SilentlyContinue
+
 Write-Host ""
 Write-Host "  Local iex run (same as irm | iex)" -ForegroundColor Cyan
 Write-Host "  Script : $scriptPath"
@@ -56,5 +64,6 @@ Write-Host "  LMFORGE_YES     : $(if ($env:LMFORGE_YES) { $env:LMFORGE_YES } els
 Write-Host "  LMFORGE_PURGE   : $(if ($env:LMFORGE_PURGE) { $env:LMFORGE_PURGE } else { '(no)' })"
 Write-Host ""
 
-$content = Get-Content -LiteralPath $scriptPath -Raw
+# UTF-8 required for install.ps1 (box-drawing / unicode comments).
+$content = Get-Content -LiteralPath $scriptPath -Raw -Encoding UTF8
 Invoke-Expression $content

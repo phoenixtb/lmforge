@@ -14,7 +14,7 @@ param(
 $ErrorActionPreference = "Stop"
 $utilDir = $PSScriptRoot
 $runner = Join-Path $utilDir "run-ps1-like-github.ps1"
-$scripts = @("install-core", "install-ui", "uninstall-ui", "uninstall-core")
+$scripts = @("install-core", "install-ui", "uninstall-ui", "uninstall-core", "install-root")
 
 Write-Host "  Windows script checks" -ForegroundColor Cyan
 Write-Host ""

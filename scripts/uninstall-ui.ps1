@@ -45,7 +45,10 @@ function Stop-LmforgeUiProcesses {
     Get-Process -Name "lmforge-ui" -ErrorAction SilentlyContinue |
         Stop-Process -Force -ErrorAction SilentlyContinue
     # Tray / child processes can outlive the main window briefly.
-    & taskkill.exe /F /IM lmforge-ui.exe 2>$null | Out-Null
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & taskkill.exe /F /IM lmforge-ui.exe *>$null
+    $ErrorActionPreference = $prevEap
     $deadline = (Get-Date).AddSeconds(12)
     while ((Get-Date) -lt $deadline) {
         if (-not (Get-Process -Name "lmforge-ui" -ErrorAction SilentlyContinue)) {
