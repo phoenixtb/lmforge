@@ -214,11 +214,82 @@ jobs:
           retention-days: 1
 
   # ─────────────────────────────────────────────────────────────────────────────
-  #  Create GitHub Release with all artifacts + install scripts
+  #  E2E gate — run the full install lifecycle against the exact artifacts
+  #  that will ship. The release is not created unless this passes on all
+  #  three platforms.
+  # ─────────────────────────────────────────────────────────────────────────────
+  e2e-gate:
+    name: E2E gate — ${{ matrix.os }}
+    needs: build-core
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: lmforge-linux-x86_64
+          - os: macos-14
+            asset: lmforge-macos-arm64
+          - os: windows-latest
+            asset: lmforge-windows-x86_64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download core artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/
+
+      - name: Make binary executable (unix)
+        if: runner.os != 'Windows'
+        run: chmod +x "dist/${{ matrix.asset }}"
+
+      # See e2e.yml for why headless Linux runners need this.
+      - name: Enable user systemd session (headless runner)
+        if: runner.os == 'Linux'
+        run: |
+          sudo loginctl enable-linger "$USER"
+          uid=$(id -u)
+          echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" >> "$GITHUB_ENV"
+          for i in $(seq 1 15); do
+            [ -S "/run/user/$uid/bus" ] && break
+            sleep 1
+          done
+          XDG_RUNTIME_DIR=/run/user/$uid systemctl --user is-system-running --wait || true
+
+      - name: Run E2E (unix)
+        if: runner.os != 'Windows'
+        env:
+          LMFORGE_LOCAL_BIN: dist/${{ matrix.asset }}
+        run: bash scripts/util/e2e-core.sh
+
+      - name: Run E2E (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          LMFORGE_LOCAL_BIN: dist\${{ matrix.asset }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\util\e2e-core.ps1
+
+      - name: Upload daemon logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-gate-logs-${{ matrix.os }}
+          path: |
+            ~/.lmforge/logs/
+          if-no-files-found: ignore
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  #  Create GitHub Release (DRAFT) with all artifacts + install scripts.
+  #  Publishing is manual: verify the draft (smoke-test on a real machine if
+  #  desired), then click "Publish release" in the GitHub UI.
   # ─────────────────────────────────────────────────────────────────────────────
   release:
-    name: Publish Release
-    needs: [build-core, build-ui]
+    name: Draft Release
+    needs: [build-core, build-ui, e2e-gate]
     runs-on: ubuntu-22.04
 
     steps:
@@ -237,7 +308,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: "LMForge ${{ github.ref_name }}"
-          draft: false
+          draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           body: |

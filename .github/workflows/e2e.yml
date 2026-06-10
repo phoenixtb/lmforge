@@ -1,0 +1,90 @@
+name: E2E
+
+# Full install lifecycle on all three platforms using the real installer
+# scripts and a locally built binary:
+#   install → health → sysinfo → service registration → uninstall
+#
+# Runs on every push/PR to main and is reusable (workflow_call) so the
+# release workflow can gate publishing on it.
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  e2e:
+    name: E2E — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.os }}-e2e-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.os }}-e2e-
+
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Build release binary
+        run: cargo build --release --bin lmforge
+
+      # GitHub's Linux runners execute as a service user without a user
+      # systemd session by default. Lingering starts user@UID and gives
+      # `systemctl --user` a bus to talk to — same setup a headless server
+      # install would need.
+      - name: Enable user systemd session (headless runner)
+        if: runner.os == 'Linux'
+        run: |
+          sudo loginctl enable-linger "$USER"
+          uid=$(id -u)
+          echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" >> "$GITHUB_ENV"
+          for i in $(seq 1 15); do
+            [ -S "/run/user/$uid/bus" ] && break
+            sleep 1
+          done
+          XDG_RUNTIME_DIR=/run/user/$uid systemctl --user is-system-running --wait || true
+
+      - name: Run E2E (unix)
+        if: runner.os != 'Windows'
+        env:
+          LMFORGE_LOCAL_BIN: target/release/lmforge
+        run: bash scripts/util/e2e-core.sh
+
+      - name: Run E2E (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          LMFORGE_LOCAL_BIN: target\release\lmforge.exe
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\util\e2e-core.ps1
+
+      - name: Upload daemon logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ matrix.os }}
+          path: |
+            ~/.lmforge/logs/
+          if-no-files-found: ignore
