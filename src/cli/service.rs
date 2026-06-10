@@ -1,6 +1,5 @@
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
-use std::process::Stdio;
 
 use crate::config::LmForgeConfig;
 
@@ -344,6 +343,7 @@ fn wait_daemon_health(timeout: std::time::Duration) -> bool {
 #[cfg(windows)]
 fn spawn_lmforge_start(exe_path: &str) -> Result<()> {
     use std::os::windows::process::CommandExt;
+    use std::process::Stdio;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     std::process::Command::new(exe_path)

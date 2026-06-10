@@ -315,6 +315,9 @@ fn check_nvidia_present() -> bool {
 }
 
 /// Pure helper — unit-tested; mirrors the Windows CIM AdapterCompatibility check.
+/// Only the Windows probe calls it, so gate on test builds elsewhere to keep
+/// the Linux/macOS lib free of dead code.
+#[cfg(any(target_os = "windows", test))]
 fn adapter_compat_indicates_amd(stdout: &str) -> bool {
     let lower = stdout.to_lowercase();
     lower.contains("advanced micro devices") || lower.contains("amd")
