@@ -7,7 +7,7 @@ use crate::config::LmForgeConfig;
 /// Generate and install the LMForge system service.
 /// - macOS  → launchd user agent   (~/Library/LaunchAgents/)
 /// - Linux  → systemd user unit    (~/.config/systemd/user/)
-/// - Windows → Scheduled Task       (runs at logon, no elevation)
+/// - Windows → HKCU Run key         (runs at logon, never needs elevation)
 ///
 /// Storage dirs (`data_dir` / `models_dir`) are intentionally NOT injected as
 /// env vars into the unit. The bootstrap `config.toml` (`~/.lmforge/config.toml`)
@@ -25,7 +25,7 @@ pub fn install(config: &LmForgeConfig) -> Result<()> {
     install_systemd(&exe_path, &data_dir)?;
 
     #[cfg(windows)]
-    install_scheduled_task(&exe_path, &data_dir)?;
+    install_run_key(&exe_path, &data_dir)?;
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     {
@@ -49,10 +49,7 @@ pub fn is_service_installed() -> bool {
     }
     #[cfg(windows)]
     {
-        let out = std::process::Command::new("schtasks")
-            .args(["/Query", "/TN", WINDOWS_TASK_NAME])
-            .output();
-        return out.map(|o| o.status.success()).unwrap_or(false);
+        return run_key_registered();
     }
     #[allow(unreachable_code)]
     false
@@ -76,7 +73,7 @@ pub fn uninstall() -> Result<()> {
     uninstall_systemd()?;
 
     #[cfg(windows)]
-    uninstall_scheduled_task()?;
+    uninstall_run_key()?;
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     bail!("Service uninstallation is not supported on this platform.");
@@ -253,14 +250,28 @@ WantedBy=default.target
     std::fs::write(&unit_path, service_content)?;
 
     println!("⚙ Reloading systemd user daemon...");
-    std::process::Command::new("systemctl")
+    let out = std::process::Command::new("systemctl")
         .args(["--user", "daemon-reload"])
-        .output()?;
+        .output()
+        .context("Failed to run systemctl")?;
+    if !out.status.success() {
+        bail!(
+            "systemctl --user daemon-reload failed (no user session bus?):\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 
     println!("⚙ Enabling and starting lmforge service...");
-    std::process::Command::new("systemctl")
+    let out = std::process::Command::new("systemctl")
         .args(["--user", "enable", "--now", SYSTEMD_SERVICE])
-        .output()?;
+        .output()
+        .context("Failed to run systemctl")?;
+    if !out.status.success() {
+        bail!(
+            "systemctl --user enable --now failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 
     println!("✓ LMForge service installed and started.");
     println!("  It will now start automatically on login.");
@@ -285,10 +296,23 @@ fn uninstall_systemd() -> Result<()> {
     Ok(())
 }
 
-// --- Windows Scheduled Task ---
+// --- Windows HKCU Run key ---
+//
+// Autostart is a value under HKCU\...\CurrentVersion\Run. Writing HKCU never
+// requires elevation, unlike schtasks /SC ONLOGON which fails with "Access is
+// denied" for non-elevated users on many hosts. The Run key launches a hidden
+// VBS shim via wscript (a GUI host — no console flash at logon); the shim runs
+// `lmforge start`, which daemonizes into a detached no-window child.
 
 #[cfg(windows)]
-static WINDOWS_TASK_NAME: &str = "LMForge Daemon";
+static WINDOWS_RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+
+#[cfg(windows)]
+static WINDOWS_RUN_VALUE: &str = "LMForge";
+
+/// Scheduled task name used by installs ≤ v0.1.5. Only referenced for cleanup.
+#[cfg(windows)]
+static WINDOWS_LEGACY_TASK_NAME: &str = "LMForge Daemon";
 
 #[cfg(windows)]
 static WINDOWS_TASK_LAUNCHER: &str = "daemon-task.vbs";
@@ -333,107 +357,101 @@ fn spawn_lmforge_start(exe_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Register a Windows Scheduled Task that runs `lmforge start --foreground`
-/// at every user logon. Uses PowerShell's Register-ScheduledTask — no
-/// administrator elevation is required (RunLevel = Limited).
+/// True when the LMForge value exists under the HKCU Run key.
 #[cfg(windows)]
-fn install_scheduled_task(exe_path: &str, data_dir: &std::path::Path) -> Result<()> {
-    // Build the log directory so the task can redirect output immediately.
+fn run_key_registered() -> bool {
+    crate::util::subprocess::hidden("reg")
+        .args(["query", WINDOWS_RUN_KEY, "/v", WINDOWS_RUN_VALUE])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Best-effort removal of the scheduled task left behind by installs ≤ v0.1.5.
+/// Deleting a per-user task can hit "Access is denied" on some hosts — that is
+/// fine; the task is harmless once the Run key takes over, but we try anyway.
+#[cfg(windows)]
+fn remove_legacy_scheduled_task() {
+    let _ = crate::util::subprocess::hidden("schtasks")
+        .args(["/End", "/TN", WINDOWS_LEGACY_TASK_NAME])
+        .output();
+    let _ = crate::util::subprocess::hidden("schtasks")
+        .args(["/Delete", "/TN", WINDOWS_LEGACY_TASK_NAME, "/F"])
+        .output();
+}
+
+/// Register autostart under HKCU\...\Run. No elevation needed, ever.
+#[cfg(windows)]
+fn install_run_key(exe_path: &str, data_dir: &std::path::Path) -> Result<()> {
     let log_dir = data_dir.join("logs");
     std::fs::create_dir_all(&log_dir)?;
     let log_out_path = log_dir.join("daemon.out.log");
 
-    // Storage dirs are intentionally NOT set as User env vars here.
+    // The launcher lives in the FIXED bootstrap dir (~/.lmforge), not the
+    // user-relocatable data_dir — autostart must keep working after the user
+    // moves storage to another volume.
+    let bootstrap_dir = home_dir()?.join(".lmforge");
+    std::fs::create_dir_all(&bootstrap_dir)?;
+
+    // Storage dirs are intentionally NOT baked into the launcher/env.
     // The bootstrap config.toml (~/.lmforge/config.toml) holds those settings
-    // and is read by the daemon on every startup. Baking stale env would shadow
-    // any UI-driven config change until the user re-runs `lmforge service install`.
+    // and is read by the daemon on every startup.
     //
-    // Hidden VBS launcher: Task Scheduler must not run cmd.exe or .cmd directly —
-    // each attempt flashes a console window.  WshShell.Run style 0 hides the
-    // console; `lmforge start` (daemon mode) spawns a detached no-window child.
-    // Drop legacy launchers from earlier installs.
-    for legacy in ["daemon-task.cmd", "daemon-task.vbs"] {
-        let p = data_dir.join(legacy);
-        if p != data_dir.join(WINDOWS_TASK_LAUNCHER) {
-            let _ = std::fs::remove_file(p);
-        }
+    // Hidden VBS launcher: the Run key must not point at a console exe —
+    // logon would flash a console window. wscript is a GUI host;
+    // WshShell.Run style 0 keeps `lmforge start` invisible, and `lmforge start`
+    // (daemon mode) spawns a detached no-window child.
+    for stale_dir in [&bootstrap_dir, &data_dir.to_path_buf()] {
+        let _ = std::fs::remove_file(stale_dir.join("daemon-task.cmd"));
+    }
+    if data_dir != bootstrap_dir {
+        let _ = std::fs::remove_file(data_dir.join(WINDOWS_TASK_LAUNCHER));
     }
 
-    let launcher_path = data_dir.join(WINDOWS_TASK_LAUNCHER);
+    let launcher_path = bootstrap_dir.join(WINDOWS_TASK_LAUNCHER);
     let vbs_content = format!(
         "CreateObject(\"Wscript.Shell\").Run \"\"\"{exe}\"\" start\", 0, False\r\n",
         exe = exe_path
     );
     std::fs::write(&launcher_path, vbs_content).with_context(|| {
         format!(
-            "Cannot write scheduled-task launcher: {}",
+            "Cannot write autostart launcher: {}",
             launcher_path.display()
         )
     })?;
 
-    let launcher_esc = launcher_path
-        .to_string_lossy()
-        .replace('\\', "\\\\");
-    let ps_script = format!(
-        r#"
-$task     = "{task}"
-$launcher = "{launcher_esc}"
-# Remove stale task definition (old installs used cmd.exe and flashed windows).
-Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
-schtasks.exe /Delete /TN $task /F 2>$null | Out-Null
-$action   = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B `"$launcher`""
-$trigger  = New-ScheduledTaskTrigger -AtLogon
-$settings = New-ScheduledTaskSettingsSet `
-    -RestartCount 3 `
-    -RestartInterval (New-TimeSpan -Minutes 1) `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit (New-TimeSpan -Days 3650)
-$principal = New-ScheduledTaskPrincipal `
-    -UserId "$env:USERNAME" `
-    -RunLevel Limited `
-    -LogonType Interactive
-Register-ScheduledTask `
-    -TaskName $task `
-    -Action $action `
-    -Trigger $trigger `
-    -Settings $settings `
-    -Principal $principal `
-    -Force | Out-Null
-Start-ScheduledTask -TaskName $task
-"#,
-        launcher_esc = launcher_esc,
-        task = WINDOWS_TASK_NAME,
-    );
-
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let out = std::process::Command::new("powershell")
+    let run_cmd = format!("wscript.exe //B \"{}\"", launcher_path.display());
+    let out = crate::util::subprocess::hidden("reg")
         .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-WindowStyle",
-            "Hidden",
-            "-Command",
-            &ps_script,
+            "add",
+            WINDOWS_RUN_KEY,
+            "/v",
+            WINDOWS_RUN_VALUE,
+            "/t",
+            "REG_SZ",
+            "/d",
+            &run_cmd,
+            "/f",
         ])
-        .creation_flags(CREATE_NO_WINDOW)
         .output()
-        .context("Failed to run PowerShell")?;
-
+        .context("Failed to run reg.exe")?;
     if !out.status.success() {
         bail!(
-            "Failed to register scheduled task:\n{}",
+            "Failed to write autostart Run key:\n{}",
             String::from_utf8_lossy(&out.stderr)
         );
     }
 
-    println!("✓ LMForge scheduled task registered and started.");
+    // Installs ≤ v0.1.5 used a scheduled task; drop it so the daemon does not
+    // get started twice at logon.
+    remove_legacy_scheduled_task();
+
+    println!("✓ LMForge autostart registered (HKCU Run key).");
     println!("  It will now start automatically at logon.");
     println!("  Logs: {}", log_out_path.display());
 
-    if !wait_daemon_health(std::time::Duration::from_secs(90)) {
-        println!("⚙ Scheduled task did not bring the daemon up yet — starting now...");
+    // The Run key only fires at logon — bring the daemon up now.
+    if !daemon_reachable() {
         spawn_lmforge_start(exe_path)?;
         if wait_daemon_health(std::time::Duration::from_secs(60)) {
             println!("✓ LMForge daemon is reachable at http://127.0.0.1:11430");
@@ -449,21 +467,18 @@ Start-ScheduledTask -TaskName $task
 }
 
 #[cfg(windows)]
-fn uninstall_scheduled_task() -> Result<()> {
+fn uninstall_run_key() -> Result<()> {
     // Stop first (ignore error if not running)
-    std::process::Command::new("taskkill")
+    crate::util::subprocess::hidden("taskkill")
         .args(["/F", "/IM", "lmforge.exe"])
         .output()
         .ok();
 
-    let ps = format!(
-        r#"Unregister-ScheduledTask -TaskName "{}" -Confirm:$false"#,
-        WINDOWS_TASK_NAME
-    );
-    std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
-        .output()
-        .context("Failed to run PowerShell")?;
+    let _ = crate::util::subprocess::hidden("reg")
+        .args(["delete", WINDOWS_RUN_KEY, "/v", WINDOWS_RUN_VALUE, "/f"])
+        .output();
+
+    remove_legacy_scheduled_task();
 
     if let Ok(data_dir) = home_dir().map(|h| h.join(".lmforge")) {
         for name in [WINDOWS_TASK_LAUNCHER, "daemon-task.cmd"] {
@@ -474,7 +489,7 @@ fn uninstall_scheduled_task() -> Result<()> {
         }
     }
 
-    println!("✓ LMForge scheduled task removed.");
+    println!("✓ LMForge autostart removed.");
     Ok(())
 }
 
@@ -503,21 +518,27 @@ pub fn service_start() -> Result<()> {
         if !unit_path.exists() {
             bail!("Service not installed. Run `lmforge service install` first.");
         }
-        std::process::Command::new("systemctl")
+        let out = std::process::Command::new("systemctl")
             .args(["--user", "start", SYSTEMD_SERVICE])
-            .status()?;
+            .output()?;
+        if !out.status.success() {
+            bail!("{}", String::from_utf8_lossy(&out.stderr));
+        }
         println!("✓ LMForge service started.");
     }
 
     #[cfg(windows)]
     {
-        let out = std::process::Command::new("schtasks")
-            .args(["/Run", "/TN", WINDOWS_TASK_NAME])
-            .output()?;
-        if out.status.success() {
-            println!("✓ LMForge scheduled task started.");
+        if daemon_reachable() {
+            println!("✓ LMForge daemon already running.");
         } else {
-            bail!("{}", String::from_utf8_lossy(&out.stderr));
+            let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("lmforge"));
+            spawn_lmforge_start(&exe.to_string_lossy())?;
+            if wait_daemon_health(std::time::Duration::from_secs(60)) {
+                println!("✓ LMForge daemon started.");
+            } else {
+                bail!("Daemon did not become reachable within 60s.");
+            }
         }
     }
 
@@ -546,8 +567,8 @@ pub fn service_stop() -> Result<()> {
 
     #[cfg(windows)]
     {
-        // End any running lmforge.exe processes (task stays registered)
-        std::process::Command::new("taskkill")
+        // End any running lmforge.exe processes (Run key stays registered)
+        crate::util::subprocess::hidden("taskkill")
             .args(["/F", "/IM", "lmforge.exe"])
             .output()
             .ok();
@@ -618,35 +639,15 @@ pub fn service_status() -> Result<()> {
 
     #[cfg(windows)]
     {
-        let out = std::process::Command::new("schtasks")
-            .args(["/Query", "/TN", WINDOWS_TASK_NAME, "/FO", "LIST"])
-            .output()
-            .unwrap_or_else(|_| std::process::Output {
-                status: std::process::ExitStatus::default(),
-                stdout: vec![],
-                stderr: vec![],
-            });
-        let info = String::from_utf8_lossy(&out.stdout);
-        let installed = out.status.success();
+        let installed = run_key_registered();
         println!(
-            "  Scheduled task: {}",
+            "  Autostart    : {}",
             if installed {
-                "registered ✓"
+                "registered (HKCU Run key) ✓"
             } else {
                 "not registered"
             }
         );
-        if installed {
-            let running = info.contains("Running");
-            println!(
-                "  Task status  : {}",
-                if running {
-                    "running ✓"
-                } else {
-                    "not running"
-                }
-            );
-        }
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]

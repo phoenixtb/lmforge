@@ -249,7 +249,7 @@ fn extract_uv(archive: &Path, dest_dir: &Path, _bin_name: &str) -> Result<()> {
     let dest_str = dest_dir.to_string_lossy().to_string();
 
     if cfg!(windows) {
-        let status = std::process::Command::new("powershell")
+        let status = crate::util::subprocess::hidden("powershell")
             .args([
                 "-NoProfile",
                 "-Command",

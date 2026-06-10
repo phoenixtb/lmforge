@@ -44,7 +44,7 @@ pub fn is_process_running(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
-        std::process::Command::new("tasklist")
+        crate::util::subprocess::hidden("tasklist")
             .args(["/FI", &format!("PID eq {pid}"), "/NH"])
             .output()
             .map(|o| {

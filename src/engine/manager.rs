@@ -826,7 +826,7 @@ fn kill_orphan_engine(pid_file: &std::path::Path) {
         #[cfg(windows)]
         {
             // taskkill /F (force) /PID <pid> — equivalent of SIGKILL on Windows
-            let _ = std::process::Command::new("taskkill")
+            let _ = crate::util::subprocess::hidden("taskkill")
                 .args(["/F", "/PID", &pid.to_string()])
                 .output();
         }
@@ -858,7 +858,7 @@ fn kill_port_holder_via_lsof(port: u16) {
                 }
                 #[cfg(windows)]
                 {
-                    let _ = std::process::Command::new("taskkill")
+                    let _ = crate::util::subprocess::hidden("taskkill")
                         .args(["/F", "/PID", &pid.to_string()])
                         .output();
                 }

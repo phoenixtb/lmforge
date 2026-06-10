@@ -11,6 +11,8 @@
 #  Environment variables:
 #    LMFORGE_VERSION     Pin a specific version, e.g. "v0.1.0" (default: latest)
 #    LMFORGE_INSTALL_DIR Where to place the binary (default: ~/.local/bin)
+#    LMFORGE_LOCAL_BIN   Path to a locally built lmforge binary — skips the
+#                        GitHub download. Used by the E2E harness/CI.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -131,22 +133,31 @@ fi
 info "Install dir: $INSTALL_DIR"
 
 # ── Download ──────────────────────────────────────────────────────────────────
-section "Downloading lmforge..."
+if [[ -n "${LMFORGE_LOCAL_BIN:-}" ]]; then
+    section "Using local binary..."
+    [[ -f "$LMFORGE_LOCAL_BIN" ]] || error "LMFORGE_LOCAL_BIN set but not found: $LMFORGE_LOCAL_BIN"
+    TMP_BIN=$(mktemp)
+    trap 'rm -f "$TMP_BIN"' EXIT
+    cp "$LMFORGE_LOCAL_BIN" "$TMP_BIN"
+    info "Using $LMFORGE_LOCAL_BIN"
+else
+    section "Downloading lmforge..."
 
-ASSET=$(detect_asset)
-URL=$(resolve_url "$ASSET")
+    ASSET=$(detect_asset)
+    URL=$(resolve_url "$ASSET")
 
-echo    "  Asset:  $ASSET"
-echo    "  URL:    $URL"
-echo ""
+    echo    "  Asset:  $ASSET"
+    echo    "  URL:    $URL"
+    echo ""
 
-TMP_BIN=$(mktemp)
-trap 'rm -f "$TMP_BIN"' EXIT
+    TMP_BIN=$(mktemp)
+    trap 'rm -f "$TMP_BIN"' EXIT
 
-if ! curl -fSL --progress-bar "$URL" -o "$TMP_BIN"; then
-    error "Download failed from $URL\n  Check https://github.com/$REPO/releases for available versions."
+    if ! curl -fSL --progress-bar "$URL" -o "$TMP_BIN"; then
+        error "Download failed from $URL\n  Check https://github.com/$REPO/releases for available versions."
+    fi
+    info "Downloaded $ASSET"
 fi
-info "Downloaded $ASSET"
 
 # ── Install ───────────────────────────────────────────────────────────────────
 section "Installing..."
@@ -234,7 +245,11 @@ section "Initializing LMForge..."
 
 # ── Service install ───────────────────────────────────────────────────────────
 section "Installing system service..."
-"$INSTALL_DIR/$BINARY_NAME" service install
+SERVICE_REGISTERED=true
+if ! "$INSTALL_DIR/$BINARY_NAME" service install; then
+    SERVICE_REGISTERED=false
+    warn "Service registration failed. Daemon will still start now; retry: lmforge service install"
+fi
 
 wait_health() {
     local i
@@ -264,7 +279,12 @@ fi
 echo ""
 echo -e "${BOLD}${GREEN}  ✓ LMForge Core $INSTALLED_VER installed successfully!${NC}"
 echo ""
-echo    "  The daemon is running and starts automatically on login."
+if $SERVICE_REGISTERED; then
+    echo "  The daemon is running and starts automatically on login."
+else
+    echo -e "${YELLOW}  The daemon is running now. Auto-start on login was NOT registered.${NC}"
+    echo -e "${YELLOW}  Retry: lmforge service install${NC}"
+fi
 echo    "  API:   http://127.0.0.1:11430"
 echo    "  Logs:  ${HOME}/.lmforge/logs/daemon.out.log"
 echo ""

@@ -303,7 +303,7 @@ fn run_gpu_probe() -> GpuStats {
 
 #[cfg(not(target_os = "macos"))]
 fn run_nvidia_smi() -> Option<GpuStats> {
-    let out = std::process::Command::new("nvidia-smi")
+    let out = crate::util::subprocess::hidden("nvidia-smi")
         .args([
             "--query-gpu=utilization.gpu,memory.used,memory.total",
             "--format=csv,noheader,nounits",
@@ -329,7 +329,7 @@ fn run_nvidia_smi() -> Option<GpuStats> {
 
 #[cfg(not(target_os = "macos"))]
 fn run_rocm_smi() -> Option<GpuStats> {
-    let out = std::process::Command::new("rocm-smi")
+    let out = crate::util::subprocess::hidden("rocm-smi")
         .args(["--showuse", "--showmemuse", "--csv"])
         .output()
         .ok()?;

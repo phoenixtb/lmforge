@@ -1050,7 +1050,7 @@ fn vulkan_loader_available(os: Os) -> bool {
 /// We pick by the driver-reported runtime version. Default = 12.4 (safer
 /// floor — older driver releases are far more common on consumer cards).
 fn detect_windows_cuda_variant() -> String {
-    if let Ok(output) = std::process::Command::new("nvidia-smi").output()
+    if let Ok(output) = crate::util::subprocess::hidden("nvidia-smi").output()
         && let Ok(stdout) = String::from_utf8(output.stdout)
     {
         for line in stdout.lines() {
@@ -1088,7 +1088,7 @@ async fn extract_archive(
 
     if is_zip && profile.os == Os::Windows {
         // Use PowerShell's Expand-Archive (available on Windows 10+)
-        let status = tokio::process::Command::new("powershell")
+        let status = crate::util::subprocess::hidden_tokio("powershell")
             .args([
                 "-NoProfile",
                 "-Command",
@@ -1747,8 +1747,23 @@ mod tests {
         assert!(find_verified_pip_install(&engine, &data_dir).is_none());
     }
 
+    /// True when `python3` on PATH is a real interpreter. On Windows boxes
+    /// without Python, `python3.exe` is a Microsoft Store stub that exits
+    /// non-zero — these tests must skip there, not fail.
+    fn python3_available() -> bool {
+        std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
     #[test]
     fn test_verify_pip_import_succeeds_on_stdlib() {
+        if !python3_available() {
+            eprintln!("skipping: no usable python3 on PATH");
+            return;
+        }
         // sys is always available in any python — proves the probe mechanics work.
         let python = std::path::PathBuf::from("python3");
         let result = verify_pip_import(&python, "sys");
@@ -1761,6 +1776,10 @@ mod tests {
 
     #[test]
     fn test_verify_pip_import_fails_on_nonexistent_package() {
+        if !python3_available() {
+            eprintln!("skipping: no usable python3 on PATH");
+            return;
+        }
         let python = std::path::PathBuf::from("python3");
         let result = verify_pip_import(&python, "definitely_not_a_real_module_xyz_12345");
         assert!(result.is_err(), "import of nonexistent module must fail");

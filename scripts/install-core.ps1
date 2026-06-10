@@ -9,6 +9,8 @@
 #
 # Environment variables:
 #   LMFORGE_VERSION     Pin a specific version, e.g. "v0.3.1" (default: latest)
+#   LMFORGE_LOCAL_BIN   Path to a locally built lmforge.exe — skips the GitHub
+#                       download. Used by the E2E harness/CI; not for end users.
 # =============================================================================
 $ErrorActionPreference = "Stop"
 
@@ -93,6 +95,15 @@ if ($LmforgeCmd -or (Test-Path "$InstallDir\$Binary")) {
 }
 
 # --- Resolve download URL ---
+if ($env:LMFORGE_LOCAL_BIN) {
+    if (-not (Test-Path $env:LMFORGE_LOCAL_BIN)) {
+        Err "LMFORGE_LOCAL_BIN set but not found: $env:LMFORGE_LOCAL_BIN"
+    }
+    Info "Using local binary: $env:LMFORGE_LOCAL_BIN"
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    Copy-Item $env:LMFORGE_LOCAL_BIN "$InstallDir\$Binary" -Force
+    $Version = "local"
+} else {
 if ($Version -eq "latest") {
     Info "Fetching latest release..."
     try {
@@ -119,6 +130,7 @@ try {
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Copy-Item $TmpExe "$InstallDir\$Binary" -Force
 Remove-Item $TmpExe -ErrorAction SilentlyContinue
+}
 Success "Binary installed to $InstallDir\$Binary"
 
 # --- Post-install: data directories ---
@@ -144,15 +156,25 @@ if ($UserPath -notlike "*$InstallDir*") {
 Info "Running lmforge init..."
 & "$InstallDir\$Binary" init
 
-Info "Registering Windows Scheduled Task (auto-start at logon)..."
+Info "Registering auto-start at logon (HKCU Run key)..."
+$ServiceRegistered = $true
 & "$InstallDir\$Binary" service install
+if ($LASTEXITCODE -ne 0) {
+    $ServiceRegistered = $false
+    Warn "Service registration failed (exit $LASTEXITCODE). Daemon will still start now; retry: lmforge service install"
+}
 
 Ensure-LmforgeDaemon "$InstallDir\$Binary"
 
 Write-Host ""
 Success "LMForge $Version installed successfully!"
 Write-Host ""
-Write-Host "  The daemon is running and starts automatically at logon." -ForegroundColor White
+if ($ServiceRegistered) {
+    Write-Host "  The daemon is running and starts automatically at logon." -ForegroundColor White
+} else {
+    Write-Host "  The daemon is running now. Auto-start at logon was NOT registered." -ForegroundColor Yellow
+    Write-Host "  Retry: lmforge service install" -ForegroundColor Yellow
+}
 Write-Host "  API:  http://127.0.0.1:11430" -ForegroundColor White
 Write-Host ""
 Write-Host "  Next steps:" -ForegroundColor White

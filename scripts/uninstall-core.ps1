@@ -1,6 +1,7 @@
 # =============================================================================
 # LMForge Core - Windows PowerShell Uninstaller
-# Stops the daemon, removes the Scheduled Task, removes the binary and PATH.
+# Stops the daemon, removes autostart (Run key + legacy Scheduled Task),
+# removes the binary and PATH.
 # Models and config in ~/.lmforge are kept unless -Purge is passed.
 #
 # Usage:
@@ -63,7 +64,16 @@ if ($CoreBin) {
     Info "Service unregistered via lmforge CLI"
 }
 
-# --- 2. Belt-and-suspenders: remove Scheduled Task ---
+# --- 2. Belt-and-suspenders: remove autostart Run key ---
+$RunKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+if (Get-ItemProperty -Path $RunKey -Name "LMForge" -ErrorAction SilentlyContinue) {
+    Remove-ItemProperty -Path $RunKey -Name "LMForge" -ErrorAction SilentlyContinue
+    Info "Removed autostart Run key"
+}
+Remove-Item "$DataDir\daemon-task.vbs" -Force -ErrorAction SilentlyContinue
+Remove-Item "$DataDir\daemon-task.cmd" -Force -ErrorAction SilentlyContinue
+
+# --- 2b. Legacy cleanup: Scheduled Task from installs <= v0.1.5 ---
 # Non-fatal: access denied must not abort purge or binary removal.
 $taskRemoved = $false
 try {
@@ -72,9 +82,7 @@ try {
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop
         $taskRemoved = $true
     }
-} catch {
-    Warn "Could not unregister scheduled task via PowerShell: $($_.Exception.Message)"
-}
+} catch {}
 
 if (-not $taskRemoved) {
     $prevEap = $ErrorActionPreference
@@ -84,17 +92,17 @@ if (-not $taskRemoved) {
     if ($LASTEXITCODE -eq 0) {
         $taskRemoved = $true
     } elseif ($schtasksOut -match 'cannot find|does not exist|not found') {
-        $taskRemoved = $true
+        # nothing to remove — fresh installs use the Run key, not a task
     } elseif ($schtasksOut -match 'Access is denied|access is denied') {
-        Warn "Scheduled task '$TaskName' still registered (access denied)."
-        Warn "Run uninstall again from an elevated PowerShell, or: schtasks /Delete /TN `"$TaskName`" /F"
+        Warn "Legacy scheduled task '$TaskName' still registered (access denied)."
+        Warn "Remove from an elevated PowerShell: schtasks /Delete /TN `"$TaskName`" /F"
     } else {
-        Warn "Could not remove scheduled task '$TaskName' (schtasks exit $LASTEXITCODE)."
+        Warn "Could not remove legacy scheduled task '$TaskName' (schtasks exit $LASTEXITCODE)."
     }
 }
 
 if ($taskRemoved) {
-    Info "Removed scheduled task: $TaskName"
+    Info "Removed legacy scheduled task: $TaskName"
 }
 
 # --- 3. Graceful shutdown via API, then force-kill ---

@@ -97,7 +97,7 @@ fn get_free_apple_vram() -> f32 {
 /// Subtract 512 MB for system/driver overhead.
 fn estimate_nvidia_vram() -> f32 {
     // Try nvidia-smi
-    if let Ok(output) = std::process::Command::new("nvidia-smi")
+    if let Ok(output) = crate::util::subprocess::hidden("nvidia-smi")
         .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
         .output()
         && output.status.success()
@@ -138,7 +138,7 @@ fn estimate_nvidia_vram() -> f32 {
 
 /// NVIDIA free memory
 fn get_free_nvidia_vram() -> f32 {
-    if let Ok(output) = std::process::Command::new("nvidia-smi")
+    if let Ok(output) = crate::util::subprocess::hidden("nvidia-smi")
         .args(["--query-gpu=memory.free", "--format=csv,noheader,nounits"])
         .output()
         && output.status.success()
@@ -155,7 +155,7 @@ fn get_free_nvidia_vram() -> f32 {
 /// Windows AMD: read dedicated VRAM from Win32_VideoController.AdapterRAM.
 #[cfg(target_os = "windows")]
 fn windows_amd_adapter_ram_gb() -> Option<f32> {
-    let output = std::process::Command::new("powershell")
+    let output = crate::util::subprocess::hidden("powershell")
         .args([
             "-NoProfile",
             "-Command",
@@ -189,7 +189,7 @@ fn estimate_amd_vram() -> f32 {
     }
 
     // Try rocm-smi
-    if let Ok(output) = std::process::Command::new("rocm-smi")
+    if let Ok(output) = crate::util::subprocess::hidden("rocm-smi")
         .args(["--showmeminfo", "vram"])
         .output()
         && output.status.success()
@@ -248,7 +248,7 @@ fn get_free_amd_vram() -> f32 {
         return (total - 0.5).max(0.0);
     }
 
-    if let Ok(output) = std::process::Command::new("rocm-smi")
+    if let Ok(output) = crate::util::subprocess::hidden("rocm-smi")
         .args(["--showmeminfo", "vram"])
         .output()
         && output.status.success()

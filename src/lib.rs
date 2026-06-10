@@ -5,3 +5,4 @@ pub mod hardware;
 pub mod logging;
 pub mod model;
 pub mod server;
+pub mod util;

@@ -501,7 +501,9 @@ async fn kill_pid_file_process(pid_file: std::path::PathBuf, graceful: bool) {
 
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("taskkill")
+        // taskkill has no graceful (SIGTERM-like) mode for windowless services.
+        let _ = graceful;
+        let _ = crate::util::subprocess::hidden("taskkill")
             .args(["/F", "/PID", &pid.to_string()])
             .output();
         warn!(pid, "Sent taskkill /F to stale LMForge daemon");
@@ -532,7 +534,7 @@ fn kill_engine_pid_files(data_dir: &std::path::Path) {
 
                 #[cfg(windows)]
                 {
-                    let _ = std::process::Command::new("taskkill")
+                    let _ = crate::util::subprocess::hidden("taskkill")
                         .args(["/F", "/PID", &pid.to_string()])
                         .output();
                     warn!(pid, path = %path.display(), "Sent taskkill /F to stale engine process");
@@ -654,7 +656,11 @@ async fn spawn_detached_daemon(api_port: u16, bind_addr: &str) -> Result<()> {
     let exe = argv
         .first()
         .cloned()
-        .or_else(|| std::env::current_exe().ok().map(|p| p.to_string_lossy().into_owned()))
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned())
+        })
         .context("Could not resolve lmforge executable path")?;
 
     let mut cmd = std::process::Command::new(&exe);
@@ -685,10 +691,7 @@ async fn spawn_detached_daemon(api_port: u16, bind_addr: &str) -> Result<()> {
     for i in 0..max_attempts {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         if is_daemon_running(api_port).await {
-            println!(
-                "\n✓ LMForge started at http://{}:{}",
-                bind_addr, api_port
-            );
+            println!("\n✓ LMForge started at http://{}:{}", bind_addr, api_port);
             println!("  Health: http://{}:{}/health", bind_addr, api_port);
             return Ok(());
         }
@@ -736,21 +739,20 @@ fn kill_port_holder_via_lsof(port: u16) {
     #[cfg(windows)]
     {
         // netstat -ano | findstr :<port>  → last column is PID
-        let output = std::process::Command::new("netstat")
+        let output = crate::util::subprocess::hidden("netstat")
             .args(["-ano"])
             .output();
         if let Ok(out) = output {
             let stdout = String::from_utf8_lossy(&out.stdout);
             for line in stdout.lines() {
-                if line.contains(&format!(":{} ", port)) || line.contains(&format!(":{}	", port)) {
-                    if let Some(pid_str) = line.split_whitespace().last() {
-                        if let Ok(pid) = pid_str.trim().parse::<u32>() {
-                            let _ = std::process::Command::new("taskkill")
-                                .args(["/F", "/PID", &pid.to_string()])
-                                .output();
-                            warn!(pid, port, "Sent taskkill /F to port holder (via netstat)");
-                        }
-                    }
+                if (line.contains(&format!(":{} ", port)) || line.contains(&format!(":{}	", port)))
+                    && let Some(pid_str) = line.split_whitespace().last()
+                    && let Ok(pid) = pid_str.trim().parse::<u32>()
+                {
+                    let _ = crate::util::subprocess::hidden("taskkill")
+                        .args(["/F", "/PID", &pid.to_string()])
+                        .output();
+                    warn!(pid, port, "Sent taskkill /F to port holder (via netstat)");
                 }
             }
         }
@@ -899,7 +901,7 @@ fn command_exists(cmd: &str) -> bool {
     }
     #[cfg(windows)]
     {
-        std::process::Command::new("where")
+        crate::util::subprocess::hidden("where")
             .arg(cmd)
             .output()
             .map(|o| o.status.success())

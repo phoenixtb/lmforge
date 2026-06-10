@@ -301,7 +301,7 @@ fn detect_gpu_vendor(os: Os, arch: Arch) -> GpuVendor {
 
 fn check_nvidia_present() -> bool {
     // Try nvidia-smi first
-    if let Ok(output) = std::process::Command::new("nvidia-smi")
+    if let Ok(output) = crate::util::subprocess::hidden("nvidia-smi")
         .arg("--query-gpu=name")
         .arg("--format=csv,noheader")
         .output()
@@ -323,7 +323,7 @@ fn adapter_compat_indicates_amd(stdout: &str) -> bool {
 /// Query Windows video adapter vendors via CIM (shared by AMD/Intel probes).
 #[cfg(target_os = "windows")]
 fn windows_video_adapter_compat() -> Option<String> {
-    let output = std::process::Command::new("powershell")
+    let output = crate::util::subprocess::hidden("powershell")
         .args([
             "-NoProfile",
             "-Command",
@@ -339,7 +339,7 @@ fn windows_video_adapter_compat() -> Option<String> {
 
 fn check_amd_present() -> bool {
     // Check for ROCm SMI
-    if let Ok(output) = std::process::Command::new("rocm-smi").output()
+    if let Ok(output) = crate::util::subprocess::hidden("rocm-smi").output()
         && output.status.success()
     {
         return true;
@@ -389,10 +389,10 @@ fn check_intel_present() -> bool {
         false
     }
     #[cfg(target_os = "windows")]
-    if let Some(stdout) = windows_video_adapter_compat() {
-        return stdout.to_lowercase().contains("intel");
-    } else {
-        return false;
+    {
+        windows_video_adapter_compat()
+            .map(|stdout| stdout.to_lowercase().contains("intel"))
+            .unwrap_or(false)
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
@@ -461,7 +461,7 @@ pub fn derive_os_family(os: Os, is_wsl: bool) -> OsFamily {
 /// Returns the highest cap across all GPUs (`max` so a mixed 4090+5090 box
 /// is treated as Blackwell-capable for tier selection).
 pub fn detect_nvidia_compute_cap() -> Option<ComputeCap> {
-    let output = std::process::Command::new("nvidia-smi")
+    let output = crate::util::subprocess::hidden("nvidia-smi")
         .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
         .output()
         .ok()?;
@@ -488,7 +488,7 @@ pub fn parse_compute_cap(line: &str) -> Option<ComputeCap> {
 
 /// `nvidia-smi -L` lists one line per GPU. Count is the number of non-empty lines.
 fn detect_nvidia_gpu_count() -> u8 {
-    let output = std::process::Command::new("nvidia-smi")
+    let output = crate::util::subprocess::hidden("nvidia-smi")
         .arg("-L")
         .output()
         .ok();
@@ -506,7 +506,9 @@ fn detect_nvidia_gpu_count() -> u8 {
 /// `nvidia-smi` (which reports the *driver*'s embedded runtime).
 fn detect_cuda_runtime_version() -> Option<String> {
     // Try nvcc first
-    if let Ok(output) = std::process::Command::new("nvcc").arg("--version").output()
+    if let Ok(output) = crate::util::subprocess::hidden("nvcc")
+        .arg("--version")
+        .output()
         && output.status.success()
     {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -537,7 +539,9 @@ pub fn parse_nvcc_version(output: &str) -> Option<String> {
 }
 
 fn detect_cuda_runtime_from_smi() -> Option<String> {
-    let output = std::process::Command::new("nvidia-smi").output().ok()?;
+    let output = crate::util::subprocess::hidden("nvidia-smi")
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -566,7 +570,7 @@ pub fn parse_smi_cuda_version(output: &str) -> Option<String> {
 
 /// CUDA *driver* version from `nvidia-smi --query-gpu=driver_version`.
 fn detect_cuda_driver_version() -> Option<String> {
-    let output = std::process::Command::new("nvidia-smi")
+    let output = crate::util::subprocess::hidden("nvidia-smi")
         .args(["--query-gpu=driver_version", "--format=csv,noheader"])
         .output()
         .ok()?;

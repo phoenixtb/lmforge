@@ -39,7 +39,7 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
             }
             #[cfg(windows)]
             {
-                let _ = std::process::Command::new("taskkill")
+                let _ = crate::util::subprocess::hidden("taskkill")
                     .args(["/PID", &pid.to_string()])
                     .output();
             }
@@ -57,7 +57,7 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
                 }
                 #[cfg(windows)]
                 {
-                    let _ = std::process::Command::new("taskkill")
+                    let _ = crate::util::subprocess::hidden("taskkill")
                         .args(["/PID", &pid.to_string(), "/F"])
                         .output();
                 }

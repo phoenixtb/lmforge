@@ -42,6 +42,9 @@ if (-not $Yes) {
 }
 
 function Stop-LmforgeUiProcesses {
+    Get-Process -Name "lmforge-ui","lmforge" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and ($_.Path -like "*\LMForge\*" -or $_.Path -like "*\lmforge-ui*") } |
+        Stop-Process -Force -ErrorAction SilentlyContinue
     Get-Process -Name "lmforge-ui" -ErrorAction SilentlyContinue |
         Stop-Process -Force -ErrorAction SilentlyContinue
     # Tray / child processes can outlive the main window briefly.
