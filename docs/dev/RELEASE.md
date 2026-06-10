@@ -91,7 +91,9 @@ happens via a pre-release first:
    ```
 
    ```bash
-   # macOS / Linux
+   # macOS / Linux — full release-asset + install + UI flow
+   ./scripts/util/test-release-unix.sh vX.Y.Z
+   # core-only alternative:
    LMFORGE_VERSION=vX.Y.Z ./scripts/util/e2e-core.sh
    ```
 
