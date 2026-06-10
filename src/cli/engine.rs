@@ -761,9 +761,16 @@ mod tests {
         let sglang = registry.get("sglang").unwrap();
         let tmp = std::env::temp_dir().join("lmforge_test_engine_cmd_pip");
         let _ = std::fs::remove_dir_all(&tmp);
-        let venv_bin = tmp.join("engines").join("sglang").join("venv").join("bin");
+        // install_state looks for venv\Scripts\python.exe on Windows,
+        // venv/bin/python3 elsewhere.
+        let venv = tmp.join("engines").join("sglang").join("venv");
+        let (venv_bin, python) = if cfg!(windows) {
+            (venv.join("Scripts"), "python.exe")
+        } else {
+            (venv.join("bin"), "python3")
+        };
         std::fs::create_dir_all(&venv_bin).unwrap();
-        std::fs::write(venv_bin.join("python3"), b"#!/bin/sh\n").unwrap();
+        std::fs::write(venv_bin.join(python), b"#!/bin/sh\n").unwrap();
         assert!(install_state(sglang, &tmp));
         std::fs::remove_dir_all(&tmp).unwrap();
     }
@@ -776,7 +783,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         let engines = tmp.join("engines");
         std::fs::create_dir_all(&engines).unwrap();
-        std::fs::write(engines.join("llama-server"), b"#!/bin/sh\n").unwrap();
+        // install_state resolves "llama-server" to "llama-server.exe" on Windows.
+        let bin_name = if cfg!(windows) {
+            "llama-server.exe"
+        } else {
+            "llama-server"
+        };
+        std::fs::write(engines.join(bin_name), b"#!/bin/sh\n").unwrap();
         assert!(install_state(llama, &tmp));
         std::fs::remove_dir_all(&tmp).unwrap();
     }

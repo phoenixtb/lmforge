@@ -865,7 +865,13 @@ mod tests {
     fn index_foreign_path_kept_absolute() {
         let data_dir = make_index_test_dir("foreign_data");
         let models_dir = make_index_test_dir("foreign_models");
-        let foreign = "/some/other/volume/llama-3".to_string();
+        // Must be absolute on the host platform: "/some/..." is drive-relative
+        // on Windows and would get resolved against the current drive.
+        let foreign = if cfg!(windows) {
+            "Z:/some/other/volume/llama-3".to_string()
+        } else {
+            "/some/other/volume/llama-3".to_string()
+        };
 
         let idx = ModelIndex {
             schema_version: 2,

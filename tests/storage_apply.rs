@@ -9,6 +9,11 @@
 //! `pending-migration.json` manifest never touch the real `~/.lmforge`. Env is
 //! process-global, so a mutex serialises the tests that depend on it.
 
+// Holding the env guard across awaits is the whole point (process-global env
+// must stay pinned for the full test). #[tokio::test] runs each test on its
+// own current-thread runtime, so this cannot deadlock.
+#![allow(clippy::await_holding_lock)]
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -52,13 +57,18 @@ fn clear_isolated_env() {
     }
 }
 
-fn setup_env(config_root: &Path, default_data: &Path) {
-    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+/// Acquire the env lock for the WHOLE test (returned guard) and point the
+/// process-global env at the isolated tempdir. Dropping the guard before the
+/// test body finishes would let parallel tests race on LMFORGE_CONFIG /
+/// LMFORGE_DATA_DIR and read each other's manifests.
+fn setup_env(config_root: &Path, default_data: &Path) -> std::sync::MutexGuard<'static, ()> {
+    let g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_isolated_env(config_root, default_data);
+    g
 }
 
+/// Clear the env vars. Caller still holds the guard from `setup_env`.
 fn teardown_env() {
-    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_isolated_env();
 }
 
@@ -150,7 +160,7 @@ fn seed_index(data_dir: &Path, models_dir: &Path, entries: &[(&str, Option<&str>
 #[tokio::test]
 async fn rejects_when_nothing_changes() {
     let root = tempfile::tempdir().unwrap();
-    setup_env(root.path(), &root.path().join("defaultdata"));
+    let _env = setup_env(root.path(), &root.path().join("defaultdata"));
 
     let data = root.path().join("data");
     let models = root.path().join("models");
@@ -170,7 +180,7 @@ async fn rejects_when_nothing_changes() {
 #[tokio::test]
 async fn rejects_overlapping_models_dir() {
     let root = tempfile::tempdir().unwrap();
-    setup_env(root.path(), &root.path().join("defaultdata"));
+    let _env = setup_env(root.path(), &root.path().join("defaultdata"));
 
     let data = root.path().join("data");
     let models = root.path().join("models");
@@ -195,7 +205,7 @@ async fn rejects_overlapping_models_dir() {
 #[tokio::test]
 async fn rejects_unwritable_target() {
     let root = tempfile::tempdir().unwrap();
-    setup_env(root.path(), &root.path().join("defaultdata"));
+    let _env = setup_env(root.path(), &root.path().join("defaultdata"));
 
     let data = root.path().join("data");
     let models = root.path().join("models");
@@ -223,7 +233,7 @@ async fn rejects_unwritable_target() {
 #[tokio::test]
 async fn rejects_when_pull_in_flight() {
     let root = tempfile::tempdir().unwrap();
-    setup_env(root.path(), &root.path().join("defaultdata"));
+    let _env = setup_env(root.path(), &root.path().join("defaultdata"));
 
     let data = root.path().join("data");
     let models = root.path().join("models");
@@ -248,7 +258,7 @@ async fn rejects_when_pull_in_flight() {
 #[tokio::test]
 async fn adopt_writes_scan_manifest_and_persists_config() {
     let root = tempfile::tempdir().unwrap();
-    setup_env(root.path(), &root.path().join("defaultdata"));
+    let _env = setup_env(root.path(), &root.path().join("defaultdata"));
 
     let data = root.path().join("data");
     let old_models = root.path().join("models");
@@ -287,7 +297,7 @@ async fn adopt_writes_scan_manifest_and_persists_config() {
 #[tokio::test]
 async fn delete_removes_old_files_and_clears_index() {
     let root = tempfile::tempdir().unwrap();
-    setup_env(root.path(), &root.path().join("defaultdata"));
+    let _env = setup_env(root.path(), &root.path().join("defaultdata"));
 
     let data = root.path().join("data");
     let old_models = root.path().join("models");
@@ -317,7 +327,7 @@ async fn delete_removes_old_files_and_clears_index() {
 #[tokio::test]
 async fn repull_returns_422_for_models_without_hf_repo() {
     let root = tempfile::tempdir().unwrap();
-    setup_env(root.path(), &root.path().join("defaultdata"));
+    let _env = setup_env(root.path(), &root.path().join("defaultdata"));
 
     let data = root.path().join("data");
     let old_models = root.path().join("models");
@@ -344,7 +354,7 @@ async fn repull_returns_422_for_models_without_hf_repo() {
 #[tokio::test]
 async fn repull_with_ack_queues_repullable_and_drops_rest() {
     let root = tempfile::tempdir().unwrap();
-    setup_env(root.path(), &root.path().join("defaultdata"));
+    let _env = setup_env(root.path(), &root.path().join("defaultdata"));
 
     let data = root.path().join("data");
     let old_models = root.path().join("models");
@@ -386,7 +396,7 @@ async fn repull_with_ack_queues_repullable_and_drops_rest() {
 #[tokio::test]
 async fn data_relocate_copies_regenerable_artifacts() {
     let root = tempfile::tempdir().unwrap();
-    setup_env(root.path(), &root.path().join("defaultdata"));
+    let _env = setup_env(root.path(), &root.path().join("defaultdata"));
 
     let old_data = root.path().join("old-data");
     let new_data = root.path().join("new-data");
@@ -433,7 +443,7 @@ async fn data_relocate_copies_regenerable_artifacts() {
 async fn reset_models_dir_persists_none_and_resolves_default() {
     let root = tempfile::tempdir().unwrap();
     let default_data = root.path().join("defaultdata");
-    setup_env(root.path(), &default_data);
+    let _env = setup_env(root.path(), &default_data);
 
     // Live daemon was using a custom models dir (config field Some).
     let custom_models = root.path().join("custom-weights");
@@ -472,7 +482,7 @@ async fn reset_models_dir_persists_none_and_resolves_default() {
 async fn reset_data_dir_persists_none() {
     let root = tempfile::tempdir().unwrap();
     let default_data = root.path().join("defaultdata");
-    setup_env(root.path(), &default_data);
+    let _env = setup_env(root.path(), &default_data);
 
     let custom_data = root.path().join("custom-data");
     // models_dir explicitly set to a stable path so it's unaffected by the reset.
