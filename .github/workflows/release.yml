@@ -12,12 +12,6 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   REPO: phoenixtb/lmforge
-  # Opt into Node 24 for JS-based actions (actions/checkout, cache,
-  # upload-artifact, download-artifact, setup-node). Node 20 is forced
-  # off the runners on 2026-06-02. Safe to set today — newer runtime is
-  # backward-compatible with the bundled action code.
-  # See: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
@@ -48,13 +42,13 @@ jobs:
             asset_name: lmforge-windows-x86_64.exe
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -90,7 +84,7 @@ jobs:
         shell: pwsh
         run: Copy-Item "target/${{ matrix.target }}/release/lmforge.exe" "${{ matrix.asset_name }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.asset_name }}
           path: ${{ matrix.asset_name }}
@@ -119,19 +113,19 @@ jobs:
             target: x86_64-pc-windows-msvc
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: "npm"
           cache-dependency-path: ui/package-lock.json
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -175,7 +169,7 @@ jobs:
 
       - name: Upload macOS DMG
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: LMForge-UI-${{ matrix.platform }}.dmg
           path: LMForge-UI-${{ matrix.platform }}.dmg
@@ -190,7 +184,7 @@ jobs:
 
       - name: Upload Linux AppImage
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: LMForge-UI-${{ matrix.platform }}.AppImage
           path: LMForge-UI-${{ matrix.platform }}.AppImage
@@ -206,7 +200,7 @@ jobs:
 
       - name: Upload Windows installer
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: LMForge-UI-${{ matrix.platform }}.exe
           path: LMForge-UI-${{ matrix.platform }}.exe
@@ -234,10 +228,10 @@ jobs:
             asset: lmforge-windows-x86_64.exe
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download core artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ${{ matrix.asset }}
           path: dist/
@@ -275,7 +269,7 @@ jobs:
 
       - name: Upload daemon logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: e2e-gate-logs-${{ matrix.os }}
           path: |
@@ -293,10 +287,10 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: artifacts/
           merge-multiple: true
