@@ -48,7 +48,9 @@ Step "release binary on GitHub" {
     $url = "https://github.com/phoenixtb/lmforge/releases/download/$Version/lmforge-windows-x86_64.exe"
     $r = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing
     if ($r.StatusCode -ne 200) { throw "binary HEAD failed" }
-    if ([int64]$r.Headers["Content-Length"] -lt 1MB) { throw "binary too small" }
+    # PS7 returns headers as string[]; PS5.1 as string. Normalize before casting.
+    $len = [int64]($r.Headers["Content-Length"] | Select-Object -First 1)
+    if ($len -lt 1MB) { throw "binary too small ($len bytes)" }
 }
 
 if (-not $SkipUninstall) {
