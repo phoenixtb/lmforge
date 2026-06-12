@@ -142,12 +142,23 @@ async fn status_bridge(app: tauri::AppHandle) {
     }
 }
 
+/// Build a `lmforge` command that never flashes a console window on Windows.
+/// The UI is a GUI-subsystem app; spawning a console-subsystem exe without
+/// CREATE_NO_WINDOW makes Windows allocate a visible console for it.
+fn lmforge_command(bin: &str) -> tokio::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = tokio::process::Command::new(bin);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    cmd
+}
+
 /// Tauri command: start the LMForge engine (called from the "Engine offline" screen).
 /// Uses `lmforge start` which is idempotent — safe to call even if already running.
 #[tauri::command]
 async fn start_engine() -> Result<String, String> {
     let lmforge_bin = find_lmforge_binary();
-    let output = tokio::process::Command::new(&lmforge_bin)
+    let output = lmforge_command(&lmforge_bin)
         .arg("start")
         .output()
         .await
@@ -173,7 +184,7 @@ async fn restart_engine() -> Result<String, String> {
     let lmforge_bin = find_lmforge_binary();
 
     if is_service_installed(&lmforge_bin).await {
-        let output = tokio::process::Command::new(&lmforge_bin)
+        let output = lmforge_command(&lmforge_bin)
             .args(["service", "restart"])
             .output()
             .await
@@ -188,13 +199,10 @@ async fn restart_engine() -> Result<String, String> {
     }
 
     // Foreground mode: graceful stop + start.
-    let _ = tokio::process::Command::new(&lmforge_bin)
-        .arg("stop")
-        .output()
-        .await;
+    let _ = lmforge_command(&lmforge_bin).arg("stop").output().await;
     tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
 
-    let output = tokio::process::Command::new(&lmforge_bin)
+    let output = lmforge_command(&lmforge_bin)
         .arg("start")
         .output()
         .await
@@ -215,7 +223,7 @@ async fn restart_engine() -> Result<String, String> {
 #[tauri::command]
 async fn restart_service() -> Result<String, String> {
     let lmforge_bin = find_lmforge_binary();
-    let output = tokio::process::Command::new(&lmforge_bin)
+    let output = lmforge_command(&lmforge_bin)
         .args(["service", "restart"])
         .output()
         .await
@@ -234,7 +242,7 @@ async fn restart_service() -> Result<String, String> {
 #[tauri::command]
 async fn get_service_status() -> serde_json::Value {
     let lmforge_bin = find_lmforge_binary();
-    match tokio::process::Command::new(&lmforge_bin)
+    match lmforge_command(&lmforge_bin)
         .args(["service", "status"])
         .output()
         .await
@@ -254,7 +262,7 @@ async fn get_service_status() -> serde_json::Value {
 
 /// Check if a LMForge service unit is installed on this host.
 async fn is_service_installed(lmforge_bin: &str) -> bool {
-    match tokio::process::Command::new(lmforge_bin)
+    match lmforge_command(lmforge_bin)
         .args(["service", "status"])
         .output()
         .await
