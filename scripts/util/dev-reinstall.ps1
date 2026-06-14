@@ -50,6 +50,9 @@ function Die     { param($m, $code = 1) Write-Host "  [x] $m" -ForegroundColor R
 
 $RepoRoot   = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $Profile    = if ($Debug) { "debug" } else { "release" }
+# A custom data dir is pinned into config at install time via `init --data-dir`
+# (the data dir is fixed per machine — only the models dir is relocatable later).
+$CustomDataDir = [bool]$DataDir
 $DataDir    = if ($DataDir) { $DataDir } else { "$env:USERPROFILE\.lmforge" }
 $InstallDir = "$env:LOCALAPPDATA\lmforge\bin"
 $CoreBin    = "$InstallDir\lmforge.exe"
@@ -138,7 +141,7 @@ if (-not $SkipCore) {
 
     if (-not $NoInit) {
         Section "[5] lmforge init (hardware probe + engine bundle)"
-        & $CoreBin init
+        if ($CustomDataDir) { & $CoreBin init --data-dir $DataDir } else { & $CoreBin init }
         if ($LASTEXITCODE -ne 0) { Die "lmforge init failed" 3 }
         Info "init ok"
     } else {
@@ -169,7 +172,8 @@ if (-not $SkipCore) {
 
     if (-not $NoStart) {
         Section "[6] Start daemon"
-        Start-Process -FilePath $CoreBin -ArgumentList "start" -WindowStyle Hidden
+        $startArgs = if ($CustomDataDir) { @("start", "--data-dir", $DataDir) } else { @("start") }
+        Start-Process -FilePath $CoreBin -ArgumentList $startArgs -WindowStyle Hidden
         if (Wait-Health 60) { Info "daemon healthy at $Api" }
         else { Warn "daemon not healthy in 60s - check $DataDir\logs\daemon.err.log" }
 

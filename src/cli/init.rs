@@ -10,6 +10,25 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
 
     // Ensure data directory exists
     let data_dir = config.data_dir();
+
+    // Install-time data_dir pin: when invoked as `lmforge init --data-dir <path>`,
+    // persist that choice into the bootstrap config.toml so every later
+    // `lmforge start` (manual, service, autostart) resolves the same directory.
+    // data_dir is install-time only and intentionally not relocatable at runtime
+    // (it holds non-portable engine venvs), so this is the single point that
+    // writes it. Without a `--data-dir` override the field is left as-is.
+    if let Some(override_dir) = config.data_dir_override() {
+        let override_str = override_dir.to_string_lossy().to_string();
+        if config.data_dir.as_deref() != Some(override_str.as_str()) {
+            let mut persisted = config.clone();
+            persisted.data_dir = Some(override_str);
+            persisted
+                .save()
+                .context("Failed to persist install-time data_dir to config")?;
+            info!(data_dir = %override_dir.display(), "Pinned install-time data_dir into config.toml");
+        }
+    }
+
     // Always ensure all expected subdirs exist — create_dir_all is idempotent.
     // This also re-creates any dirs that uninstall-core.sh removed (e.g. engines/).
     let models_dir = config.models_dir();

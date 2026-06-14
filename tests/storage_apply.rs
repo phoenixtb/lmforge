@@ -170,7 +170,10 @@ async fn rejects_when_nothing_changes() {
     let (status, json) = call(state, serde_json::json!({})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
-        json["error"].as_str().unwrap().contains("Neither"),
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains("models_dir not changed"),
         "got: {json}"
     );
 
@@ -391,52 +394,6 @@ async fn repull_with_ack_queues_repullable_and_drops_rest() {
     teardown_env();
 }
 
-// ── data dir relocate ────────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn data_relocate_copies_regenerable_artifacts() {
-    let root = tempfile::tempdir().unwrap();
-    let _env = setup_env(root.path(), &root.path().join("defaultdata"));
-
-    let old_data = root.path().join("old-data");
-    let new_data = root.path().join("new-data");
-    let models = root.path().join("models");
-    std::fs::create_dir_all(&old_data).unwrap();
-    std::fs::write(
-        old_data.join("models.json"),
-        br#"{"schema_version":2,"models":[]}"#,
-    )
-    .unwrap();
-    std::fs::write(old_data.join("hardware.json"), b"{}").unwrap();
-    // Engines dir must NOT be copied.
-    std::fs::create_dir_all(old_data.join("engines/llamacpp")).unwrap();
-
-    // models_dir explicitly set so it does not follow data_dir.
-    let (state, _rx) = make_state(old_data.clone(), models.clone());
-
-    let (status, _json) = call(
-        state,
-        serde_json::json!({
-            "data_dir": new_data.to_string_lossy(),
-            "data_action": "relocate",
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-
-    assert!(new_data.join("models.json").exists(), "models.json copied");
-    assert!(
-        new_data.join("hardware.json").exists(),
-        "hardware.json copied"
-    );
-    assert!(
-        !new_data.join("engines").exists(),
-        "engines/ must NOT be relocated (venvs are not portable)"
-    );
-
-    teardown_env();
-}
-
 // ── reset-to-default ─────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -473,33 +430,6 @@ async fn reset_models_dir_persists_none_and_resolves_default() {
         manifest.models_dir.as_deref(),
         Some(expected.to_string_lossy().as_ref()),
         "reset must resolve to the default models dir under data_dir"
-    );
-
-    teardown_env();
-}
-
-#[tokio::test]
-async fn reset_data_dir_persists_none() {
-    let root = tempfile::tempdir().unwrap();
-    let default_data = root.path().join("defaultdata");
-    let _env = setup_env(root.path(), &default_data);
-
-    let custom_data = root.path().join("custom-data");
-    // models_dir explicitly set to a stable path so it's unaffected by the reset.
-    let models = root.path().join("models");
-    std::fs::create_dir_all(&custom_data).unwrap();
-    let (state, _rx) = make_state(custom_data.clone(), models.clone());
-
-    let (status, json) = call(
-        state.clone(),
-        serde_json::json!({ "reset_data_dir": true, "data_action": "keep" }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "got: {json}");
-
-    assert!(
-        state.config.read().await.data_dir.is_none(),
-        "data_dir field must be reset to None"
     );
 
     teardown_env();

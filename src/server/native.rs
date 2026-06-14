@@ -707,8 +707,7 @@ pub async fn model_delete(
 /// from the live AppState dirs (i.e. a UI change is pending a restart).
 pub async fn config_get(State(state): State<AppState>) -> impl IntoResponse {
     let config = state.config.read().await;
-    let restart_required =
-        config.data_dir() != state.data_dir || config.models_dir() != state.models_dir;
+    let restart_required = config.models_dir() != state.models_dir;
 
     let mut val: serde_json::Value =
         serde_json::to_value(&*config).unwrap_or(serde_json::Value::Object(Default::default()));
@@ -731,7 +730,7 @@ pub async fn config_update(
     State(state): State<AppState>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    let req: crate::config::LmForgeConfig = match serde_json::from_slice(&body) {
+    let mut req: crate::config::LmForgeConfig = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => {
             return Response::builder()
@@ -744,6 +743,12 @@ pub async fn config_update(
                 .unwrap();
         }
     };
+
+    // `data_dir` is fixed at install time and is not relocatable at runtime
+    // (it holds non-portable engine venvs). Force-preserve the existing value so
+    // a client cannot move it through this endpoint; only `lmforge init
+    // --data-dir` at install time may set it. `models_dir` stays changeable.
+    req.data_dir = state.config.read().await.data_dir.clone();
 
     // Update in-memory state
     {
@@ -771,7 +776,6 @@ pub async fn config_update(
     let restart_required = {
         let cfg = state.config.read().await;
         let new_models_dir = cfg.models_dir();
-        let new_data_dir = cfg.data_dir();
         let mut changed = false;
         if new_models_dir != state.models_dir {
             changed = true;
@@ -781,19 +785,6 @@ pub async fn config_update(
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(format!(
                         r#"{{"error":"models_dir not usable: {}"}}"#,
-                        e.to_string().replace('"', "'")
-                    )))
-                    .unwrap();
-            }
-        }
-        if new_data_dir != state.data_dir {
-            changed = true;
-            if let Err(e) = ensure_writable_dir(&new_data_dir) {
-                return Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(format!(
-                        r#"{{"error":"data_dir not usable: {}"}}"#,
                         e.to_string().replace('"', "'")
                     )))
                     .unwrap();
@@ -844,16 +835,14 @@ pub async fn config_update(
         .unwrap()
 }
 
-/// `POST /lf/storage/apply` — Apply a storage directory change with migration intent.
+/// `POST /lf/storage/apply` — Relocate the model weights directory with migration intent.
 ///
 /// Request body (all fields optional):
 /// ```json
 /// {
 ///   "models_dir": "/new/models",    // new models dir (omit to keep unchanged)
-///   "data_dir": "/new/data",        // new data dir (omit to keep unchanged)
+///   "reset_models_dir": false,      // clear back to {data_dir}/models default
 ///   "models_action": "adopt"|"delete"|"repull",  // default: "adopt"
-///   "data_action": "relocate"|"keep",             // default: "keep"
-///   "copy_logs": false,             // copy logs/ when relocating data_dir
 ///   "exclude_from_repull": ["model-id"]  // models to NOT re-download (will be lost)
 /// }
 /// ```
@@ -862,6 +851,10 @@ pub async fn config_update(
 /// - `adopt`: no file op; scan intent written so new dir is indexed on restart.
 /// - `delete`: remove model files from old dir now; new dir empty after restart.
 /// - `repull`: same as delete + queue re-downloads into new dir on next startup.
+///
+/// `data_dir` is fixed at install time and is intentionally NOT relocatable at
+/// runtime (it holds engine venvs that are not portable). Only `models_dir` —
+/// the portable weights library — can be moved here.
 ///
 /// Returns `{ restart_required: true, would_lose: [...] }`. If `models_action`
 /// is `repull` and some models have no `hf_repo` (can't re-download) and they
@@ -874,29 +867,17 @@ pub async fn storage_apply(
     #[derive(serde::Deserialize, Default)]
     struct StorageApplyReq {
         models_dir: Option<String>,
-        data_dir: Option<String>,
         /// Clear `models_dir` back to its built-in default (`{data_dir}/models`).
         /// Takes precedence over `models_dir`.
         #[serde(default)]
         reset_models_dir: bool,
-        /// Clear `data_dir` back to its built-in default (`~/.lmforge`).
-        /// Takes precedence over `data_dir`.
-        #[serde(default)]
-        reset_data_dir: bool,
         #[serde(default = "default_models_action")]
         models_action: String,
-        #[serde(default = "default_data_action")]
-        data_action: String,
-        #[serde(default)]
-        copy_logs: bool,
         #[serde(default)]
         exclude_from_repull: Vec<String>,
     }
     fn default_models_action() -> String {
         "adopt".to_string()
-    }
-    fn default_data_action() -> String {
-        "keep".to_string()
     }
 
     let req: StorageApplyReq = match serde_json::from_slice(&body) {
@@ -928,18 +909,11 @@ pub async fn storage_apply(
             .map(|s| s.to_string())
     };
 
-    // Resulting config FIELD values after this apply (None = built-in default).
-    // `reset_*` wins over an explicit path; absent path leaves the field as-is.
+    // Resulting config FIELD value after this apply (None = built-in default).
+    // `reset_models_dir` wins over an explicit path; absent path leaves it as-is.
     let (cur_data_field, cur_models_field) = {
         let c = state.config.read().await;
         (c.data_dir.clone(), c.models_dir.clone())
-    };
-    let new_data_field = if req.reset_data_dir {
-        None
-    } else if let Some(d) = trimmed(&req.data_dir) {
-        Some(d)
-    } else {
-        cur_data_field
     };
     let new_models_field = if req.reset_models_dir {
         None
@@ -949,20 +923,16 @@ pub async fn storage_apply(
         cur_models_field
     };
 
-    // Resolve the resulting fields to effective paths with the same precedence
-    // the daemon uses at startup (env > field > default). A fresh default config
-    // carries no runtime `--data-dir` override, matching post-restart behavior.
-    let (resolved_new_data_dir, resolved_new_models_dir) =
-        crate::config::LmForgeConfig::resolve_dirs(
-            new_data_field.as_deref(),
-            new_models_field.as_deref(),
-        );
+    // Resolve the resulting field to an effective path with the same precedence
+    // the daemon uses at startup (env > field > default). `data_dir` is the
+    // fixed install-time value and is never changed here, so it is passed
+    // through unchanged as the base for a default `{data_dir}/models`.
+    let (_resolved_data_dir, resolved_new_models_dir) = crate::config::LmForgeConfig::resolve_dirs(
+        cur_data_field.as_deref(),
+        new_models_field.as_deref(),
+    );
 
-    // Preserve no-auto-follow semantics: a data_dir change does NOT silently
-    // relocate a default models_dir here (that would wipe the index). The models
-    // dir is only considered changed when its field was explicitly touched.
     let models_field_touched = req.reset_models_dir || trimmed(&req.models_dir).is_some();
-    let new_data_dir = resolved_new_data_dir;
     let new_models_dir = if models_field_touched {
         resolved_new_models_dir
     } else {
@@ -970,13 +940,9 @@ pub async fn storage_apply(
     };
 
     let models_dir_changed = new_models_dir != old_models_dir;
-    let data_dir_changed = new_data_dir != old_data_dir;
 
-    if !models_dir_changed && !data_dir_changed {
-        return apply_err(
-            StatusCode::BAD_REQUEST,
-            "Neither models_dir nor data_dir changed",
-        );
+    if !models_dir_changed {
+        return apply_err(StatusCode::BAD_REQUEST, "models_dir not changed");
     }
 
     // Overlap checks for models_dir change.
@@ -999,12 +965,6 @@ pub async fn storage_apply(
                 &format!("New models_dir not usable: {e}"),
             );
         }
-    }
-    if data_dir_changed && let Err(e) = ensure_writable_dir(&new_data_dir) {
-        return apply_err(
-            StatusCode::BAD_REQUEST,
-            &format!("New data_dir not usable: {e}"),
-        );
     }
 
     // Load current index before any destructive action.
@@ -1091,55 +1051,15 @@ pub async fn storage_apply(
         let _ = empty_idx.save(&old_data_dir, &old_models_dir);
     }
 
-    // Do-now: copy regenerable data artifacts to the new data_dir.
-    if data_dir_changed && req.data_action == "relocate" {
-        for filename in &["models.json", "hardware.json"] {
-            let src = old_data_dir.join(filename);
-            let dst = new_data_dir.join(filename);
-            if src.exists()
-                && let Err(e) = std::fs::copy(&src, &dst)
-            {
-                warn!(src = %src.display(), dst = %dst.display(), error = %e, "Copy failed during data_dir relocation");
-            }
-        }
-        if req.copy_logs {
-            let src_logs = old_data_dir.join("logs");
-            let dst_logs = new_data_dir.join("logs");
-            if src_logs.exists() {
-                let _ = copy_dir_all(&src_logs, &dst_logs);
-            }
-        }
-        // Engines NOT copied — venvs are not relocatable. Warn in the manifest.
-        info!(
-            old = %old_data_dir.display(),
-            new = %new_data_dir.display(),
-            "data_dir relocated (models.json + hardware.json). \
-             Engines need reinstall: run `lmforge init` after restart."
-        );
-    }
-
     // Determine migration intent for the startup drain.
-    let intent = if models_dir_changed {
-        match req.models_action.as_str() {
-            "repull" => crate::model::migration::MigrationIntent::Repull,
-            _ => crate::model::migration::MigrationIntent::Scan,
-        }
-    } else {
-        crate::model::migration::MigrationIntent::None
+    let intent = match req.models_action.as_str() {
+        "repull" => crate::model::migration::MigrationIntent::Repull,
+        _ => crate::model::migration::MigrationIntent::Scan,
     };
 
     let manifest = crate::model::migration::PendingMigration {
         version: 1,
-        models_dir: if models_dir_changed {
-            Some(new_models_dir.to_string_lossy().to_string())
-        } else {
-            None
-        },
-        data_dir: if data_dir_changed {
-            Some(new_data_dir.to_string_lossy().to_string())
-        } else {
-            None
-        },
+        models_dir: Some(new_models_dir.to_string_lossy().to_string()),
         intent,
         repull_queue,
     };
@@ -1152,13 +1072,13 @@ pub async fn storage_apply(
         );
     }
 
-    // Persist new dirs to the bootstrap config.toml. Assigning the resolved
-    // field values (including `None` for a reset-to-default) ensures a cleared
-    // directory is actually written back as "use the built-in default".
+    // Persist the new models_dir to the bootstrap config.toml. Assigning the
+    // resolved field value (including `None` for a reset-to-default) ensures a
+    // cleared directory is written back as "use the built-in default".
+    // `data_dir` is left untouched — it is fixed at install time.
     {
         let mut config = state.config.write().await;
         config.models_dir = new_models_field.clone();
-        config.data_dir = new_data_field.clone();
         if let Err(e) = config.save() {
             error!(error = %e, "Failed to save config after storage apply");
             return apply_err(
@@ -1170,10 +1090,7 @@ pub async fn storage_apply(
 
     info!(
         models_action = %req.models_action,
-        data_action = %req.data_action,
-        models_dir_changed,
-        data_dir_changed,
-        "Storage apply complete — restart required to activate new dirs"
+        "Storage apply complete — restart required to activate new models_dir"
     );
 
     Response::builder()
@@ -1200,23 +1117,8 @@ fn apply_err(status: StatusCode, msg: &str) -> Response<Body> {
         .unwrap()
 }
 
-fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        let dst_path = dst.join(entry.file_name());
-        if ty.is_dir() {
-            copy_dir_all(&entry.path(), &dst_path)?;
-        } else {
-            std::fs::copy(entry.path(), dst_path)?;
-        }
-    }
-    Ok(())
-}
-
 /// Create `dir` (recursively) if missing and verify it is writable by touching
-/// a temp probe file. Used when relocating data/models dirs via the config API
+/// a temp probe file. Used when relocating the models dir via the storage API
 /// so failures surface immediately instead of on the next pull after restart.
 fn ensure_writable_dir(dir: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
@@ -1240,21 +1142,6 @@ mod tests {
             !target.join(".lmforge-write-probe").exists(),
             "probe file must be removed after the check"
         );
-    }
-
-    #[test]
-    fn copy_dir_all_copies_nested_tree() {
-        let src = tempfile::tempdir().unwrap();
-        let dst = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(src.path().join("sub")).unwrap();
-        std::fs::write(src.path().join("a.txt"), b"alpha").unwrap();
-        std::fs::write(src.path().join("sub/b.txt"), b"beta").unwrap();
-
-        let dst_root = dst.path().join("copied");
-        copy_dir_all(src.path(), &dst_root).expect("copy must succeed");
-
-        assert_eq!(std::fs::read(dst_root.join("a.txt")).unwrap(), b"alpha");
-        assert_eq!(std::fs::read(dst_root.join("sub/b.txt")).unwrap(), b"beta");
     }
 
     #[test]

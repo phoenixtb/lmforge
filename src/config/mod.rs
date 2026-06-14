@@ -297,6 +297,14 @@ impl LmForgeConfig {
     ///
     /// Precedence: runtime `data_dir_path` override (CLI flag / env, set in
     /// [`load`]) > `data_dir` config field > `LMFORGE_DATA_DIR` env > `~/.lmforge`.
+    /// The runtime `--data-dir` / `LMFORGE_DATA_DIR` override (set in [`load`]),
+    /// if one is active. `None` means the data dir comes from the config field
+    /// or the built-in default. Used by `lmforge init` to pin an install-time
+    /// `--data-dir` choice into the persisted config.
+    pub fn data_dir_override(&self) -> Option<&std::path::Path> {
+        self.data_dir_path.as_deref()
+    }
+
     pub fn data_dir(&self) -> PathBuf {
         if let Some(ref p) = self.data_dir_path {
             return p.clone();

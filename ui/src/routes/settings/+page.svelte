@@ -26,20 +26,15 @@
   let restartNeeded = $state(false);
 
   // ── Storage change flow ──────────────────────────────────────────────────────
-  /** New path values being edited (before the user hits Apply). */
+  // Only models_dir is relocatable at runtime; data_dir is fixed at install time.
+  /** New path value being edited (before the user hits Apply). */
   let pendingModelsDir = $state('');
-  let pendingDataDir   = $state('');
 
   type ModelsAction = 'adopt' | 'delete' | 'repull';
-  type DataAction   = 'relocate' | 'keep';
   let modelsAction = $state<ModelsAction>('adopt');
-  let dataAction   = $state<DataAction>('keep');
-  let copyLogs     = $state(false);
 
-  /** Whether any of the storage paths were edited by the user. */
-  let storageEdited = $derived(
-    pendingModelsDir !== modelsDir || pendingDataDir !== dataDir
-  );
+  /** Whether the models path was edited by the user. */
+  let storageEdited = $derived(pendingModelsDir !== modelsDir);
   let applyingStorage = $state(false);
 
   /** Models that would be permanently lost during repull (no hf_repo). */
@@ -115,30 +110,21 @@
 
     applyingStorage = true;
     try {
-      const mdChanged = pendingModelsDir !== modelsDir;
-      const ddChanged = pendingDataDir !== dataDir;
       // Clearing a previously-custom dir means "reset to default".
-      const resetModels = mdChanged && pendingModelsDir.trim() === '';
-      const resetData   = ddChanged && pendingDataDir.trim()   === '';
+      const resetModels = pendingModelsDir.trim() === '';
       const res = await applyStorage({
-        models_dir: mdChanged && !resetModels ? pendingModelsDir.trim() : undefined,
-        data_dir:   ddChanged && !resetData   ? pendingDataDir.trim()   : undefined,
+        models_dir: !resetModels ? pendingModelsDir.trim() : undefined,
         reset_models_dir: resetModels,
-        reset_data_dir:   resetData,
         models_action: modelsAction,
-        data_action:   dataAction,
-        copy_logs: copyLogs,
         exclude_from_repull: lossConfirmed ? wouldLose : [],
       });
 
       if (res.restart_required) {
         restartNeeded = true;
-        // Apply the new paths to the live state.
+        // Apply the new path to the live state.
         modelsDir = pendingModelsDir;
-        dataDir   = pendingDataDir;
         // Reset editing state.
         modelsAction = 'adopt';
-        dataAction   = 'keep';
         lossConfirmed = false;
         wouldLose = [];
         showRestartModal = true;
@@ -165,7 +151,6 @@
       dataDir    = (cfg.data_dir    as string) ?? '';
       modelsDir  = (cfg.models_dir  as string) ?? '';
       pendingModelsDir = modelsDir;
-      pendingDataDir   = dataDir;
       restartNeeded = !!cfg.restart_required;
     } catch (e) {
       toast.error(`Failed to load config: ${e}`);
@@ -348,9 +333,9 @@
         <section class="settings-section">
           <h2 class="section-title">Storage Locations</h2>
           <p class="section-desc">
-            Control where LMForge keeps model weights and its data root. Point
-            <strong>Models</strong> at a shared volume (e.g. a virtio-fs mount) to reuse one
-            weights library across VMs. A daemon restart is required for changes to take effect.
+            Point <strong>Models</strong> at a shared volume (e.g. a virtio-fs mount) to reuse one
+            weights library across VMs. The data root is fixed at install time. A daemon restart
+            is required for a models-dir change to take effect.
           </p>
 
           {#if restartNeeded && !showRestartModal}
@@ -417,72 +402,40 @@
             </div>
           </div>
 
-          <!-- Data directory -->
+          <!-- Data directory (read-only — fixed at install time) -->
           <div class="setting-row">
             <div class="setting-label-group">
-              <label class="setting-label" for="data-dir-input">Data directory</label>
+              <label class="setting-label" for="data-dir-display">Data directory</label>
               <span class="setting-hint">
                 Engines, logs, and the model index (<code>models.json</code>) live here.
-                Keep this local per machine. Leave blank for the default <code>~/.lmforge</code>.
+                Set at install time and kept local per machine — to move it, reinstall
+                with <code>lmforge init --data-dir &lt;path&gt;</code>.
               </span>
             </div>
             <div class="setting-control">
               <div class="path-input-row">
                 <input
-                  id="data-dir-input"
+                  id="data-dir-display"
                   type="text"
                   class="path-input"
-                  placeholder="(default ~/.lmforge)"
-                  bind:value={pendingDataDir}
+                  value={dataDir || '~/.lmforge'}
+                  readonly
                 />
-                <button class="btn btn--ghost btn--sm" onclick={async () => {
-                  const p = await browseDir('Select data directory');
-                  if (p) pendingDataDir = p;
-                }}>Browse…</button>
-                {#if dataDir && pendingDataDir !== ''}
-                  <button
-                    class="btn btn--ghost btn--sm"
-                    title="Clear to the built-in default (~/.lmforge)"
-                    onclick={() => pendingDataDir = ''}
-                  >Reset to default</button>
-                {/if}
               </div>
-              {#if pendingDataDir !== dataDir}
-                <div class="option-group">
-                  <div class="option-group-label">How to handle the current data directory?</div>
-                  <label class="option-radio">
-                    <input type="radio" bind:group={dataAction} value="keep" />
-                    <span class="option-title">Keep existing data</span>
-                    <span class="option-desc">Old data stays in place; new directory starts fresh. Engines will be re-installed on next init.</span>
-                  </label>
-                  <label class="option-radio">
-                    <input type="radio" bind:group={dataAction} value="relocate" />
-                    <span class="option-title">Copy model index &amp; hardware profile</span>
-                    <span class="option-desc">Copies <code>models.json</code> and <code>hardware.json</code> to the new location. Engines are NOT moved (venvs are not portable) — run <code>lmforge init</code> after restart to reinstall them.</span>
-                  </label>
-                  {#if dataAction === 'relocate'}
-                    <label class="option-checkbox" style="margin-left:20px">
-                      <input type="checkbox" bind:checked={copyLogs} />
-                      <span>Also copy logs/</span>
-                    </label>
-                  {/if}
-                </div>
-              {/if}
             </div>
           </div>
 
-          <!-- Section-level apply bar — applies whichever dir(s) changed. -->
+          <!-- Section-level apply bar — applies the models dir change. -->
           {#if storageEdited}
             <div class="storage-apply-bar">
               <span class="storage-apply-summary">
                 Pending:
-                {#if pendingModelsDir !== modelsDir}<span class="chip">Models dir</span>{/if}
-                {#if pendingDataDir !== dataDir}<span class="chip">Data dir</span>{/if}
+                <span class="chip">Models dir</span>
               </span>
               <div class="storage-apply-actions">
                 <button
                   class="btn btn--ghost btn--sm"
-                  onclick={() => { pendingModelsDir = modelsDir; pendingDataDir = dataDir; modelsAction = 'adopt'; dataAction = 'keep'; }}
+                  onclick={() => { pendingModelsDir = modelsDir; modelsAction = 'adopt'; }}
                 >
                   Cancel
                 </button>
@@ -1234,16 +1187,6 @@ lmforge service status          # show installation status`}</pre>
     grid-row: 2; grid-column: 2;
     font-size: 11px; color: var(--text-2); line-height: 1.4;
   }
-  .option-desc code {
-    font-family: var(--font-mono); font-size: 10.5px;
-    background: var(--surface-3); padding: 1px 4px; border-radius: 3px;
-  }
-  .option-checkbox {
-    display: flex; align-items: center; gap: 8px;
-    font-size: 11.5px; color: var(--text); cursor: pointer;
-    padding: 4px 8px;
-  }
-  .option-checkbox input { accent-color: var(--accent); }
 
   /* Blocking modal */
   .modal-overlay {

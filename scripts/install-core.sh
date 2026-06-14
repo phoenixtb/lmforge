@@ -11,6 +11,10 @@
 #  Environment variables:
 #    LMFORGE_VERSION     Pin a specific version, e.g. "v0.1.0" (default: latest)
 #    LMFORGE_INSTALL_DIR Where to place the binary (default: ~/.local/bin)
+#    LMFORGE_DATA_DIR    Install LMForge's data root (engines, logs, model index)
+#                        at a custom path instead of ~/.lmforge. Pinned into
+#                        config at install time; the data dir is NOT relocatable
+#                        later from the UI (only the models dir is).
 #    LMFORGE_LOCAL_BIN   Path to a locally built lmforge binary — skips the
 #                        GitHub download. Used by the E2E harness/CI.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -240,8 +244,15 @@ if [[ "$(uname -s)" == "Linux" ]] && command -v nvidia-smi &>/dev/null; then
 fi
 
 # ── Init (first-time setup) ───────────────────────────────────────────────────
+# A custom LMFORGE_DATA_DIR is passed to init as --data-dir, which pins it into
+# config.toml so every later `lmforge start` (manual, service) resolves the same
+# directory. Without it, init uses the built-in default (~/.lmforge).
 section "Initializing LMForge..."
-"$INSTALL_DIR/$BINARY_NAME" init
+if [[ -n "${LMFORGE_DATA_DIR:-}" ]]; then
+    "$INSTALL_DIR/$BINARY_NAME" init --data-dir "$LMFORGE_DATA_DIR"
+else
+    "$INSTALL_DIR/$BINARY_NAME" init
+fi
 
 # ── Service install ───────────────────────────────────────────────────────────
 section "Installing system service..."

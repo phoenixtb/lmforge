@@ -261,7 +261,8 @@ export const deleteModel = (id: string): Promise<{ status: string }> =>
 /** Daemon configuration (subset the UI reads/writes; extra fields preserved on round-trip). */
 export interface LfConfig {
   catalogs_dir?: string | null;
-  /** Data root (engines, logs, models.json). null/absent = default ~/.lmforge. */
+  /** Data root (engines, logs, models.json). null/absent = default ~/.lmforge.
+   *  Fixed at install time (`lmforge init --data-dir`); read-only in the UI. */
   data_dir?: string | null;
   /** Model weights directory. null/absent = {data_dir}/models. */
   models_dir?: string | null;
@@ -280,22 +281,15 @@ export const postConfig = (
 /** POST /lf/shutdown — graceful daemon shutdown */
 export const shutdown = (): Promise<{ status: string }> => post('/lf/shutdown');
 
-/** Request body for POST /lf/storage/apply */
+/** Request body for POST /lf/storage/apply.
+ *  Only the models directory is relocatable; data_dir is fixed at install time. */
 export interface StorageApplyRequest {
   /** New models directory (absolute path). Omit to keep current. */
   models_dir?: string | null;
-  /** New data directory (absolute path). Omit to keep current. */
-  data_dir?: string | null;
   /** Reset models_dir to its built-in default ({data_dir}/models). Wins over models_dir. */
   reset_models_dir?: boolean;
-  /** Reset data_dir to its built-in default (~/.lmforge). Wins over data_dir. */
-  reset_data_dir?: boolean;
   /** How to handle existing models in the old models_dir. Default: "adopt". */
   models_action?: 'adopt' | 'delete' | 'repull';
-  /** How to handle regenerable artifacts in the old data_dir. Default: "keep". */
-  data_action?: 'relocate' | 'keep';
-  /** Copy logs/ when relocating data_dir. Default: false. */
-  copy_logs?: boolean;
   /** Model IDs to skip re-downloading (they will be lost). Only relevant for models_action="repull". */
   exclude_from_repull?: string[];
 }

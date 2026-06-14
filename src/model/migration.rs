@@ -8,8 +8,6 @@ pub struct PendingMigration {
     pub version: u32,
     /// New models directory (absolute path string). None = unchanged.
     pub models_dir: Option<String>,
-    /// New data directory (absolute path string). None = unchanged.
-    pub data_dir: Option<String>,
     pub intent: MigrationIntent,
     /// For `Repull` intent: ordered list of models to re-download.
     pub repull_queue: Vec<RepullEntry>,
@@ -75,7 +73,6 @@ mod tests {
         PendingMigration {
             version: 1,
             models_dir: Some("/srv/shared/models".to_string()),
-            data_dir: None,
             intent,
             repull_queue: queue,
         }
@@ -124,15 +121,14 @@ mod tests {
     fn manifest_version_is_preserved() {
         let m = PendingMigration {
             version: 42,
-            models_dir: None,
-            data_dir: Some("/tmp/data".to_string()),
+            models_dir: Some("/tmp/models".to_string()),
             intent: MigrationIntent::None,
             repull_queue: vec![],
         };
         let json = serde_json::to_string(&m).unwrap();
         let back: PendingMigration = serde_json::from_str(&json).unwrap();
         assert_eq!(back.version, 42);
-        assert_eq!(back.data_dir.as_deref(), Some("/tmp/data"));
+        assert_eq!(back.models_dir.as_deref(), Some("/tmp/models"));
     }
 
     // ── file I/O round-trip (save + load + clear) ───────────────────────────────

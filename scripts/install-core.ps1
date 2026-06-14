@@ -9,6 +9,10 @@
 #
 # Environment variables:
 #   LMFORGE_VERSION     Pin a specific version, e.g. "v0.3.1" (default: latest)
+#   LMFORGE_DATA_DIR    Install LMForge's data root (engines, logs, model index)
+#                       at a custom path instead of %USERPROFILE%\.lmforge. This
+#                       is pinned into config at install time; the data dir is
+#                       NOT relocatable later from the UI (only the models dir is).
 #   LMFORGE_LOCAL_BIN   Path to a locally built lmforge.exe — skips the GitHub
 #                       download. Used by the E2E harness/CI; not for end users.
 # =============================================================================
@@ -134,8 +138,11 @@ Remove-Item $TmpExe -ErrorAction SilentlyContinue
 Success "Binary installed to $InstallDir\$Binary"
 
 # --- Post-install: data directories ---
-Info "Creating LMForge data directories..."
-$DataDir = "$env:USERPROFILE\.lmforge"
+# Honor a custom data root (LMFORGE_DATA_DIR). When set, it is passed to
+# `lmforge init --data-dir` below, which pins it into config.toml so every later
+# `lmforge start` (manual, autostart) resolves the same directory.
+$DataDir = if ($env:LMFORGE_DATA_DIR) { $env:LMFORGE_DATA_DIR } else { "$env:USERPROFILE\.lmforge" }
+Info "Creating LMForge data directories at $DataDir ..."
 @("models", "engines", "logs") | ForEach-Object {
     New-Item -ItemType Directory -Path "$DataDir\$_" -Force | Out-Null
 }
@@ -154,7 +161,11 @@ if ($UserPath -notlike "*$InstallDir*") {
 
 # --- Init + Service install ---
 Info "Running lmforge init..."
-& "$InstallDir\$Binary" init
+if ($env:LMFORGE_DATA_DIR) {
+    & "$InstallDir\$Binary" init --data-dir $env:LMFORGE_DATA_DIR
+} else {
+    & "$InstallDir\$Binary" init
+}
 
 Info "Registering auto-start at logon (HKCU Run key)..."
 $ServiceRegistered = $true
