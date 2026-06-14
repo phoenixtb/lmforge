@@ -1052,24 +1052,20 @@ fn vulkan_loader_available(os: Os) -> bool {
 fn detect_windows_cuda_variant() -> String {
     if let Ok(output) = crate::util::subprocess::hidden("nvidia-smi").output()
         && let Ok(stdout) = String::from_utf8(output.stdout)
+        && let Some(ver_str) = crate::hardware::probe::parse_smi_cuda_version(&stdout)
     {
-        for line in stdout.lines() {
-            if let Some(idx) = line.find("CUDA Version:") {
-                let ver_str = line[idx + 13..].trim();
-                let major: u32 = ver_str
-                    .split('.')
-                    .next()
-                    .unwrap_or("12")
-                    .parse()
-                    .unwrap_or(12);
-                let variant = if major >= 13 { "13.1" } else { "12.4" };
-                debug!(
-                    cuda_version = ver_str,
-                    variant, "Detected Windows CUDA variant"
-                );
-                return variant.to_string();
-            }
-        }
+        let major: u32 = ver_str
+            .split('.')
+            .next()
+            .unwrap_or("12")
+            .parse()
+            .unwrap_or(12);
+        let variant = if major >= 13 { "13.1" } else { "12.4" };
+        info!(
+            cuda_version = ver_str,
+            variant, "Detected Windows CUDA variant from nvidia-smi"
+        );
+        return variant.to_string();
     }
     warn!("Could not detect CUDA version via nvidia-smi; defaulting to CUDA 12.4 variant");
     "12.4".to_string()

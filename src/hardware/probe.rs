@@ -552,14 +552,23 @@ fn detect_cuda_runtime_from_smi() -> Option<String> {
     parse_smi_cuda_version(&stdout)
 }
 
-/// `nvidia-smi` header contains a line like:
-///   `... Driver Version: 580.95.05  CUDA Version: 13.0 ...`
-/// We want the "13.0" part.
+/// Pull the CUDA version out of `nvidia-smi`'s banner, tolerating both header
+/// layouts upstream has shipped:
+///   - older: `... Driver Version: 580.95.05   CUDA Version: 13.0 ...`
+///   - newer (driver 6xx / CUDA 13): `... KMD Version: 610.47   CUDA UMD Version: 13.3 ...`
+///
+/// The newer banner carries two `Version:` tokens (KMD + CUDA UMD), so we anchor
+/// on `CUDA` first and read the `Version:` that follows it — matching both forms
+/// and never mistaking the KMD/driver version for the CUDA one.
 pub fn parse_smi_cuda_version(output: &str) -> Option<String> {
     for line in output.lines() {
-        if let Some(idx) = line.find("CUDA Version:") {
-            let rest = line[idx + "CUDA Version:".len()..].trim_start();
-            let v: String = rest
+        let Some(cuda_idx) = line.find("CUDA") else {
+            continue;
+        };
+        let after_cuda = &line[cuda_idx..];
+        if let Some(vidx) = after_cuda.find("Version:") {
+            let v: String = after_cuda[vidx + "Version:".len()..]
+                .trim_start()
                 .chars()
                 .take_while(|c| c.is_ascii_digit() || *c == '.')
                 .collect();
@@ -807,6 +816,16 @@ mod tests {
     fn test_parse_smi_cuda_version_cuda_12() {
         let smi = "| NVIDIA-SMI 535.171.04             Driver Version: 535.171.04   CUDA Version: 12.2     |\n";
         assert_eq!(parse_smi_cuda_version(smi), Some("12.2".to_string()));
+    }
+
+    #[test]
+    fn test_parse_smi_cuda_version_new_umd_header() {
+        // Driver 6xx / CUDA 13 banner uses `KMD Version` + `CUDA UMD Version`.
+        // The KMD `Version:` must NOT be mistaken for the CUDA one.
+        let smi = "+-----------------------------------------------------------------------------------------+\n\
+                   | NVIDIA-SMI 610.47                 KMD Version: 610.47        CUDA UMD Version: 13.3     |\n\
+                   +-----------------------------------------+------------------------+----------------------+\n";
+        assert_eq!(parse_smi_cuda_version(smi), Some("13.3".to_string()));
     }
 
     #[test]
