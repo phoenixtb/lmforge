@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use tokio::process::Command;
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, info, warn};
 
@@ -240,7 +239,9 @@ impl EngineAdapter for LlamacppAdapter {
             "Spawning llama-server"
         );
 
-        let mut cmd = Command::new(&executable);
+        // hidden_tokio: on Windows the engine must not pop a console window
+        // (the daemon itself is windowless; a console child allocates one).
+        let mut cmd = crate::util::subprocess::hidden_tokio(&executable);
         cmd.args(&args)
             .stdout(std::process::Stdio::from(stdout_file))
             // Pipe stderr through a tee task so we can scan for

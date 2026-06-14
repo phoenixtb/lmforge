@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use tokio::process::Command;
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, error, info, warn};
 
@@ -97,7 +96,7 @@ impl EngineAdapter for SglangAdapter {
         let python = self.resolve_python(data_dir);
         debug!(python = %python.display(), "SGLang pull: using interpreter");
 
-        let output = Command::new(&python)
+        let output = crate::util::subprocess::hidden_tokio(&python)
             .args(["-c", &python_snippet])
             .output()
             .await
@@ -211,7 +210,7 @@ impl EngineAdapter for SglangAdapter {
         let python = self.resolve_python(data_dir);
         info!(python = %python.display(), "SGLang start: using interpreter");
 
-        let child = Command::new(&python)
+        let child = crate::util::subprocess::hidden_tokio(&python)
             .args(&args)
             // Future parity params: --tp 2 --chunked-prefill-size
             .stdout(std::process::Stdio::from(stdout_file))

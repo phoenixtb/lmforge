@@ -41,7 +41,6 @@
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use tokio::process::Command;
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, error, info, warn};
 
@@ -160,7 +159,7 @@ impl EngineAdapter for TabbyApiAdapter {
         let python = self.resolve_python(data_dir);
         debug!(python = %python.display(), "TabbyAPI pull: using interpreter");
 
-        let output = Command::new(&python)
+        let output = crate::util::subprocess::hidden_tokio(&python)
             .args(["-c", &python_snippet])
             .output()
             .await
@@ -302,7 +301,7 @@ impl EngineAdapter for TabbyApiAdapter {
         // Process-group isolation — exllamav3 spawns worker processes for
         // tensor-parallel layouts (and a stream-decoder helper even on a
         // single GPU). killpg() on stop catches the lot.
-        let mut command = Command::new(&python);
+        let mut command = crate::util::subprocess::hidden_tokio(&python);
         command
             .arg(main_py.to_string_lossy().as_ref())
             .current_dir(&work_dir)

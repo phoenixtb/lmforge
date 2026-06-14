@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use std::path::Path;
-use tokio::process::Command;
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, info, warn};
 
@@ -83,7 +82,7 @@ impl EngineAdapter for OmlxAdapter {
         let stderr_file =
             crate::logging::rotation::prepare_engine_log(logs_dir, model_id, "stderr")?;
 
-        let child = Command::new(&self.executable)
+        let child = crate::util::subprocess::hidden_tokio(&self.executable)
             .args([
                 "serve",
                 "--port",

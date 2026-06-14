@@ -3,13 +3,14 @@
 //! window unless CREATE_NO_WINDOW is set — the sysinfo poll alone would flash
 //! one every 2 seconds. On Unix this is a plain `Command`.
 
+use std::ffi::OsStr;
 use std::process::Command;
 
 #[cfg(windows)]
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Build a `Command` that never allocates a visible console window.
-pub fn hidden(program: &str) -> Command {
+pub fn hidden(program: impl AsRef<OsStr>) -> Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -22,7 +23,7 @@ pub fn hidden(program: &str) -> Command {
 }
 
 /// Async variant of [`hidden`] for tokio-spawned subprocesses.
-pub fn hidden_tokio(program: &str) -> tokio::process::Command {
+pub fn hidden_tokio(program: impl AsRef<OsStr>) -> tokio::process::Command {
     #[cfg(windows)]
     {
         let mut cmd = tokio::process::Command::new(program);

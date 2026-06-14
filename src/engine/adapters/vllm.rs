@@ -38,7 +38,6 @@
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use tokio::process::Command;
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, error, info, warn};
 
@@ -191,7 +190,7 @@ impl EngineAdapter for VllmAdapter {
         let python = self.resolve_python(data_dir);
         debug!(python = %python.display(), "vLLM pull: using interpreter");
 
-        let output = Command::new(&python)
+        let output = crate::util::subprocess::hidden_tokio(&python)
             .args(["-c", &python_snippet])
             .output()
             .await
@@ -333,7 +332,7 @@ impl EngineAdapter for VllmAdapter {
         // CLI, the EngineCore child is reparented to init and keeps holding
         // ~13 GB of VRAM forever. Putting the spawn in its own process group
         // lets `stop()` killpg() the whole tree at once.
-        let mut command = Command::new(&bin);
+        let mut command = crate::util::subprocess::hidden_tokio(&bin);
         command
             .args(&args)
             .env("PATH", &new_path)
