@@ -338,6 +338,23 @@ fn wait_daemon_health(timeout: std::time::Duration) -> bool {
     false
 }
 
+/// Force-terminate every running `lmforge.exe` EXCEPT the current process.
+///
+/// `taskkill /IM lmforge.exe` matches by image name, so an unfiltered call would
+/// also kill the process executing it — `lmforge service restart`/`stop`/
+/// `uninstall` are themselves lmforge.exe. On restart that self-kill happens in
+/// the stop step, so `service_start()` never runs and the daemon stays down; on
+/// uninstall the Run key removal never runs. The `PID ne <self>` filter excludes
+/// the invoker so the rest of the command can complete.
+#[cfg(windows)]
+fn taskkill_other_lmforge() {
+    let exclude_self = format!("PID ne {}", std::process::id());
+    crate::util::subprocess::hidden("taskkill")
+        .args(["/F", "/IM", "lmforge.exe", "/FI", exclude_self.as_str()])
+        .output()
+        .ok();
+}
+
 /// Spawn `lmforge start` detached (daemon mode). Used when the scheduled task
 /// has not brought /health up yet during install.
 #[cfg(windows)]
@@ -468,11 +485,10 @@ fn install_run_key(exe_path: &str, data_dir: &std::path::Path) -> Result<()> {
 
 #[cfg(windows)]
 fn uninstall_run_key() -> Result<()> {
-    // Stop first (ignore error if not running)
-    crate::util::subprocess::hidden("taskkill")
-        .args(["/F", "/IM", "lmforge.exe"])
-        .output()
-        .ok();
+    // Stop first (ignore error if not running). Must exclude the current
+    // process, otherwise this `lmforge service uninstall` invocation kills
+    // itself before the Run key removal below ever runs.
+    taskkill_other_lmforge();
 
     let _ = crate::util::subprocess::hidden("reg")
         .args(["delete", WINDOWS_RUN_KEY, "/v", WINDOWS_RUN_VALUE, "/f"])
@@ -567,11 +583,8 @@ pub fn service_stop() -> Result<()> {
 
     #[cfg(windows)]
     {
-        // End any running lmforge.exe processes (Run key stays registered)
-        crate::util::subprocess::hidden("taskkill")
-            .args(["/F", "/IM", "lmforge.exe"])
-            .output()
-            .ok();
+        // End any running lmforge.exe processes (Run key stays registered).
+        taskkill_other_lmforge();
         println!("✓ LMForge process terminated.");
     }
 
