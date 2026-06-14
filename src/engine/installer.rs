@@ -673,14 +673,17 @@ async fn install_via_binary(
     // archive. Without it, llama-server.exe fails with "cudart64_*.dll not
     // found" at first chat. Only NVIDIA needs this — AMD and Intel iGPUs on
     // Windows route to the Vulkan build via `resolve_platform()`.
+    // Only pull cudart when we actually selected a CUDA build above. A Windows
+    // NVIDIA box on too-old a driver (or Blackwell without CUDA 13) falls back
+    // to the Vulkan asset, which needs no cudart companion.
     let cudart_archive_path = if profile.os == Os::Windows
         && profile.gpu_vendor == crate::hardware::probe::GpuVendor::Nvidia
+        && let Some(cuda_variant) = windows_cuda_variant(profile)
     {
         if let Some(ref cudart_pattern) = engine.cudart_pattern {
-            let cuda_variant = detect_windows_cuda_variant();
             let cudart_name = format!(
                 "{}.zip",
-                cudart_pattern.replace("{cuda_variant}", &cuda_variant)
+                cudart_pattern.replace("{cuda_variant}", cuda_variant)
             );
             let cudart_url = format!("{}/{}", release_url, cudart_name);
             let cudart_path = engines_dir.join(&cudart_name);
@@ -963,10 +966,12 @@ fn resolve_platform_with_override(
             // NVIDIA — we route NVIDIA users to CUDA explicitly because the
             // throughput delta is meaningful (~15–25% on consumer Ada/Blackwell).
             let p = match effective_gpu {
-                crate::hardware::probe::GpuVendor::Nvidia => {
-                    let cuda_variant = detect_windows_cuda_variant();
-                    format!("win-cuda-{}-x64", cuda_variant)
-                }
+                crate::hardware::probe::GpuVendor::Nvidia => match windows_cuda_variant(profile) {
+                    Some(cuda_variant) => format!("win-cuda-{}-x64", cuda_variant),
+                    // Driver too old for the available CUDA prebuilts, or a
+                    // Blackwell card on a pre-CUDA-13 driver → Vulkan still runs.
+                    None => "win-vulkan-x64".to_string(),
+                },
                 crate::hardware::probe::GpuVendor::Amd
                 | crate::hardware::probe::GpuVendor::Intel => "win-vulkan-x64".to_string(),
                 _ => "win-cpu-x64".to_string(),
@@ -1041,34 +1046,86 @@ fn vulkan_loader_available(os: Os) -> bool {
     }
 }
 
-/// Detect the CUDA runtime version reported by the NVIDIA driver and map it
-/// to one of upstream llama.cpp's Windows CUDA variants. Upstream ships two
-/// variants at b9351:
-///   - `win-cuda-12.4-x64` (CUDA 12.x systems)
-///   - `win-cuda-13.1-x64` (CUDA 13.x systems)
+/// Pick the Windows llama.cpp CUDA variant for this NVIDIA box, or `None` to
+/// fall back to the universal Vulkan build.
 ///
-/// We pick by the driver-reported runtime version. Default = 12.4 (safer
-/// floor — older driver releases are far more common on consumer cards).
-fn detect_windows_cuda_variant() -> String {
-    if let Ok(output) = crate::util::subprocess::hidden("nvidia-smi").output()
-        && let Ok(stdout) = String::from_utf8(output.stdout)
-        && let Some(ver_str) = crate::hardware::probe::parse_smi_cuda_version(&stdout)
-    {
-        let major: u32 = ver_str
-            .split('.')
-            .next()
-            .unwrap_or("12")
-            .parse()
-            .unwrap_or(12);
-        let variant = if major >= 13 { "13.1" } else { "12.4" };
-        info!(
-            cuda_version = ver_str,
-            variant, "Detected Windows CUDA variant from nvidia-smi"
-        );
-        return variant.to_string();
+/// Upstream b9351 ships exactly two Windows CUDA prebuilts:
+///   - `win-cuda-12.4-x64` — CUDA 12.4 toolkit, arch matrix tops out at sm_90.
+///   - `win-cuda-13.1-x64` — CUDA 13.1 toolkit, adds sm_100 / sm_120 (Blackwell).
+///
+/// There is **no 12.8 Windows prebuilt** (that exists only in our self-built
+/// Linux tarball), so Blackwell-class cards (compute capability ≥ sm_100, i.e.
+/// cc major ≥ 10 — covers sm_100 B200 and sm_120/sm_121 consumer) MUST take the
+/// 13.1 build; the 12.4 build has no kernels for them. We never request a 13.3+
+/// asset — 13.1 is the ceiling per the compatibility policy; a newer driver
+/// (e.g. CUDA 13.3) runs the 13.1 build via in-major forward compatibility.
+///
+/// `cc_major` = GPU compute-capability major; `driver_cuda` = the max CUDA
+/// runtime the *driver* supports (from nvidia-smi), `None` if undetectable.
+fn pick_win_cuda_variant(
+    cc_major: Option<u32>,
+    driver_cuda: Option<(u32, u32)>,
+) -> Option<&'static str> {
+    // sm_90 (Hopper) is the last arch the 12.4 build can target. Anything newer
+    // needs the CUDA 13 build.
+    let needs_cuda13 = matches!(cc_major, Some(m) if m >= 10);
+    match driver_cuda {
+        Some(dc) => {
+            if needs_cuda13 {
+                // Blackwell: only the 13.1 build works. If the driver can't run
+                // CUDA 13.1, Vulkan is the only functional path (12.4 is useless).
+                (dc >= (13, 1)).then_some("13.1")
+            } else if dc >= (12, 4) {
+                // Ampere/Ada/Hopper: stick to the stable 12.x line even on a
+                // CUDA 13.x driver (12.4 build runs fine; policy default is 12.x).
+                Some("12.4")
+            } else {
+                // Driver too old to run the 12.4 prebuilt → Vulkan.
+                None
+            }
+        }
+        // nvidia-smi unreadable: assume a modern driver for pre-Blackwell cards
+        // (12.4 default), but never gamble a CUDA build on Blackwell.
+        None => (!needs_cuda13).then_some("12.4"),
     }
-    warn!("Could not detect CUDA version via nvidia-smi; defaulting to CUDA 12.4 variant");
-    "12.4".to_string()
+}
+
+/// Max CUDA runtime the installed NVIDIA driver supports, parsed from
+/// `nvidia-smi`'s banner. This is the *driver* ceiling (what bundled-cudart
+/// prebuilts must stay under), distinct from any locally installed toolkit.
+fn windows_driver_cuda_max() -> Option<(u32, u32)> {
+    let output = crate::util::subprocess::hidden("nvidia-smi")
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let ver = crate::hardware::probe::parse_smi_cuda_version(&stdout)?;
+    let mut parts = ver.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next().and_then(|m| m.parse().ok()).unwrap_or(0);
+    Some((major, minor))
+}
+
+/// Resolve the Windows NVIDIA llama.cpp CUDA variant from the probed profile,
+/// or `None` when Vulkan should be used instead. Logs the decision so init is
+/// never a black box.
+fn windows_cuda_variant(profile: &HardwareProfile) -> Option<&'static str> {
+    let cc_major = profile.compute_cap.map(|(maj, _)| maj as u32);
+    let driver_cuda = windows_driver_cuda_max();
+    let choice = pick_win_cuda_variant(cc_major, driver_cuda);
+    match choice {
+        Some(v) => info!(
+            ?cc_major,
+            ?driver_cuda,
+            variant = v,
+            "Selected Windows CUDA variant"
+        ),
+        None => warn!(
+            ?cc_major,
+            ?driver_cuda,
+            "No compatible Windows CUDA prebuilt (driver too old or arch needs CUDA 13) — using Vulkan"
+        ),
+    }
+    choice
 }
 
 /// Extract an archive (.tar.gz or .zip) into the target directory.
@@ -1659,6 +1716,58 @@ async fn download_with_sha256(url: &str, dest: &std::path::Path, expected_hex: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Windows CUDA variant matrix ──────────────────────────────────────────
+    // sm_120 (RTX 50) = cc major 12; sm_100 (B200) = cc major 10; both need the
+    // CUDA 13 build. sm_90 Hopper / sm_89 Ada / sm_86 Ampere = the 12.4 build.
+
+    #[test]
+    fn win_variant_blackwell_consumer_on_cuda13_driver() {
+        // RTX 5060 Ti (sm_120) + driver CUDA 13.3 → 13.1 build.
+        assert_eq!(pick_win_cuda_variant(Some(12), Some((13, 3))), Some("13.1"));
+    }
+
+    #[test]
+    fn win_variant_blackwell_on_old_driver_falls_back_to_vulkan() {
+        // Blackwell but the driver only supports CUDA 12.4 → 12.4 build has no
+        // sm_120 kernels, so Vulkan is the only working path.
+        assert_eq!(pick_win_cuda_variant(Some(12), Some((12, 4))), None);
+        assert_eq!(pick_win_cuda_variant(Some(12), Some((13, 0))), None);
+    }
+
+    #[test]
+    fn win_variant_blackwell_unknown_driver_is_vulkan() {
+        // Never gamble a CUDA build on Blackwell when nvidia-smi is unreadable.
+        assert_eq!(pick_win_cuda_variant(Some(12), None), None);
+    }
+
+    #[test]
+    fn win_variant_b200_datacenter_blackwell_needs_cuda13() {
+        assert_eq!(pick_win_cuda_variant(Some(10), Some((13, 1))), Some("13.1"));
+        assert_eq!(pick_win_cuda_variant(Some(10), Some((12, 9))), None);
+    }
+
+    #[test]
+    fn win_variant_ada_hopper_use_12_4() {
+        // sm_89 Ada on a CUDA 12.4 driver.
+        assert_eq!(pick_win_cuda_variant(Some(8), Some((12, 4))), Some("12.4"));
+        // sm_90 Hopper on a CUDA 13.x driver → still the stable 12.x line.
+        assert_eq!(pick_win_cuda_variant(Some(9), Some((13, 3))), Some("12.4"));
+    }
+
+    #[test]
+    fn win_variant_old_driver_below_12_4_is_vulkan() {
+        // Pre-12.4 driver can't run the 12.4 prebuilt at all.
+        assert_eq!(pick_win_cuda_variant(Some(8), Some((12, 2))), None);
+        assert_eq!(pick_win_cuda_variant(Some(7), Some((11, 8))), None);
+    }
+
+    #[test]
+    fn win_variant_pre_blackwell_unknown_driver_defaults_12_4() {
+        assert_eq!(pick_win_cuda_variant(Some(8), None), Some("12.4"));
+        // Unknown arch + unknown driver → treat as pre-Blackwell default.
+        assert_eq!(pick_win_cuda_variant(None, None), Some("12.4"));
+    }
 
     #[test]
     fn test_command_exists_true() {
