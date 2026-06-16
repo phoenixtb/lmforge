@@ -160,7 +160,7 @@ fn seed_index(data_dir: &Path, models_dir: &Path, entries: &[(&str, Option<&str>
 // ── validation rejections ───────────────────────────────────────────────────
 
 #[tokio::test]
-async fn rejects_when_nothing_changes() {
+async fn noop_when_nothing_changes() {
     let root = tempfile::tempdir().unwrap();
     let _env = setup_env(root.path(), &root.path().join("defaultdata"));
 
@@ -168,14 +168,16 @@ async fn rejects_when_nothing_changes() {
     let models = root.path().join("models");
     let (state, _rx) = make_state(data.clone(), models.clone());
 
-    // No dirs supplied and no reset → nothing changed.
+    // No dirs supplied and no reset → nothing changed. This is a no-op, not an
+    // error: the handler returns 200 with status "unchanged" + restart_required
+    // false so the UI can reconcile a stale pending value instead of surfacing
+    // an "Apply failed" toast.
     let (status, json) = call(state, serde_json::json!({})).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(
-        json["error"]
-            .as_str()
-            .unwrap()
-            .contains("models_dir not changed"),
+    assert_eq!(status, StatusCode::OK, "got: {json}");
+    assert_eq!(json["status"].as_str(), Some("unchanged"), "got: {json}");
+    assert_eq!(
+        json["restart_required"].as_bool(),
+        Some(false),
         "got: {json}"
     );
 

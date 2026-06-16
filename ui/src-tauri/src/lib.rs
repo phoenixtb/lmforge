@@ -221,7 +221,10 @@ async fn start_engine() -> Result<String, String> {
         return if wait_for_health(true, std::time::Duration::from_secs(60)).await {
             Ok("LMForge daemon started.".to_string())
         } else {
-            Err("Daemon did not become reachable within 60s. Check %USERPROFILE%\\.lmforge\\logs.".to_string())
+            Err(
+                "Daemon did not become reachable within 60s. Check %USERPROFILE%\\.lmforge\\logs."
+                    .to_string(),
+            )
         };
     }
 
