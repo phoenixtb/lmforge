@@ -175,6 +175,8 @@ fn build_app_state(
         status_tx: status_tx.clone(),
         pull_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         active_pull: Arc::new(RwLock::new(None)),
+        migration_status: Arc::new(RwLock::new(None)),
+        migration_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     spawn_fake_manager(port_map, cmd_rx);
@@ -713,6 +715,8 @@ async fn tc09_request_body_limit_enforced_and_configurable() {
         status_tx,
         pull_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         active_pull: Arc::new(RwLock::new(None)),
+        migration_status: Arc::new(RwLock::new(None)),
+        migration_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
     spawn_fake_manager(port_map, cmd_rx);
 
@@ -945,6 +949,8 @@ async fn tc14_model_list_resolves_relative_index_against_custom_models_dir() {
         status_tx,
         pull_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         active_pull: Arc::new(RwLock::new(None)),
+        migration_status: Arc::new(RwLock::new(None)),
+        migration_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
     spawn_fake_manager(HashMap::new(), cmd_rx);
 

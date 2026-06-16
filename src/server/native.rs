@@ -31,6 +31,11 @@ pub async fn status_stream(State(state): State<AppState>) -> impl IntoResponse {
                 "active_pull".to_string(),
                 serde_json::to_value(ap).unwrap_or(serde_json::Value::Null),
             );
+            let mig = state.migration_status.read().await.clone();
+            obj.insert(
+                "migration".to_string(),
+                serde_json::to_value(mig).unwrap_or(serde_json::Value::Null),
+            );
         }
         v.to_string()
     }
@@ -88,6 +93,7 @@ pub async fn status(State(state): State<AppState>) -> impl IntoResponse {
 
     let running_models: Vec<_> = engine_state.running_models.values().collect();
     let active_pull = state.active_pull.read().await.clone();
+    let migration = state.migration_status.read().await.clone();
 
     let resp = serde_json::json!({
         "overall_status": engine_state.overall_status,
@@ -105,6 +111,8 @@ pub async fn status(State(state): State<AppState>) -> impl IntoResponse {
         // In-flight model pull (or null). Lets any client show download progress
         // even after the originating SSE stream is gone.
         "active_pull": active_pull,
+        // Background models_dir re-pull migration status (or null).
+        "migration": migration,
     });
 
     Response::builder()
@@ -382,8 +390,54 @@ pub async fn model_pull(
             .unwrap();
     }
 
-    // Publish an initial snapshot so /lf/status reflects the pull immediately,
-    // before resolution/streaming begins.
+    // Client-facing SSE channel. The actual download runs in a background task
+    // via `pull_core` (shared with the migration drain) so progress is captured
+    // into the `active_pull` snapshot independent of the client connection — a
+    // navigation or dropped request never loses the in-flight pull.
+    let (tx, rx) = tokio::sync::mpsc::channel(100);
+    let task_state = state.clone();
+    let model_id_owned = model_id.to_string();
+    tokio::spawn(async move {
+        let _ = pull_core(&task_state, &model_id_owned, Some(tx)).await;
+        // Release the single-pull lock so subsequent pulls + storage/apply proceed.
+        task_state
+            .pull_in_flight
+            .store(false, std::sync::atomic::Ordering::Release);
+    });
+
+    use tokio_stream::StreamExt;
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(|prog| {
+        let json = serde_json::to_string(&prog).unwrap();
+        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!("data: {}\n\n", json)))
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .body(Body::from_stream(stream))
+        .unwrap()
+}
+
+/// Core model-pull routine shared by the SSE API handler (`model_pull`) and the
+/// background migration task (`run_background_migration` in `cli::start`).
+///
+/// Sets the shared `active_pull` snapshot, resolves the model, downloads it
+/// (forwarding every `DownloadProgress` event to `sse_tx` when provided), updates
+/// the model index on success, and clears the snapshot. It does NOT touch
+/// `pull_in_flight` — the caller owns that single-flight lock (the API handler
+/// CASes it per request; the migration task holds it for the whole queue).
+///
+/// Returns `Ok(())` once the weights are on disk + indexed, or `Err(msg)` with the
+/// failure reason (resolution error or download failure). On error a
+/// `DownloadProgress::Failed` is also pushed to `sse_tx` so live clients see it.
+pub async fn pull_core(
+    state: &AppState,
+    model_id: &str,
+    sse_tx: Option<tokio::sync::mpsc::Sender<crate::model::downloader::DownloadProgress>>,
+) -> Result<(), String> {
+    use crate::model::downloader::DownloadProgress;
+
+    // Publish an initial snapshot so /lf/status reflects the pull immediately.
     {
         let mut ap = state.active_pull.write().await;
         *ap = Some(super::ActivePull {
@@ -399,116 +453,98 @@ pub async fn model_pull(
         match crate::model::resolver::resolve(model_id, &engine_format, &catalogs_dir).await {
             Ok(r) => r,
             Err(e) => {
-                // Release the in-flight lock + clear the snapshot taken above —
-                // resolution failed before the pull task was spawned, so nothing
-                // else will clear them.
+                let msg = e.to_string();
+                if let Some(tx) = &sse_tx {
+                    let _ = tx
+                        .send(DownloadProgress::Failed { error: msg.clone() })
+                        .await;
+                }
                 *state.active_pull.write().await = None;
-                state
-                    .pull_in_flight
-                    .store(false, std::sync::atomic::Ordering::Release);
-                return Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from(format!(r#"{{"error":"{}"}}"#, e)))
-                    .unwrap();
+                return Err(msg);
             }
         };
 
-    let data_dir = state.data_dir.clone();
-    let models_dir = state.models_dir.clone();
-    let model_dir = state.models_dir.join(&resolved.dir_name);
-    // Client-facing SSE channel.
-    let (tx, rx) = tokio::sync::mpsc::channel(100);
-
-    let resolved_id = resolved.id.clone();
-    let format = resolved.format;
-    let engine_id = state.engine_config.id.clone();
-    let adapter = state.adapter.clone();
-    let in_flight = state.pull_in_flight.clone();
-    let active_pull = state.active_pull.clone();
-
     // Publish the resolved canonical id in the shared snapshot.
     {
-        let mut ap = active_pull.write().await;
+        let mut ap = state.active_pull.write().await;
         if let Some(slot) = ap.as_mut() {
-            slot.model = resolved_id.clone();
+            slot.model = resolved.id.clone();
         }
     }
 
+    let data_dir = state.data_dir.clone();
+    let models_dir = state.models_dir.clone();
+    let model_dir = models_dir.join(&resolved.dir_name);
+    let engine_id = state.engine_config.id.clone();
+
+    // Inner channel: the downloader writes here. We tap every event to update the
+    // shared snapshot and best-effort forward to the SSE client when present.
+    let (dl_tx, mut dl_rx) = tokio::sync::mpsc::channel(100);
+    let adapter = state.adapter.clone();
     let dl_repo = resolved.hf_repo.clone();
     let dl_files = resolved.files.clone();
     let dl_model_dir = model_dir.clone();
     let dl_data_dir = data_dir.clone();
+    let dl_handle = tokio::spawn(async move {
+        dispatch_pull(
+            &adapter,
+            &dl_repo,
+            &dl_files,
+            &dl_model_dir,
+            &dl_data_dir,
+            dl_tx,
+        )
+        .await
+    });
 
-    tokio::spawn(async move {
-        // Inner channel: the downloader writes here. We tap every event to update
-        // the shared snapshot (survives client disconnect) and forward to the SSE
-        // client best-effort. This decouples progress capture from the client so a
-        // navigation / second request never loses the in-flight pull.
-        let (dl_tx, mut dl_rx) = tokio::sync::mpsc::channel(100);
-        let dl_handle = tokio::spawn(async move {
-            dispatch_pull(
-                &adapter,
-                &dl_repo,
-                &dl_files,
-                &dl_model_dir,
-                &dl_data_dir,
-                dl_tx,
-            )
-            .await
-        });
-
-        while let Some(prog) = dl_rx.recv().await {
-            {
-                let mut ap = active_pull.write().await;
-                if let Some(slot) = ap.as_mut() {
-                    apply_pull_progress(slot, &prog);
-                }
+    let mut last_error: Option<String> = None;
+    while let Some(prog) = dl_rx.recv().await {
+        {
+            let mut ap = state.active_pull.write().await;
+            if let Some(slot) = ap.as_mut() {
+                apply_pull_progress(slot, &prog);
             }
-            // Forward to the SSE client; ignore send errors (client may be gone).
+        }
+        if let DownloadProgress::Failed { error } = &prog {
+            last_error = Some(error.clone());
+        }
+        if let Some(tx) = &sse_tx {
             let _ = tx.send(prog).await;
         }
+    }
 
-        let succeeded = dl_handle.await.unwrap_or(false);
+    let succeeded = dl_handle.await.unwrap_or(false);
 
-        if succeeded {
-            // Update ModelIndex now that weights are on disk
-            if let Ok(mut idx) = crate::model::index::ModelIndex::load(&data_dir, &models_dir) {
-                let caps = crate::model::index::detect_capabilities(
-                    &model_dir,
-                    Some(&resolved_id),
-                    Some(&resolved.hf_repo),
-                );
-                idx.add(crate::model::index::ModelEntry {
-                    id: resolved_id,
-                    path: model_dir.to_string_lossy().to_string(),
-                    format: format.to_string(),
-                    engine: engine_id,
-                    hf_repo: Some(resolved.hf_repo),
-                    size_bytes: crate::model::index::dir_size(&model_dir),
-                    capabilities: caps,
-                    added_at: chrono::Utc::now().to_rfc3339(),
-                });
-                let _ = idx.save(&data_dir, &models_dir);
-            }
+    if succeeded {
+        // Update ModelIndex now that weights are on disk.
+        if let Ok(mut idx) = crate::model::index::ModelIndex::load(&data_dir, &models_dir) {
+            let caps = crate::model::index::detect_capabilities(
+                &model_dir,
+                Some(&resolved.id),
+                Some(&resolved.hf_repo),
+            );
+            idx.add(crate::model::index::ModelEntry {
+                id: resolved.id.clone(),
+                path: model_dir.to_string_lossy().to_string(),
+                format: resolved.format.to_string(),
+                engine: engine_id,
+                hf_repo: Some(resolved.hf_repo.clone()),
+                size_bytes: crate::model::index::dir_size(&model_dir),
+                capabilities: caps,
+                added_at: chrono::Utc::now().to_rfc3339(),
+            });
+            let _ = idx.save(&data_dir, &models_dir);
         }
+    }
 
-        // Clear the shared snapshot and release the in-flight lock so subsequent
-        // pulls and storage/apply can proceed.
-        *active_pull.write().await = None;
-        in_flight.store(false, std::sync::atomic::Ordering::Release);
-    });
+    // Clear the shared snapshot; the caller releases any single-flight lock.
+    *state.active_pull.write().await = None;
 
-    use tokio_stream::StreamExt;
-    let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(|prog| {
-        let json = serde_json::to_string(&prog).unwrap();
-        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(format!("data: {}\n\n", json)))
-    });
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .body(Body::from_stream(stream))
-        .unwrap()
+    if succeeded {
+        Ok(())
+    } else {
+        Err(last_error.unwrap_or_else(|| "download failed".to_string()))
+    }
 }
 
 /// Fold a single `DownloadProgress` event into the shared `ActivePull` snapshot.
@@ -577,6 +613,92 @@ async fn dispatch_pull(
             false
         }
     }
+}
+
+/// `POST /lf/migration/cancel` — Abort an in-flight or pending background re-pull
+/// migration. Sets the cooperative cancel flag (the task aborts between models),
+/// clears the persisted manifest + in-memory status + active pull snapshot, and
+/// releases the single-flight lock so normal pulls / storage changes resume.
+/// Also used by the UI as the "dismiss" action for a finished migration banner.
+pub async fn migration_cancel(State(state): State<AppState>) -> impl IntoResponse {
+    use std::sync::atomic::Ordering;
+    state.migration_cancel.store(true, Ordering::Release);
+    if let Err(e) = crate::model::migration::PendingMigration::clear() {
+        warn!(error = %e, "migration_cancel: failed to clear pending-migration.json");
+    }
+    *state.migration_status.write().await = None;
+    *state.active_pull.write().await = None;
+    state.pull_in_flight.store(false, Ordering::Release);
+    info!("Background re-pull migration cancelled via API");
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"status":"cancelled"}"#))
+        .unwrap()
+}
+
+/// `POST /lf/migration/retry` — Re-queue the failed models of a finished
+/// migration and respawn the background task. Returns 409 while a migration is
+/// still actively running, and 400 when there is nothing to retry.
+pub async fn migration_retry(State(state): State<AppState>) -> impl IntoResponse {
+    use std::sync::atomic::Ordering;
+
+    // Don't stack a second runner on top of an actively-running migration.
+    if let Some(s) = state.migration_status.read().await.as_ref()
+        && !s.done
+    {
+        return Response::builder()
+            .status(StatusCode::CONFLICT)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"error":"A migration is still in progress"}"#,
+            ))
+            .unwrap();
+    }
+
+    let mut manifest = match crate::model::migration::PendingMigration::load() {
+        Ok(Some(m)) => m,
+        _ => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"error":"No pending migration to retry"}"#))
+                .unwrap();
+        }
+    };
+
+    if manifest.failed.is_empty() {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"error":"No failed models to retry"}"#))
+            .unwrap();
+    }
+
+    // Move failed entries back into the queue and persist before respawning.
+    let failed = std::mem::take(&mut manifest.failed);
+    manifest.repull_queue.extend(failed);
+    if let Err(e) = manifest.save() {
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(format!(
+                r#"{{"error":"Failed to persist retry manifest: {e}"}}"#
+            )))
+            .unwrap();
+    }
+
+    state.migration_cancel.store(false, Ordering::Release);
+    let bg_state = state.clone();
+    tokio::spawn(async move {
+        crate::cli::start::run_background_migration(bg_state, manifest).await;
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"status":"retrying"}"#))
+        .unwrap()
 }
 
 /// `POST /lf/model/unload` — Stop the engine and free VRAM without removing model files.
@@ -1077,6 +1199,7 @@ pub async fn storage_apply(
         models_dir: Some(new_models_dir.to_string_lossy().to_string()),
         intent,
         repull_queue,
+        failed: vec![],
     };
 
     if let Err(e) = manifest.save() {

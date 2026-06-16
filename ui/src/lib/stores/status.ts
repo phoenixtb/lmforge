@@ -27,6 +27,7 @@ const initial: LfStatus = {
   },
   last_errors: {},
   active_pull: null,
+  migration: null,
 };
 
 /** The primary status store. Written by the Tauri event listener in +layout.svelte */
@@ -60,3 +61,7 @@ export const activeModelId = derived(statusStore, ($s) => {
 /** The in-flight model pull (or null). Driven by GET /lf/status, so it stays
  *  visible even after the originating pull's SSE stream is gone. */
 export const activePull = derived(statusStore, ($s) => $s.active_pull ?? null);
+
+/** Background re-pull migration status (or null). Drives the global
+ *  MigrationBanner; per-model byte progress comes from `activePull`. */
+export const migration = derived(statusStore, ($s) => $s.migration ?? null);

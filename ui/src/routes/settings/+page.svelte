@@ -386,7 +386,7 @@
                   <label class="option-radio">
                     <input type="radio" bind:group={modelsAction} value="repull" />
                     <span class="option-title">Delete &amp; re-download</span>
-                    <span class="option-desc">Remove files from old directory, then automatically re-download all models into the new directory on restart. Models without a HuggingFace repo cannot be re-downloaded.</span>
+                    <span class="option-desc">Remove files from the old directory, then re-download all models into the new one. After restart the daemon comes up immediately and downloads run in the background — a progress banner tracks each model and the app stays usable. Models without a HuggingFace repo cannot be re-downloaded.</span>
                   </label>
                 </div>
               {/if}
@@ -480,6 +480,10 @@
               <p class="modal-body">
                 Storage directories have been updated. A daemon restart is required to activate the new paths.
                 Until restarted, the daemon continues using the old directories.
+                {#if modelsAction === 'repull'}
+                  After restarting, your models re-download in the background — a progress banner tracks
+                  them and the app stays usable while they download.
+                {/if}
               </p>
               <div class="modal-actions modal-actions--col">
                 <button

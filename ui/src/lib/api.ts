@@ -78,6 +78,20 @@ export interface ActivePull {
   error?: string | null;
 }
 
+/**
+ * Queue-level status of a background models_dir re-pull migration (the
+ * "delete & re-download" path). Mirrors `MigrationStatus` in src/server/mod.rs.
+ * `null` when no migration is running. Per-model byte progress comes from
+ * `active_pull` (the migration drives the same pull path as a manual pull).
+ */
+export interface MigrationStatus {
+  total: number;
+  completed: number;
+  failed: string[];           // model ids that failed to re-download
+  current?: string | null;    // model id currently downloading
+  done: boolean;              // true once the queue is drained
+}
+
 export interface LfStatus {
   overall_status: EngineStatus;
   engine_id: string;
@@ -88,6 +102,8 @@ export interface LfStatus {
   last_errors: Record<string, ModelLoadError>;
   /** Currently in-flight model pull, or null. Survives SSE-client disconnects. */
   active_pull?: ActivePull | null;
+  /** Background re-pull migration status, or null when none is running. */
+  migration?: MigrationStatus | null;
 }
 
 /** Raw shape from GET /lf/status and the SSE stream */
@@ -100,6 +116,7 @@ interface RawStatus {
   metrics: EngineMetrics;
   last_errors?: Record<string, ModelLoadError> | null;
   active_pull?: ActivePull | null;
+  migration?: MigrationStatus | null;
 }
 
 /** Normalise the raw daemon response to a stable LfStatus shape */
@@ -127,6 +144,7 @@ export function normalizeStatus(raw: RawStatus): LfStatus {
     metrics: raw.metrics,
     last_errors: raw.last_errors ?? {},
     active_pull: raw.active_pull ?? null,
+    migration: raw.migration ?? null,
   };
 }
 
@@ -318,6 +336,14 @@ export async function applyStorage(req: StorageApplyRequest): Promise<StorageApp
   if (!res.ok) throw Object.assign(new Error(body?.error ?? `HTTP ${res.status}`), { status: res.status, body });
   return body as StorageApplyResponse;
 }
+
+/** POST /lf/migration/cancel — abort / dismiss a background re-pull migration. */
+export const cancelMigration = (): Promise<{ status: string }> =>
+  post('/lf/migration/cancel');
+
+/** POST /lf/migration/retry — re-queue failed models and respawn the migration. */
+export const retryMigration = (): Promise<{ status: string }> =>
+  post('/lf/migration/retry');
 
 /** A single entry from the curated model catalog */
 export interface CatalogEntry {

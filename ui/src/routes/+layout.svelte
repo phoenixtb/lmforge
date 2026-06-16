@@ -3,6 +3,7 @@
   import '../app.css';
   import Sidebar from '$lib/components/Sidebar.svelte';
   import ToastContainer from '$lib/components/ToastContainer.svelte';
+  import MigrationBanner from '$lib/components/MigrationBanner.svelte';
   import { statusStore, daemonOnline, isConnecting } from '$lib/stores/status';
   import { loadHardware } from '$lib/stores/hardware';
   import { startSysInfoPolling, stopSysInfoPolling } from '$lib/stores/sysinfo';
@@ -209,6 +210,7 @@
   <div class="app-shell">
     <Sidebar />
     <div class="content-region">
+      <MigrationBanner />
       <slot />
     </div>
     <ToastContainer />
@@ -228,6 +230,7 @@
   .content-region {
     flex: 1; display: flex; flex-direction: column;
     overflow: hidden; background: var(--content-bg);
+    position: relative; /* positioning context for the global download line */
   }
 
   /* ── Daemon offline / connecting screens ──────────────────────── */

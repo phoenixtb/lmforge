@@ -93,13 +93,26 @@ pub async fn run(
     std::fs::create_dir_all(&models_dir)?;
     std::fs::create_dir_all(data_dir.join("logs"))?;
 
-    // 1a. Execute pending migration manifest (written by POST /lf/storage/apply).
+    // 1a. Pending migration manifest (written by POST /lf/storage/apply).
     //     Must run after dirs exist but before any model-index access.
+    //     - Scan/None drain synchronously here (fast index rebuild).
+    //     - Repull is deferred to a background task spawned after the API binds,
+    //       so large re-downloads never block startup / the UI restart health poll.
+    let mut pending_repull: Option<crate::model::migration::PendingMigration> = None;
     if let Ok(Some(manifest)) = crate::model::migration::PendingMigration::load() {
-        info!("Pending migration manifest found — executing startup drain...");
-        execute_migration_drain(&manifest, &data_dir, &models_dir).await;
-        if let Err(e) = crate::model::migration::PendingMigration::clear() {
-            warn!(error = %e, "Failed to clear pending-migration.json after drain");
+        if manifest.intent == crate::model::migration::MigrationIntent::Repull {
+            info!(
+                queued = manifest.repull_queue.len(),
+                failed = manifest.failed.len(),
+                "Pending re-pull migration found — deferring to background task"
+            );
+            pending_repull = Some(manifest);
+        } else {
+            info!("Pending migration manifest found — executing startup drain...");
+            execute_migration_drain(&manifest, &data_dir, &models_dir).await;
+            if let Err(e) = crate::model::migration::PendingMigration::clear() {
+                warn!(error = %e, "Failed to clear pending-migration.json after drain");
+            }
         }
     }
 
@@ -242,6 +255,8 @@ pub async fn run(
         status_tx,
         pull_in_flight,
         active_pull: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+        migration_status: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+        migration_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // Install the Prometheus recorder before the router is built so the
@@ -326,6 +341,17 @@ pub async fn run(
         });
     }
 
+    // Background re-pull migration (deferred from the startup drain). Runs the
+    // queued re-downloads sequentially through the shared `pull_core`, holding
+    // `pull_in_flight` for the whole queue so user pulls + storage changes are
+    // blocked, and surfaces progress via `migration_status` + `active_pull`.
+    if let Some(manifest) = pending_repull {
+        let bg_state = app_state.clone();
+        tokio::spawn(async move {
+            run_background_migration(bg_state, manifest).await;
+        });
+    }
+
     let concurrency = crate::server::concurrency::ConcurrencyLimit::new(
         config.resources.max_concurrent_requests as usize,
         config.resources.request_queue_size as usize,
@@ -360,10 +386,12 @@ pub async fn run(
     Ok(())
 }
 
-/// Execute the pending migration drain after dirs are ready.
+/// Execute a synchronous pending migration drain after dirs are ready.
 /// - Scan: rebuilds the model index from the new models_dir (prune=true).
-/// - Repull: re-downloads each queued model into the new models_dir.
 /// - None: no-op (adopt-in-place or delete-only — dirs are already right).
+///
+/// `Repull` is NOT handled here — it is deferred to `run_background_migration`
+/// so large re-downloads don't block daemon startup.
 async fn execute_migration_drain(
     manifest: &crate::model::migration::PendingMigration,
     data_dir: &std::path::Path,
@@ -378,62 +406,104 @@ async fn execute_migration_drain(
                 warn!(error = %e, "Migration drain: index scan failed");
             }
         }
-        MigrationIntent::Repull => {
-            info!(
-                count = manifest.repull_queue.len(),
-                "Migration drain: re-pulling models into new directory..."
-            );
-            for entry in &manifest.repull_queue {
-                // Sanitise the model id into a filesystem-safe dir name.
-                let dir_name = entry.id.replace([':', '/'], "-");
-                let model_dir = models_dir.join(&dir_name);
-                if let Err(e) = std::fs::create_dir_all(&model_dir) {
-                    warn!(model = %entry.id, error = %e, "Migration drain: could not create model dir");
-                    continue;
-                }
-                info!(model = %entry.id, repo = %entry.hf_repo, "Migration drain: re-pulling...");
-                let (tx, _rx) = tokio::sync::mpsc::channel(32);
-                match crate::model::downloader::download_model(
-                    &entry.hf_repo,
-                    &[],
-                    &model_dir,
-                    Some(tx),
-                )
-                .await
-                {
-                    Ok(_) => {
-                        if let Ok(mut idx) =
-                            crate::model::index::ModelIndex::load(data_dir, models_dir)
-                        {
-                            let caps = crate::model::index::detect_capabilities(
-                                &model_dir,
-                                Some(&entry.id),
-                                Some(&entry.hf_repo),
-                            );
-                            idx.add(crate::model::index::ModelEntry {
-                                id: entry.id.clone(),
-                                path: model_dir.to_string_lossy().to_string(),
-                                format: entry.format.clone(),
-                                engine: entry.engine.clone(),
-                                hf_repo: Some(entry.hf_repo.clone()),
-                                size_bytes: crate::model::index::dir_size(&model_dir),
-                                capabilities: caps,
-                                added_at: chrono::Utc::now().to_rfc3339(),
-                            });
-                            let _ = idx.save(data_dir, models_dir);
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            model = %entry.id,
-                            error = %e,
-                            "Migration drain: re-pull failed — model will not be available until manually re-downloaded"
-                        );
-                    }
-                }
+        // Deferred to the background task; nothing to do synchronously.
+        MigrationIntent::Repull => {}
+    }
+}
+
+/// Background re-pull migration runner.
+///
+/// Runs after the API server binds (so `/health` succeeds immediately). Holds
+/// `pull_in_flight` for the entire queue — this blocks user pulls (409) and
+/// `POST /lf/storage/apply`, matching the existing single-flight semantics — and
+/// drives each queued model through the shared `pull_core` (identical indexing +
+/// `active_pull` progress as a manual pull). Progress is surfaced via
+/// `migration_status` for the global UI banner.
+///
+/// Persistence: after each model the manifest is rewritten (successful entry
+/// removed from `repull_queue`, failed entry moved to `failed`). The manifest is
+/// cleared only when both lists are empty, so an interrupted migration resumes
+/// the remaining queue on the next start and failures survive for manual retry.
+pub(crate) async fn run_background_migration(
+    state: crate::server::AppState,
+    mut manifest: crate::model::migration::PendingMigration,
+) {
+    use crate::model::migration::PendingMigration;
+    use crate::server::MigrationStatus;
+    use std::sync::atomic::Ordering;
+
+    // Acquire the single-flight lock for the whole migration. If a manual pull
+    // raced in first, wait for it; bail if cancelled while waiting.
+    while state
+        .pull_in_flight
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        if state.migration_cancel.load(Ordering::Acquire) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    state.migration_cancel.store(false, Ordering::Release);
+
+    let queue = manifest.repull_queue.clone();
+    let total = queue.len() + manifest.failed.len();
+    let mut status = MigrationStatus {
+        total,
+        completed: 0,
+        failed: manifest.failed.iter().map(|e| e.id.clone()).collect(),
+        current: None,
+        done: false,
+    };
+    *state.migration_status.write().await = Some(status.clone());
+
+    info!(total, "Background re-pull migration started");
+
+    for entry in queue {
+        if state.migration_cancel.load(Ordering::Acquire) {
+            info!("Background re-pull migration cancelled");
+            state.pull_in_flight.store(false, Ordering::Release);
+            return;
+        }
+
+        status.current = Some(entry.id.clone());
+        *state.migration_status.write().await = Some(status.clone());
+
+        match crate::server::native::pull_core(&state, &entry.id, None).await {
+            Ok(()) => {
+                info!(model = %entry.id, "Background re-pull: complete");
+                status.completed += 1;
+                manifest.repull_queue.retain(|e| e.id != entry.id);
+            }
+            Err(e) => {
+                warn!(model = %entry.id, error = %e, "Background re-pull: failed");
+                status.failed.push(entry.id.clone());
+                manifest.repull_queue.retain(|e| e.id != entry.id);
+                manifest.failed.push(entry.clone());
             }
         }
+
+        status.current = None;
+        *state.migration_status.write().await = Some(status.clone());
+
+        // Persist progress after each model so a crash/restart resumes cleanly.
+        if manifest.repull_queue.is_empty() && manifest.failed.is_empty() {
+            let _ = PendingMigration::clear();
+        } else if let Err(e) = manifest.save() {
+            warn!(error = %e, "Background re-pull: failed to persist migration progress");
+        }
     }
+
+    status.current = None;
+    status.done = true;
+    *state.migration_status.write().await = Some(status.clone());
+    state.pull_in_flight.store(false, Ordering::Release);
+
+    info!(
+        completed = status.completed,
+        failed = status.failed.len(),
+        "Background re-pull migration finished"
+    );
 }
 
 /// Proactive startup cleanup — runs BEFORE any expensive operations.

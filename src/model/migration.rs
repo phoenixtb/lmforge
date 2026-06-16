@@ -9,8 +9,15 @@ pub struct PendingMigration {
     /// New models directory (absolute path string). None = unchanged.
     pub models_dir: Option<String>,
     pub intent: MigrationIntent,
-    /// For `Repull` intent: ordered list of models to re-download.
+    /// For `Repull` intent: ordered list of models still to re-download. The
+    /// background migration task removes each entry on success (rewriting this
+    /// file) so an interrupted migration resumes the remaining queue on restart.
     pub repull_queue: Vec<RepullEntry>,
+    /// Models that failed to re-download. Kept across restarts so the UI can
+    /// surface them for manual retry. The manifest is only cleared once both
+    /// `repull_queue` and `failed` are empty.
+    #[serde(default)]
+    pub failed: Vec<RepullEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -75,6 +82,7 @@ mod tests {
             models_dir: Some("/srv/shared/models".to_string()),
             intent,
             repull_queue: queue,
+            failed: vec![],
         }
     }
 
@@ -124,6 +132,7 @@ mod tests {
             models_dir: Some("/tmp/models".to_string()),
             intent: MigrationIntent::None,
             repull_queue: vec![],
+            failed: vec![],
         };
         let json = serde_json::to_string(&m).unwrap();
         let back: PendingMigration = serde_json::from_str(&json).unwrap();

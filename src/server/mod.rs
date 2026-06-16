@@ -62,6 +62,33 @@ pub struct AppState {
     /// component started it. Updated by the pull task from the progress stream
     /// (independent of the SSE client connection); `None` when no pull is active.
     pub active_pull: std::sync::Arc<tokio::sync::RwLock<Option<ActivePull>>>,
+
+    /// Queue-level status of a background models_dir re-pull migration (the
+    /// "delete & re-download" path). Surfaced in `GET /lf/status` so the UI can
+    /// render a global banner with overall progress. `None` when no migration is
+    /// running. Per-model byte progress comes from `active_pull` (the migration
+    /// task drives the same `pull_core` path as manual pulls).
+    pub migration_status: std::sync::Arc<tokio::sync::RwLock<Option<MigrationStatus>>>,
+
+    /// Cooperative cancel flag for the background migration task. Set by
+    /// `POST /lf/migration/cancel`; the task checks it between models and aborts.
+    pub migration_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Queue-level status of a background models_dir re-pull migration.
+/// Lives in `AppState.migration_status` and is serialised into `GET /lf/status`.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct MigrationStatus {
+    /// Total models queued for re-download in this migration.
+    pub total: usize,
+    /// Models successfully re-downloaded so far.
+    pub completed: usize,
+    /// Model ids that failed to download (surfaced for manual retry).
+    pub failed: Vec<String>,
+    /// Model id currently downloading, or `None` between models / when done.
+    pub current: Option<String>,
+    /// True once the queue is drained (with or without failures).
+    pub done: bool,
 }
 
 /// A shared, client-independent snapshot of the model pull in progress.
@@ -203,6 +230,8 @@ pub fn build_router(
         )
         .route("/lf/shutdown", post(native::shutdown))
         .route("/lf/storage/apply", post(native::storage_apply))
+        .route("/lf/migration/cancel", post(native::migration_cancel))
+        .route("/lf/migration/retry", post(native::migration_retry))
         .route("/lf/catalog", get(catalog::catalog_list))
         .with_state(state);
 

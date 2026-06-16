@@ -110,6 +110,8 @@ fn make_state(
         status_tx,
         pull_in_flight: Arc::new(AtomicBool::new(false)),
         active_pull: Arc::new(RwLock::new(None)),
+        migration_status: Arc::new(RwLock::new(None)),
+        migration_cancel: Arc::new(AtomicBool::new(false)),
     };
 
     (state, cmd_rx)
