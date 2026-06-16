@@ -1140,22 +1140,50 @@ async fn extract_archive(
     let is_zip = archive_str.ends_with(".zip");
 
     if is_zip && profile.os == Os::Windows {
-        // Use PowerShell's Expand-Archive (available on Windows 10+)
-        let status = crate::util::subprocess::hidden_tokio("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                &format!(
-                    "Expand-Archive -Force -Path '{}' -DestinationPath '{}'",
-                    archive_str, dest_str
-                ),
-            ])
-            .status()
-            .await
-            .context("Failed to run PowerShell Expand-Archive")?;
-        if !status.success() {
-            bail!("Failed to extract zip: {}", archive_str);
+        // Use PowerShell's Expand-Archive (available on Windows 10+).
+        //
+        // Expand-Archive can fail transiently when antivirus real-time
+        // protection holds a lock on the just-downloaded archive (or on a
+        // file being written into `dest`) — common right after a large CUDA
+        // runtime download. Retry with a short backoff to ride that out, and
+        // surface PowerShell's stderr on the final failure so the error isn't
+        // opaque ("Failed to extract zip" with no cause).
+        const MAX_ATTEMPTS: u32 = 3;
+        let mut last_err = String::new();
+        for attempt in 1..=MAX_ATTEMPTS {
+            let output = crate::util::subprocess::hidden_tokio("powershell")
+                .args([
+                    "-NoProfile",
+                    "-Command",
+                    &format!(
+                        "$ErrorActionPreference='Stop'; \
+                         Expand-Archive -Force -Path '{}' -DestinationPath '{}'",
+                        archive_str, dest_str
+                    ),
+                ])
+                .output()
+                .await
+                .context("Failed to run PowerShell Expand-Archive")?;
+            if output.status.success() {
+                return Ok(());
+            }
+            last_err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            warn!(
+                attempt,
+                max_attempts = MAX_ATTEMPTS,
+                archive = %archive_str,
+                error = %last_err,
+                "Expand-Archive failed; retrying after backoff (antivirus lock?)"
+            );
+            if attempt < MAX_ATTEMPTS {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
         }
+        bail!(
+            "Failed to extract zip after {MAX_ATTEMPTS} attempts: {archive_str}\n{last_err}\n\
+             If antivirus is quarantining files, allow-list {dest_str} (or the .lmforge engines \
+             directory) and re-run `lmforge init`."
+        );
     } else {
         // Unix: tar handles .tar.gz
         let status = tokio::process::Command::new("tar")

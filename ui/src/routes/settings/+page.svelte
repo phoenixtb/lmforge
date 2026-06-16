@@ -53,7 +53,6 @@
   let serviceStatus = $state<ServiceStatus | null>(null);
   let loadingServiceStatus = $state(false);
   let restartingDaemon  = $state(false);
-  let restartingService = $state(false);
 
   async function loadServiceStatus() {
     loadingServiceStatus = true;
@@ -76,23 +75,6 @@
       toast.error(`Restart failed — run "lmforge stop && lmforge start" manually (${e})`);
     } finally {
       restartingDaemon = false;
-    }
-  }
-
-  async function doRestartService() {
-    restartingService = true;
-    try {
-      await invoke('restart_service');
-      await loadConfig();
-      await loadEngines();
-      await loadServiceStatus();
-      restartNeeded = false;
-      showRestartModal = false;
-      toast.success('Service restarted');
-    } catch (e) {
-      toast.error(`Service restart failed (${e})`);
-    } finally {
-      restartingService = false;
     }
   }
 
@@ -128,8 +110,17 @@
         lossConfirmed = false;
         wouldLose = [];
         showRestartModal = true;
+        toast.success('Storage change applied — restart to activate');
+      } else {
+        // No-op: requested dir already active. Reconcile the (possibly stale)
+        // displayed value to what the daemon actually reports, clear edit state.
+        await loadConfig();
+        pendingModelsDir = modelsDir;
+        modelsAction = 'adopt';
+        lossConfirmed = false;
+        wouldLose = [];
+        toast.info('Already using that models directory — nothing to apply.');
       }
-      toast.success('Storage change applied — restart to activate');
     } catch (err: unknown) {
       // 422: server returned would_lose list — show confirmation dialog.
       const e = err as { status?: number; body?: { would_lose?: string[] } };
@@ -494,19 +485,10 @@
                 <button
                   class="btn btn--primary btn--sm"
                   onclick={doRestartDaemon}
-                  disabled={restartingDaemon || restartingService}
+                  disabled={restartingDaemon}
                 >
                   {restartingDaemon ? 'Restarting…' : 'Restart daemon'}
                 </button>
-                {#if serviceStatus?.installed}
-                  <button
-                    class="btn btn--primary btn--sm"
-                    onclick={doRestartService}
-                    disabled={restartingDaemon || restartingService}
-                  >
-                    {restartingService ? 'Restarting…' : 'Restart service'}
-                  </button>
-                {/if}
                 <button class="btn btn--ghost btn--sm" onclick={ackRestart}>
                   I'll restart later
                 </button>
@@ -761,19 +743,10 @@
             <button
               class="btn btn--primary btn--sm"
               onclick={doRestartDaemon}
-              disabled={restartingDaemon || restartingService}
+              disabled={restartingDaemon}
             >
               {restartingDaemon ? 'Restarting…' : 'Restart daemon'}
             </button>
-            {#if serviceStatus?.installed}
-              <button
-                class="btn btn--primary btn--sm"
-                onclick={doRestartService}
-                disabled={restartingDaemon || restartingService}
-              >
-                {restartingService ? 'Restarting…' : 'Restart service'}
-              </button>
-            {/if}
           </div>
 
           <div class="info-card">

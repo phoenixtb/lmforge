@@ -3,10 +3,10 @@
 # Removes the desktop app only. Daemon, service, and models are NOT affected.
 #
 # Usage:
-#   irm https://github.com/phoenixtb/lmforge/releases/latest/download/uninstall-ui.ps1 | iex
+#   Download uninstall-ui.ps1 from the latest GitHub release, then run:
+#     powershell -ExecutionPolicy Bypass -File uninstall-ui.ps1
 #
-# Skip confirmation:
-#   $env:LMFORGE_YES = "1"; irm .../uninstall-ui.ps1 | iex
+# Skip confirmation: pass -Yes  (or set $env:LMFORGE_YES = "1").
 # =============================================================================
 param(
     [switch]$Yes
@@ -47,11 +47,8 @@ function Stop-LmforgeUiProcesses {
         Stop-Process -Force -ErrorAction SilentlyContinue
     Get-Process -Name "lmforge-ui" -ErrorAction SilentlyContinue |
         Stop-Process -Force -ErrorAction SilentlyContinue
-    # Tray / child processes can outlive the main window briefly.
-    $prevEap = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    & taskkill.exe /F /IM lmforge-ui.exe *>$null
-    $ErrorActionPreference = $prevEap
+    # Tray / child processes can outlive the main window briefly; give them a
+    # moment and re-check below (Stop-Process above already covers the kill).
     $deadline = (Get-Date).AddSeconds(12)
     while ((Get-Date) -lt $deadline) {
         if (-not (Get-Process -Name "lmforge-ui" -ErrorAction SilentlyContinue)) {
@@ -97,16 +94,23 @@ if (Stop-LmforgeUiProcesses) {
 Section "Removing app..."
 
 function Find-LMForgeUiUninstallEntry {
-    $roots = @(
-        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
-        "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
-        "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
-    )
-    foreach ($root in $roots) {
-        $entry = Get-ItemProperty $root -ErrorAction SilentlyContinue |
-            Where-Object { $_.DisplayName -eq "LMForge" -and $_.UninstallString } |
-            Select-Object -First 1
-        if ($entry) { return $entry }
+    # Look up the NSIS uninstall registration by its known product key instead
+    # of enumerating the entire Uninstall hive (a wildcard scan over every
+    # installed product trips AV heuristics). Tauri/NSIS registers the key
+    # under the product name / bundle identifier.
+    $base = "Software\Microsoft\Windows\CurrentVersion\Uninstall"
+    $names = @("LMForge", "com.lmforge.app")
+    $hives = @("HKCU:", "HKLM:", "HKLM:\Software\WOW6432Node")
+    foreach ($hive in $hives) {
+        foreach ($name in $names) {
+            $key = if ($hive -like "*WOW6432Node*") {
+                "$hive\Microsoft\Windows\CurrentVersion\Uninstall\$name"
+            } else {
+                "$hive\$base\$name"
+            }
+            $entry = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+            if ($entry -and $entry.UninstallString) { return $entry }
+        }
     }
     return $null
 }
@@ -152,9 +156,9 @@ if (Test-Path $AppDataDir) {
 Write-Host ""
 Success "LMForge UI uninstalled."
 Write-Host ""
-Write-Host "  The daemon is still running. To also remove Core:" -ForegroundColor White
-Write-Host "    irm https://github.com/$Repo/releases/latest/download/uninstall-core.ps1 | iex" -ForegroundColor White
+Write-Host "  The daemon is still running. To also remove Core, run" -ForegroundColor White
+Write-Host "  uninstall-core.ps1 from the latest release:" -ForegroundColor White
+Write-Host "    https://github.com/$Repo/releases/latest" -ForegroundColor White
 Write-Host ""
-Write-Host "  To reinstall the UI:" -ForegroundColor White
-Write-Host "    irm https://github.com/$Repo/releases/latest/download/install-ui.ps1 | iex" -ForegroundColor White
+Write-Host "  To reinstall the UI, run install-ui.ps1 from the same release." -ForegroundColor White
 Write-Host ""

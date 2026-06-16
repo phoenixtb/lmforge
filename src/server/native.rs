@@ -942,7 +942,22 @@ pub async fn storage_apply(
     let models_dir_changed = new_models_dir != old_models_dir;
 
     if !models_dir_changed {
-        return apply_err(StatusCode::BAD_REQUEST, "models_dir not changed");
+        // No-op: the requested dir already equals the active one (e.g. "reset to
+        // default" when already on default). This is not an error — return
+        // success with restart_required=false so the UI reconciles its (possibly
+        // stale) pending state instead of surfacing an "Apply failed" toast.
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_string(&serde_json::json!({
+                    "status": "unchanged",
+                    "restart_required": false,
+                    "would_lose": [],
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
     }
 
     // Overlap checks for models_dir change.

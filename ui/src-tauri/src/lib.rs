@@ -153,24 +153,94 @@ fn lmforge_command(bin: &str) -> tokio::process::Command {
     cmd
 }
 
+/// Poll the daemon `/health` endpoint until reachability equals `want_up`.
+///
+/// Lets callers wait for the daemon to come UP after a start, or go DOWN after a
+/// stop. Returns `true` once the desired state is observed, `false` on timeout.
+#[cfg(windows)]
+async fn wait_for_health(want_up: bool, timeout: std::time::Duration) -> bool {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .unwrap_or_default();
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let up = client
+            .get("http://127.0.0.1:11430/health")
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false);
+        if up == want_up {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
+/// Spawn `lmforge <args>` fully detached, WITHOUT capturing stdout/stderr.
+///
+/// CRITICAL on Windows: `lmforge start` / `service restart` spawn a long-lived
+/// *detached* daemon. If the UI launches them through a captured pipe
+/// (`.output()`), that daemon inherits the pipe's write handle and holds it open
+/// for its whole lifetime — so the parent's pipe read never sees EOF and
+/// `.output().await` blocks forever (the command logic already finished, but the
+/// handle is still held by the daemon that outlives it). Spawning with null
+/// stdio creates no pipe to leak; callers detect success by polling `/health`
+/// (see `wait_for_health`) rather than reading stdout.
+#[cfg(windows)]
+fn spawn_lmforge_detached(bin: &str, args: &[&str]) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    std::process::Command::new(bin)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Failed to spawn `lmforge {}`: {e}", args.join(" ")))
+}
+
 /// Tauri command: start the LMForge engine (called from the "Engine offline" screen).
 /// Uses `lmforge start` which is idempotent — safe to call even if already running.
 #[tauri::command]
 async fn start_engine() -> Result<String, String> {
     let lmforge_bin = find_lmforge_binary();
-    let output = lmforge_command(&lmforge_bin)
-        .arg("start")
-        .output()
-        .await
-        .map_err(|e| format!("Failed to spawn lmforge: {e}"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    // Windows: spawn detached + poll /health. Never capture stdout — the detached
+    // daemon would inherit the pipe and hang `.output().await` forever.
+    #[cfg(windows)]
+    {
+        spawn_lmforge_detached(&lmforge_bin, &["start"])?;
+        return if wait_for_health(true, std::time::Duration::from_secs(60)).await {
+            Ok("LMForge daemon started.".to_string())
+        } else {
+            Err("Daemon did not become reachable within 60s. Check %USERPROFILE%\\.lmforge\\logs.".to_string())
+        };
+    }
 
-    if output.status.success() || stdout.contains("already running") {
-        Ok(stdout)
-    } else {
-        Err(format!("{stdout}{stderr}"))
+    #[cfg(not(windows))]
+    {
+        let output = lmforge_command(&lmforge_bin)
+            .arg("start")
+            .output()
+            .await
+            .map_err(|e| format!("Failed to spawn lmforge: {e}"))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        if output.status.success() || stdout.contains("already running") {
+            Ok(stdout)
+        } else {
+            Err(format!("{stdout}{stderr}"))
+        }
     }
 }
 
@@ -183,38 +253,59 @@ async fn start_engine() -> Result<String, String> {
 async fn restart_engine() -> Result<String, String> {
     let lmforge_bin = find_lmforge_binary();
 
-    if is_service_installed(&lmforge_bin).await {
-        let output = lmforge_command(&lmforge_bin)
-            .args(["service", "restart"])
-            .output()
-            .await
-            .map_err(|e| format!("Failed to spawn lmforge: {e}"))?;
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return if output.status.success() {
-            Ok(stdout)
+    // Windows: explicit stop → wait DOWN → start → wait UP, all via detached
+    // spawns and /health polling. Capturing stdout (`.output()`) would deadlock
+    // because the restarted daemon inherits the pipe handle (see
+    // spawn_lmforge_detached). This is deterministic and independent of whether
+    // the autostart Run key is registered.
+    #[cfg(windows)]
+    {
+        spawn_lmforge_detached(&lmforge_bin, &["stop"])?;
+        // Confirm the old daemon released the port before starting a new one.
+        wait_for_health(false, std::time::Duration::from_secs(15)).await;
+        spawn_lmforge_detached(&lmforge_bin, &["start"])?;
+        return if wait_for_health(true, std::time::Duration::from_secs(60)).await {
+            Ok("LMForge daemon restarted.".to_string())
         } else {
-            Err(format!("{stdout}{stderr}"))
+            Err("Daemon did not become reachable within 60s after restart. Check %USERPROFILE%\\.lmforge\\logs.".to_string())
         };
     }
 
-    // Foreground mode: graceful stop + start.
-    let _ = lmforge_command(&lmforge_bin).arg("stop").output().await;
-    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+    #[cfg(not(windows))]
+    {
+        if is_service_installed(&lmforge_bin).await {
+            let output = lmforge_command(&lmforge_bin)
+                .args(["service", "restart"])
+                .output()
+                .await
+                .map_err(|e| format!("Failed to spawn lmforge: {e}"))?;
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return if output.status.success() {
+                Ok(stdout)
+            } else {
+                Err(format!("{stdout}{stderr}"))
+            };
+        }
 
-    let output = lmforge_command(&lmforge_bin)
-        .arg("start")
-        .output()
-        .await
-        .map_err(|e| format!("Failed to spawn lmforge: {e}"))?;
+        // Foreground mode: graceful stop + start.
+        let _ = lmforge_command(&lmforge_bin).arg("stop").output().await;
+        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let output = lmforge_command(&lmforge_bin)
+            .arg("start")
+            .output()
+            .await
+            .map_err(|e| format!("Failed to spawn lmforge: {e}"))?;
 
-    if output.status.success() || stdout.contains("already running") {
-        Ok(stdout)
-    } else {
-        Err(format!("{stdout}{stderr}"))
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        if output.status.success() || stdout.contains("already running") {
+            Ok(stdout)
+        } else {
+            Err(format!("{stdout}{stderr}"))
+        }
     }
 }
 
@@ -223,17 +314,36 @@ async fn restart_engine() -> Result<String, String> {
 #[tauri::command]
 async fn restart_service() -> Result<String, String> {
     let lmforge_bin = find_lmforge_binary();
-    let output = lmforge_command(&lmforge_bin)
-        .args(["service", "restart"])
-        .output()
-        .await
-        .map_err(|e| format!("Failed to spawn lmforge: {e}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    if output.status.success() {
-        Ok(stdout)
-    } else {
-        Err(format!("{stdout}{stderr}"))
+
+    // Windows: same detached-spawn + health-poll strategy as restart_engine.
+    // `lmforge service restart` via a captured pipe deadlocks (the respawned
+    // daemon inherits the stdout handle), so we drive stop/start ourselves.
+    #[cfg(windows)]
+    {
+        spawn_lmforge_detached(&lmforge_bin, &["service", "stop"])?;
+        wait_for_health(false, std::time::Duration::from_secs(15)).await;
+        spawn_lmforge_detached(&lmforge_bin, &["service", "start"])?;
+        return if wait_for_health(true, std::time::Duration::from_secs(60)).await {
+            Ok("LMForge service restarted.".to_string())
+        } else {
+            Err("Daemon did not become reachable within 60s after restart. Check %USERPROFILE%\\.lmforge\\logs.".to_string())
+        };
+    }
+
+    #[cfg(not(windows))]
+    {
+        let output = lmforge_command(&lmforge_bin)
+            .args(["service", "restart"])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to spawn lmforge: {e}"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if output.status.success() {
+            Ok(stdout)
+        } else {
+            Err(format!("{stdout}{stderr}"))
+        }
     }
 }
 
@@ -249,9 +359,15 @@ async fn get_service_status() -> serde_json::Value {
     {
         Ok(o) => {
             let out = String::from_utf8_lossy(&o.stdout).to_string();
-            // macOS/Linux print "installed ✓"; Windows prints "registered ✓".
-            let installed = out.contains("installed ✓") || out.contains("registered ✓");
-            let running = out.contains("running ✓") || out.contains("active (running) ✓");
+            // macOS/Linux print "installed ✓"; Windows prints
+            // "registered (HKCU Run key) ✓" — match the parenthetical so we don't
+            // miss the ✓ that sits after it (and never match "not registered").
+            let installed = out.contains("installed ✓") || out.contains("(HKCU Run key)");
+            // Windows has no separate "running" line for autostart; treat the
+            // daemon API reachability line as the running signal.
+            let running = out.contains("running ✓")
+                || out.contains("active (running) ✓")
+                || out.contains("reachable at http");
             serde_json::json!({ "installed": installed, "running": running, "output": out })
         }
         Err(e) => {
@@ -261,6 +377,9 @@ async fn get_service_status() -> serde_json::Value {
 }
 
 /// Check if a LMForge service unit is installed on this host.
+/// Only consulted on non-Windows: on Windows restart always drives stop/start
+/// detached regardless of the autostart Run key.
+#[cfg(not(windows))]
 async fn is_service_installed(lmforge_bin: &str) -> bool {
     match lmforge_command(lmforge_bin)
         .args(["service", "status"])
@@ -269,8 +388,9 @@ async fn is_service_installed(lmforge_bin: &str) -> bool {
     {
         Ok(o) => {
             let out = String::from_utf8_lossy(&o.stdout);
-            // macOS/Linux print "installed ✓"; Windows prints "registered ✓".
-            out.contains("installed ✓") || out.contains("registered ✓")
+            // macOS/Linux print "installed ✓"; Windows prints
+            // "registered (HKCU Run key) ✓".
+            out.contains("installed ✓") || out.contains("(HKCU Run key)")
         }
         Err(_) => false,
     }
