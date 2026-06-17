@@ -16,7 +16,7 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
     // Semver from Cargo.toml; injected at compile time.
     let version = env!("CARGO_PKG_VERSION");
     // Bump this when there is a breaking API change that requires a UI update.
-    let min_ui_version = "0.3.0";
+    let min_ui_version = "0.1.5";
 
     match engine_state.overall_status {
         EngineStatus::Ready => {
