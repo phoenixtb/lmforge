@@ -3,8 +3,8 @@
 # Holistic LMForge dev test runner: cargo + CLI + live API/inference matrix.
 #
 #   scripts/util/dev_test.sh                    # interactive
-#   scripts/util/dev_test.sh --yes              # defaults (no VLM/MTP)
-#   scripts/util/dev_test.sh --yes --full       # + VLM + MTP + rerank probe
+#   scripts/util/dev_test.sh --yes              # defaults (no VLM/rerank/MTP)
+#   scripts/util/dev_test.sh --yes --full       # + VLM + rerank probe
 #   scripts/util/dev_test.sh --e2e-only --yes   # skip cargo, hit running daemon
 #
 # Layers:
@@ -21,8 +21,11 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+E2E_REPO_ROOT="$REPO_ROOT"
 # shellcheck source=dev-lib.sh
 source "$SCRIPT_DIR/dev-lib.sh"
+# shellcheck source=../lib/e2e-api.sh
+source "$REPO_ROOT/scripts/lib/e2e-api.sh"
 
 # ── defaults ──────────────────────────────────────────────────────────────────
 DEV_NONINTERACTIVE=0
@@ -38,19 +41,9 @@ E2E_ONLY=0
 SKIP_PULL=0
 KEEP_DAEMON=0
 CARGO_PROFILE=""
-LF_HOST="${LF_HOST:-http://127.0.0.1:11430}"
 DATA_DIR="${LMFORGE_DATA_DIR:-$HOME/.lmforge}"
-
-CHAT_MODEL="${CHAT_MODEL:-qwen3:1.7b:4bit}"
-EMBED_MODEL="${EMBED_MODEL:-qwen3-embed:0.6b:8bit}"
-VLM_MODEL="${VLM_MODEL:-qwen2.5-vl:3b:4bit}"
-MTP_MODEL="${MTP_MODEL:-qwen3.5:4b:mtp:4bit}"
-RERANK_MODEL="${RERANK_MODEL:-bge-reranker-v2-m3:8bit}"
 MODEL_WAIT_SECS="${MODEL_WAIT_SECS:-180}"
 CHAT_MAX_TOKENS="${CHAT_MAX_TOKENS:-64}"
-
-# 1×1 red PNG for offline-safe VLM probe
-RED_PNG_B64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
 FAILS=0
 SKIPS=0
@@ -63,7 +56,7 @@ while (($#)); do
     case "$1" in
         -y|--yes)              DEV_NONINTERACTIVE=1 ;;
         --quick)               DO_VLM=0; DO_MTP=0; DO_RERANK=0; DO_INFERENCE=0; DEV_NONINTERACTIVE=1 ;;
-        --full)                DO_VLM=1; DO_MTP=1; DO_RERANK=1; DEV_NONINTERACTIVE=1 ;;
+        --full)                DO_VLM=1; DO_RERANK=1; DEV_NONINTERACTIVE=1 ;;
         --e2e-only)            E2E_ONLY=1; DO_UNIT=0; DO_INTEGRATION=0; DEV_NONINTERACTIVE=1 ;;
         --with-e2e)            DO_API=1; DO_INFERENCE=1; DEV_NONINTERACTIVE=1 ;;
         --with-vlm)            DO_VLM=1; DEV_NONINTERACTIVE=1 ;;
@@ -96,13 +89,13 @@ t_skip() { echo -e "  ${YELLOW}SKIP${NC} $1 — ${3:-}"; SKIPS=$((SKIPS + 1)); }
 t_note() { echo -e "  ${YELLOW}·${NC} $*"; }
 t_sec()  { echo -e "\n${BOLD}── $* ──${NC}"; }
 
-curl_health() { curl -sf --max-time 3 "$LF_HOST/health" >/dev/null 2>&1; }
+curl_health() { e2e_health_ok; }
 
 resolve_bin() {
-    BIN="$REPO_ROOT/target/debug/lmforge"
-    [[ -x "$BIN" ]] || BIN="$REPO_ROOT/target/release/lmforge"
-    [[ -x "$BIN" ]] || BIN="$(command -v lmforge 2>/dev/null || true)"
+    e2e_resolve_bin && BIN="$LF_BIN"
 }
+
+model_installed() { e2e_model_installed "$1"; }
 
 ensure_daemon() {
     if curl_health; then
@@ -128,11 +121,6 @@ ensure_daemon() {
     return 1
 }
 
-model_installed() {
-    curl -sf --max-time 5 "$LF_HOST/lf/model/list" \
-        | jq -e --arg id "$1" '.models[] | select(.id == $id)' >/dev/null 2>&1
-}
-
 ensure_model() {
     local id="$1" optional="${2:-0}"
     model_installed "$id" && return 0
@@ -155,18 +143,7 @@ ensure_model() {
     return 1
 }
 
-wait_model_ready() {
-    local id="$1" max="${2:-$MODEL_WAIT_SECS}"
-    local i
-    for i in $(seq 1 "$max"); do
-        if curl -sf "$LF_HOST/lf/status" 2>/dev/null | jq -e --arg m "$id" \
-            '.running_models[]? | select(.model_id == $m)' >/dev/null 2>&1; then
-            return 0
-        fi
-        sleep 2
-    done
-    return 1
-}
+wait_model_ready() { e2e_wait_model_ready "$1" "$(( ${2:-$MODEL_WAIT_SECS} / 2 ))"; }
 
 start_with_model() {
     local model="$1"
@@ -185,15 +162,14 @@ resolve_test_models() {
     local ids
     ids=$(curl -sf --max-time 5 "$LF_HOST/lf/model/list" 2>/dev/null | jq -r '.models[].id' 2>/dev/null || true)
     if ! model_installed "$CHAT_MODEL"; then
-        if echo "$ids" | grep -qx 'qwen3:1.7b:4bit'; then CHAT_MODEL='qwen3:1.7b:4bit'
-        elif echo "$ids" | grep -qx 'qwen3.5:4b:6bit'; then CHAT_MODEL='qwen3.5:4b:6bit'
+        if echo "$ids" | grep -qx "$E2E_CHAT_MODEL"; then CHAT_MODEL="$E2E_CHAT_MODEL"
         elif id=$(echo "$ids" | head -1) && [[ -n "$id" ]]; then
             CHAT_MODEL="$id"
             t_note "CHAT_MODEL → $CHAT_MODEL (first installed)"
         fi
     fi
     if ! model_installed "$EMBED_MODEL"; then
-        if echo "$ids" | grep -qx 'qwen3-embed:0.6b:8bit'; then EMBED_MODEL='qwen3-embed:0.6b:8bit'
+        if echo "$ids" | grep -qx "$E2E_EMBED_MODEL"; then EMBED_MODEL="$E2E_EMBED_MODEL"
         elif id=$(echo "$ids" | grep -i embed | head -1) && [[ -n "$id" ]]; then
             EMBED_MODEL="$id"
             t_note "EMBED_MODEL → $EMBED_MODEL"
@@ -406,20 +382,15 @@ if (( DO_INFERENCE )); then
     start_with_model "$CHAT_MODEL" || t_fail "start $CHAT_MODEL" "0" ""
 
     t0=$(date +%s)
-    RESP=$(curl -sf --max-time 120 "$BASE/v1/chat/completions" \
-        -H 'Content-Type: application/json' \
-        -d "{\"model\":\"$CHAT_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: OK\"}],\"max_tokens\":$CHAT_MAX_TOKENS,\"temperature\":0,\"chat_template_kwargs\":{\"enable_thinking\":false}}")
-    TXT=$(echo "$RESP" | jq -r '(.choices[0].message.content // "") + (.choices[0].message.reasoning_content // "")' 2>/dev/null)
-    if [[ -n "$TXT" ]]; then
+    RESP=$(e2e_api_chat_thinking_off "$CHAT_MODEL" "Reply with exactly: OK" "$CHAT_MAX_TOKENS")
+    if e2e_assert_chat_response "$RESP" "POST /v1/chat"; then
         t_pass "POST /v1/chat ($CHAT_MODEL)" "$(( $(date +%s) - t0 ))"
     else
-        t_fail "POST /v1/chat" "$(( $(date +%s) - t0 ))" "${RESP:0:200}"
+        t_fail "POST /v1/chat" "$(( $(date +%s) - t0 ))" "${E2E_ASSERT_MSG}"
     fi
 
     t0=$(date +%s)
-    STREAM=$(curl -sN --max-time 120 "$BASE/v1/chat/completions" \
-        -H 'Content-Type: application/json' \
-        -d "{\"model\":\"$CHAT_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Say: hi\"}],\"max_tokens\":32,\"stream\":true,\"temperature\":0}")
+    STREAM=$(e2e_api_chat_stream "$CHAT_MODEL" "Say: hi" 32)
     CHUNKS=$(echo "$STREAM" | grep -c '^data: ' || true)
     if (( CHUNKS >= 2 )) && echo "$STREAM" | grep -q 'data: \[DONE\]'; then
         t_pass "POST /v1/chat stream ($CHUNKS chunks)" "$(( $(date +%s) - t0 ))"
@@ -429,9 +400,7 @@ if (( DO_INFERENCE )); then
 
     if (( HAS_EMBED )); then
         t0=$(date +%s)
-        RESP=$(curl -sf --max-time 90 "$BASE/v1/embeddings" \
-            -H 'Content-Type: application/json' \
-            -d "{\"model\":\"$EMBED_MODEL\",\"input\":\"Hello world\"}")
+        RESP=$(e2e_api_embed "$EMBED_MODEL" "Hello world")
         DIM=$(echo "$RESP" | jq -r '.data[0].embedding | length' 2>/dev/null || echo 0)
         if (( DIM > 0 )); then
             t_pass "POST /v1/embeddings dim=$DIM" "$(( $(date +%s) - t0 ))"
@@ -478,39 +447,24 @@ if (( DO_VLM )); then
     start_with_model "$VLM_MODEL" || { t_fail "VLM start" "0" ""; }
 
     t0=$(date +%s)
-    RESP=$(curl -sf --max-time 180 "$BASE/v1/chat/completions" \
-        -H 'Content-Type: application/json' \
-        -d "{\"model\":\"$VLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Say okay in one word.\"}],\"max_tokens\":24,\"temperature\":0}")
-    TXT=$(echo "$RESP" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
-    if [[ -n "$TXT" ]]; then
+    RESP=$(e2e_api_vlm_text "$VLM_MODEL")
+    if e2e_assert_chat_response "$RESP" "VLM text-only"; then
         t_pass "VLM text-only" "$(( $(date +%s) - t0 ))"
     else
         t_fail "VLM text-only" "$(( $(date +%s) - t0 ))"
     fi
 
     t0=$(date +%s)
-    RESP=$(curl -sf --max-time 240 "$BASE/v1/chat/completions" \
-        -H 'Content-Type: application/json' \
-        -d "{\"model\":\"$VLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":[
-            {\"type\":\"text\",\"text\":\"Describe in less than 50 words but more than 35 words.\"},
-            {\"type\":\"image_url\",\"image_url\":{\"url\":\"https://picsum.photos/200/300/?blur=2\"}}
-        ]}],\"max_tokens\":96,\"temperature\":0}")
-    TXT=$(echo "$RESP" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
-    if [[ -n "$TXT" ]] && [[ ${#TXT} -gt 20 ]]; then
+    RESP=$(e2e_api_vlm_image_remote "$VLM_MODEL")
+    if e2e_assert_chat_response "$RESP" "VLM image_url (remote)" 20; then
         t_pass "VLM image_url (remote)" "$(( $(date +%s) - t0 ))"
     else
-        t_fail "VLM image_url" "$(( $(date +%s) - t0 ))" "${TXT:0:80}"
+        t_fail "VLM image_url (remote)" "$(( $(date +%s) - t0 ))" "${E2E_ASSERT_MSG}"
     fi
 
     t0=$(date +%s)
-    RESP=$(curl -sf --max-time 180 "$BASE/v1/chat/completions" \
-        -H 'Content-Type: application/json' \
-        -d "{\"model\":\"$VLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":[
-            {\"type\":\"text\",\"text\":\"What color? One word.\"},
-            {\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,${RED_PNG_B64}\"}}
-        ]}],\"max_tokens\":16,\"temperature\":0}")
-    TXT=$(echo "$RESP" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
-    if [[ -n "$TXT" ]]; then
+    RESP=$(e2e_api_vlm_image_base64 "$VLM_MODEL")
+    if e2e_assert_chat_response "$RESP" "VLM image_url (base64)"; then
         t_pass "VLM image_url (base64)" "$(( $(date +%s) - t0 ))"
     else
         t_fail "VLM image_url (base64)" "$(( $(date +%s) - t0 ))"
@@ -521,33 +475,24 @@ fi
 if (( DO_MTP )); then
     t_sec "MTP ($MTP_MODEL)"
     ensure_model "$MTP_MODEL" || true
-    export LMFORGE_SPECULATIVE_MODE=auto
     start_with_model "$MTP_MODEL" || { t_fail "MTP start" "0" ""; }
 
-    curl -sf --max-time 120 "$BASE/v1/chat/completions" \
-        -H 'Content-Type: application/json' \
-        -d "{\"model\":\"$MTP_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Count slowly to five.\"}],\"max_tokens\":128,\"temperature\":0,\"think\":false}" \
-        >/dev/null 2>&1 || true
+    e2e_api_mtp_warm "$MTP_MODEL" 128
     sleep 3
 
     t0=$(date +%s)
-    SPEC=$(curl -sf "$BASE/lf/status" 2>/dev/null | jq -r --arg m "$MTP_MODEL" \
-        '.running_models[] | select(.model_id == $m) | .spec_mode // "off"' | head -1)
-    SAMPLES=$(curl -sf "$BASE/lf/status" 2>/dev/null | jq -r --arg m "$MTP_MODEL" \
-        '.running_models[] | select(.model_id == $m) | .spec_stats.samples // 0' | head -1)
+    read -r SPEC SAMPLES <<< "$(e2e_mtp_status "$MTP_MODEL")"
     if [[ "$SPEC" == "mtp" ]] || [[ "${SAMPLES:-0}" -ge 1 ]]; then
         t_pass "MTP active (mode=$SPEC samples=$SAMPLES)" "$(( $(date +%s) - t0 ))"
     else
         t_fail "MTP not active" "$(( $(date +%s) - t0 ))" "spec_mode=$SPEC samples=$SAMPLES"
     fi
-    unset LMFORGE_SPECULATIVE_MODE
 fi
 
 # ── Rerank (optional) ─────────────────────────────────────────────────────────
 if (( DO_RERANK )); then
     t_sec "Rerank ($RERANK_MODEL)"
-    SUPPORTS=$(curl -sf "$BASE/lf/engines" 2>/dev/null | jq -r \
-        '.engines[] | select(.active == true) | .supports_reranking' 2>/dev/null | head -1)
+    SUPPORTS=$(e2e_engine_supports_rerank)
     if [[ "$SUPPORTS" != "true" ]]; then
         t_skip "POST /v1/rerank" "0" "active engine lacks reranking"
     else
@@ -557,13 +502,11 @@ if (( DO_RERANK )); then
             t_fail "start $RERANK_MODEL" "0" ""
         else
         t0=$(date +%s)
-        RESP=$(curl -sf --max-time 90 "$BASE/v1/rerank" \
-            -H 'Content-Type: application/json' \
-            -d "{\"model\":\"$RERANK_MODEL\",\"query\":\"What is Python?\",\"documents\":[\"Python is a language.\",\"The sky is blue.\"],\"top_n\":2}" 2>/dev/null || true)
-        if echo "$RESP" | jq -e '.results | length >= 1' >/dev/null 2>&1; then
+        RESP=$(e2e_api_rerank "$RERANK_MODEL" 2>/dev/null || true)
+        if e2e_assert_rerank_response "$RESP" "POST /v1/rerank"; then
             t_pass "POST /v1/rerank" "$(( $(date +%s) - t0 ))"
         else
-            t_fail "POST /v1/rerank" "$(( $(date +%s) - t0 ))" "${RESP:0:120}"
+            t_fail "POST /v1/rerank" "$(( $(date +%s) - t0 ))" "${E2E_ASSERT_MSG}"
         fi
         fi
     fi

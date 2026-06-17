@@ -51,11 +51,27 @@ lmforge start --engine vllm  --model qwen3:8b:4bit  # opt-in tier (requires safe
 lmforge start --engine sglang --yes-experimental    # experimental: known-broken on sm_120; needs explicit opt-in
 LMFORGE_YES_EXPERIMENTAL=1 lmforge start --engine sglang   # same, for systemd/scripts
 
+# ── mother CLI (interactive) ────────────────────────────────────────────────
+scripts/lmforge.sh                         # unix: dev / test / release menu
+powershell -File scripts\lmforge.ps1       # windows: same
+
+# Default E2E models (override via env): scripts/lib/e2e-defaults.{sh,ps1}
+#   chat=qwen3.5:2b:4bit  embed=qwen3-embed:0.6b:8bit
+#   vlm=qwen3-vl:2b:4bit  rerank=qwen3-reranker:0.6b:8bit
+#   vlm remote probe: https://picsum.photos/seed/picsum/200/300
+scripts/util/e2e-release.sh v0.1.5         # unix
+scripts/util/e2e-release.sh v0.1.5 --full # + VLM + rerank + MTP
+powershell -File scripts\util\e2e-release.ps1 -Version v0.1.5 -Full
+
 # ── tests ────────────────────────────────────────────────────────────────────
 scripts/util/dev_test.sh                    # interactive test matrix
 scripts/util/dev_test.sh --yes              # unit+integration+cli+api+inference
-scripts/util/dev_test.sh --yes --full       # + VLM + MTP + rerank
+scripts/util/dev_test.sh --yes --full       # + VLM + rerank (--with-mtp for MTP)
 scripts/util/dev_test.sh --e2e-only --yes   # live daemon only
+bash tests/multi_model_e2e.sh               # chat+embed co-load E2E
+bash tests/multi_model_e2e.sh --full          # + VLM + rerank (--with-mtp for MTP)
+powershell -File tests\multi_model_e2e.ps1 -Full
+bash tests/e2e.sh                             # quick wrapper (5 burst, smaller models)
 scripts/util/release_binary_test.sh         # cuda12/cuda13 release binary matrix
 
 # ── load / bench ─────────────────────────────────────────────────────────────

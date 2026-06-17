@@ -12,32 +12,62 @@
 #
 #  CONFIGURABLE DEFAULTS (override via env vars)
 #  -----------------------------------------------
-#    EMBED_MODEL   Embed model shortcut (default: qwen3-embed:0.6b:4bit)
-#    CHAT_MODEL    Chat model shortcut  (default: qwen3.5:4b:4bit)
+#    EMBED_MODEL   Embed model shortcut (default: qwen3-embed:0.6b:8bit)
+#    CHAT_MODEL    Chat model shortcut  (default: qwen3.5:2b:4bit)
+#    VLM_MODEL     Vision model shortcut (default: qwen3-vl:2b:4bit) — with --with-vlm / --full
+#    RERANK_MODEL  Rerank model shortcut (default: qwen3-reranker:0.6b:8bit) — with --with-rerank / --full
+#    MTP_MODEL     MTP model shortcut (default: qwen3.5:4b:mtp:4bit) — with --with-mtp / --full
 #    LF_HOST       LMForge API host     (default: http://127.0.0.1:11430)
-#    LF_BIN        Path to lmforge bin  (default: ./target/debug/lmforge)
+#    LF_BIN        Path to lmforge bin  (default: ./target/debug/lmforge, else PATH)
 #    N_REQUESTS    Requests per burst   (default: 10)
 #    SKIP_PULL     Set to 1 to skip pull step (models must already be present)
 #    SKIP_START    Set to 1 to skip daemon start (daemon must already be running)
+#    SKIP_BUILD    Set to 1 to skip `cargo build` (use installed LF_BIN / PATH)
+#
+#  FLAGS
+#  -----
+#    --full          Enable VLM + rerank optional suites
+#    --with-vlm      Run VLM text + image probes (TC-E08, TC-E09)
+#    --with-rerank   Run /v1/rerank probe (TC-E10)
+#    --with-mtp      Run MTP speculative probe (TC-E11)
 #
 #  EXAMPLE
 #  -------
 #    EMBED_MODEL=nomic-embed-text:v1.5 \
 #    CHAT_MODEL=qwen3.5:2b:4bit \
 #    N_REQUESTS=5 \
-#    bash tests/multi_model_e2e.sh
+#    bash tests/multi_model_e2e.sh --full
 # =============================================================================
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+E2E_REPO_ROOT="$REPO_ROOT"
+# shellcheck source=../scripts/lib/e2e-api.sh
+source "$REPO_ROOT/scripts/lib/e2e-api.sh"
+
 # ─── Configuration ────────────────────────────────────────────────────────────
-EMBED_MODEL="${EMBED_MODEL:-qwen3-embed:0.6b:f16}"
-CHAT_MODEL="${CHAT_MODEL:-qwen3.5:4b:6bit}"
-LF_HOST="${LF_HOST:-http://127.0.0.1:11430}"
-LF_BIN="${LF_BIN:-./target/debug/lmforge}"
 N="${N_REQUESTS:-10}"
 SKIP_PULL="${SKIP_PULL:-0}"
 SKIP_START="${SKIP_START:-0}"
+SKIP_BUILD="${SKIP_BUILD:-0}"
+DO_VLM="${DO_VLM:-0}"
+DO_RERANK="${DO_RERANK:-0}"
+DO_MTP="${DO_MTP:-0}"
+LF_BIN="${LF_BIN:-./target/debug/lmforge}"
+
+while (($#)); do
+    case "$1" in
+        --full)        DO_VLM=1; DO_RERANK=1 ;;
+        --with-vlm)   DO_VLM=1 ;;
+        --with-rerank) DO_RERANK=1 ;;
+        --with-mtp)   DO_MTP=1 ;;
+        -h|--help)    sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *)            echo "Unknown flag: $1 (try --help)" >&2; exit 1 ;;
+    esac
+    shift
+done
 
 # ─── Colour palette ───────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
@@ -221,6 +251,12 @@ printf "  ${DIM}%-16s${NC}  %s\n" "Embed model"  "$EMBED_MODEL"
 printf "  ${DIM}%-16s${NC}  %s\n" "Chat model"   "$CHAT_MODEL"
 printf "  ${DIM}%-16s${NC}  %s\n" "API host"     "$LF_HOST"
 printf "  ${DIM}%-16s${NC}  %s\n" "Burst size"   "$N"
+if [[ "$DO_VLM" -eq 1 || "$DO_RERANK" -eq 1 || "$DO_MTP" -eq 1 ]]; then
+    printf "  ${DIM}%-16s${NC}  vlm=%s rerank=%s mtp=%s\n" "Optional" \
+        "$([[ $DO_VLM -eq 1 ]] && echo on || echo off)" \
+        "$([[ $DO_RERANK -eq 1 ]] && echo on || echo off)" \
+        "$([[ $DO_MTP -eq 1 ]] && echo on || echo off)"
+fi
 hdr
 
 # ─── Trap / cleanup ───────────────────────────────────────────────────────────
@@ -229,33 +265,44 @@ hdr
 daemon_pid=""
 EMBED_PULLED_BY_TEST=0
 CHAT_PULLED_BY_TEST=0
+VLM_PULLED_BY_TEST=0
+RERANK_PULLED_BY_TEST=0
+MTP_PULLED_BY_TEST=0
+
+resolve_lf_bin() { e2e_resolve_bin; }
+
+pull_if_needed() {
+    local msg
+    msg=$(e2e_pull_if_needed "$1" "$2") || fail "$msg"
+    ok "$msg"
+}
 
 cleanup() {
     echo ""
     info "Cleaning up..."
-
-    # Stop daemon (only if we started it)
     if [[ -n "$daemon_pid" ]] && [[ "$SKIP_START" -eq 0 ]]; then
         "$LF_BIN" stop 2>/dev/null || true
         kill "$daemon_pid" 2>/dev/null || true
     fi
-
-    # Remove models only if this test run downloaded them
-    if [[ "$EMBED_PULLED_BY_TEST" -eq 1 ]]; then
-        info "Removing embed model downloaded by this test run: ${EMBED_MODEL}"
-        "$LF_BIN" models remove "$EMBED_MODEL" 2>/dev/null || true
-    fi
-    if [[ "$CHAT_PULLED_BY_TEST" -eq 1 ]]; then
-        info "Removing chat model downloaded by this test run: ${CHAT_MODEL}"
-        "$LF_BIN" models remove "$CHAT_MODEL" 2>/dev/null || true
-    fi
+    e2e_cleanup_pulled_models \
+        "EMBED_PULLED_BY_TEST:$EMBED_MODEL" \
+        "CHAT_PULLED_BY_TEST:$CHAT_MODEL" \
+        "VLM_PULLED_BY_TEST:$VLM_MODEL" \
+        "RERANK_PULLED_BY_TEST:$RERANK_MODEL" \
+        "MTP_PULLED_BY_TEST:$MTP_MODEL"
 }
 trap cleanup EXIT
 
 # ─── Pre-flight: build ────────────────────────────────────────────────────────
-info "Building lmforge..."
-cargo build 2>&1 | tail -3
-ok "Build complete"
+if [[ "$SKIP_BUILD" -eq 1 ]]; then
+    resolve_lf_bin || fail "SKIP_BUILD=1 but no lmforge binary found (set LF_BIN or install core)"
+    ok "Using binary: $LF_BIN"
+else
+    info "Building lmforge..."
+    (cd "$REPO_ROOT" && cargo build) 2>&1 | tail -3
+    resolve_lf_bin || fail "build finished but binary not found at $LF_BIN"
+    ok "Build complete → $LF_BIN"
+fi
 sep
 
 # ─── Step 1: Pull models ──────────────────────────────────────────────────────
@@ -263,21 +310,22 @@ if [[ "$SKIP_PULL" -ne 1 ]]; then
     info "Step 1 — Pulling models (this may take a while the first time)"
 
     echo "  Pulling embed model: ${EMBED_MODEL}"
-    pull_out=$("$LF_BIN" pull "$EMBED_MODEL" 2>&1) || fail "Failed to pull embed model: $pull_out"
-    if echo "$pull_out" | grep -q "already installed"; then
-        ok "Embed model already present — skipping download"
-    else
-        ok "Embed model downloaded"
-        EMBED_PULLED_BY_TEST=1
-    fi
+    pull_if_needed "$EMBED_MODEL" EMBED_PULLED_BY_TEST
 
     echo "  Pulling chat model: ${CHAT_MODEL}"
-    pull_out=$("$LF_BIN" pull "$CHAT_MODEL" 2>&1) || fail "Failed to pull chat model: $pull_out"
-    if echo "$pull_out" | grep -q "already installed"; then
-        ok "Chat model already present — skipping download"
-    else
-        ok "Chat model downloaded"
-        CHAT_PULLED_BY_TEST=1
+    pull_if_needed "$CHAT_MODEL" CHAT_PULLED_BY_TEST
+
+    if [[ "$DO_VLM" -eq 1 ]]; then
+        echo "  Pulling VLM model: ${VLM_MODEL}"
+        pull_if_needed "$VLM_MODEL" VLM_PULLED_BY_TEST
+    fi
+    if [[ "$DO_RERANK" -eq 1 ]]; then
+        echo "  Pulling rerank model: ${RERANK_MODEL}"
+        pull_if_needed "$RERANK_MODEL" RERANK_PULLED_BY_TEST
+    fi
+    if [[ "$DO_MTP" -eq 1 ]]; then
+        echo "  Pulling MTP model: ${MTP_MODEL}"
+        pull_if_needed "$MTP_MODEL" MTP_PULLED_BY_TEST
     fi
 else
     info "Step 1 — Skipping pull (SKIP_PULL=1)"
@@ -295,59 +343,31 @@ if [[ "$SKIP_START" -ne 1 ]]; then
     # -f exits non-zero on 4xx/5xx, -s is silent, -o /dev/null discards body.
     # No grep needed — exit code is the only signal we care about.
     healthy=0
-    for i in $(seq 1 90); do
-        if curl -sf -o /dev/null "${LF_HOST}/health" 2>/dev/null; then
-            echo ""
-            ok "Daemon healthy (after ${i}s)"
-            healthy=1
-            break
-        fi
-        printf "  ${DIM}waiting... %ds${NC}\r" "$i"
-        sleep 1
-    done
+    if e2e_wait_health 90; then
+        echo ""
+        ok "Daemon healthy"
+        healthy=1
+    fi
     [[ "$healthy" -eq 1 ]] || fail "Daemon did not become healthy within 90s"
 else
     info "Step 2 — Skipping daemon start (SKIP_START=1), assuming ${LF_HOST} is live"
-    curl -sf -o /dev/null "${LF_HOST}/health" 2>/dev/null || fail "Daemon at ${LF_HOST} is not healthy (HTTP non-200)"
+    e2e_health_ok || fail "Daemon at ${LF_HOST} is not healthy (HTTP non-200)"
     ok "Daemon healthy"
 fi
 sep
 
-# ─── Helpers: typed request functions ─────────────────────────────────────────
-lf_embed() {
-    curl -sf -X POST "${LF_HOST}/v1/embeddings" \
-        -H "Content-Type: application/json" \
-        -d "{\"model\": \"${EMBED_MODEL}\", \"input\": \"$1\"}"
-}
+# ─── Helpers: thin wrappers over scripts/lib/e2e-api.sh ───────────────────────
+lf_embed() { e2e_api_embed "$EMBED_MODEL" "$1"; }
+lf_chat()  { e2e_api_chat "$CHAT_MODEL" "$1"; }
+lf_status() { e2e_lf_status; }
 
-lf_chat() {
-    curl -sf -X POST "${LF_HOST}/v1/chat/completions" \
-        -H "Content-Type: application/json" \
-        -d "{\"model\": \"${CHAT_MODEL}\", \"messages\": [{\"role\": \"user\", \"content\": \"$1\"}], \"stream\": false}"
-}
-
-lf_status() { curl -sf "${LF_HOST}/lf/status"; }
-
-# Assert that a JSON response is a valid /v1/embeddings reply.
-# Uses jq — no Python required.
 assert_embed_response() {
-    local resp="$1" label="$2"
-    # Check .data[0].embedding is a non-empty array
-    local dims
-    dims=$(echo "$resp" | jq -r '.data[0].embedding | length' 2>/dev/null) \
-        || fail "${label}: response is not valid JSON — ${resp:0:200}"
-    [[ "$dims" =~ ^[0-9]+$ ]] && [[ "$dims" -gt 0 ]] \
-        || fail "${label}: embedding vector is empty or missing (dims=${dims}) — ${resp:0:200}"
+    e2e_assert_embed_response "$@" || fail "${E2E_ASSERT_MSG}"
 }
 
-# Assert that a JSON response is a valid /v1/chat/completions reply.
 assert_chat_response() {
-    local resp="$1" label="$2"
-    local content
-    content=$(echo "$resp" | jq -r '.choices[0].message.content // empty' 2>/dev/null) \
-        || fail "${label}: response is not valid JSON — ${resp:0:200}"
-    [[ -n "$content" ]] \
-        || fail "${label}: assistant content is empty — ${resp:0:200}"
+    local min_len="${3:-1}"
+    e2e_assert_chat_response "$1" "$2" "$min_len" || fail "${E2E_ASSERT_MSG}"
 }
 
 # ─── TC-E01: Cold-start co-load ───────────────────────────────────────────────
@@ -490,13 +510,10 @@ record_pass "TC-E05" "Simultaneous embed+chat" "wall=${mixed_ms}ms"
 sep
 echo -e "\n${BOLD}TC-E06${NC}  Cross-endpoint capability gate rejection"
 
-code_e_at_chat=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${LF_HOST}/v1/chat/completions" \
-    -H "Content-Type: application/json" \
-    -d "{\"model\": \"${EMBED_MODEL}\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"stream\": false}")
-
-code_c_at_embed=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${LF_HOST}/v1/embeddings" \
-    -H "Content-Type: application/json" \
-    -d "{\"model\": \"${CHAT_MODEL}\", \"input\": \"test\"}")
+code_e_at_chat=$(e2e_http_post_code "/v1/chat/completions" \
+    "$(jq -nc --arg m "$EMBED_MODEL" '{model:$m,messages:[{role:"user",content:"hi"}],stream:false}')")
+code_c_at_embed=$(e2e_http_post_code "/v1/embeddings" \
+    "$(jq -nc --arg m "$CHAT_MODEL" '{model:$m,input:"test"}')")
 
 gate_ok=true
 [[ "$code_e_at_chat" != "400" ]] && { warn "embed@chat returned ${code_e_at_chat} (expected 400)"; gate_ok=false; }
@@ -543,6 +560,72 @@ fi
 
 printf "  ${GREEN}✓${NC} ${DIM}%s${NC}\n" "$state_detail"
 record_pass "TC-E07" "State consistency" "$state_detail"
+
+# ─── TC-E08..E12: optional model-type suites ─────────────────────────────────
+if [[ "$DO_VLM" -eq 1 ]]; then
+    sep
+    echo -e "\n${BOLD}TC-E08${NC}  VLM text-only (${VLM_MODEL})"
+    timer_start "vlm_text"
+    resp=$(e2e_api_vlm_text "$VLM_MODEL" 2>&1) || fail "TC-E08: VLM text failed: $resp"
+    vlm_text_ms=$(timer_end "vlm_text")
+    assert_chat_response "$resp" "TC-E08"
+    printf "  ${GREEN}✓${NC} VLM text-only  ${DIM}%sms${NC}\n" "$vlm_text_ms"
+    record_pass "TC-E08" "VLM text-only" "${vlm_text_ms}ms"
+
+    sep
+    echo -e "\n${BOLD}TC-E09${NC}  VLM image_url remote (${E2E_VLM_IMAGE_URL})"
+    timer_start "vlm_remote"
+    resp=$(e2e_api_vlm_image_remote "$VLM_MODEL" 2>&1) || fail "TC-E09: VLM remote image failed: $resp"
+    vlm_remote_ms=$(timer_end "vlm_remote")
+    assert_chat_response "$resp" "TC-E09" 20
+    printf "  ${GREEN}✓${NC} VLM image_url remote  ${DIM}%sms${NC}\n" "$vlm_remote_ms"
+    record_pass "TC-E09" "VLM image_url (remote)" "${vlm_remote_ms}ms"
+
+    sep
+    echo -e "\n${BOLD}TC-E10${NC}  VLM image_url base64 (${VLM_MODEL})"
+    timer_start "vlm_image"
+    resp=$(e2e_api_vlm_image_base64 "$VLM_MODEL" 2>&1) || fail "TC-E10: VLM image failed: $resp"
+    vlm_image_ms=$(timer_end "vlm_image")
+    assert_chat_response "$resp" "TC-E10"
+    printf "  ${GREEN}✓${NC} VLM image_url base64  ${DIM}%sms${NC}\n" "$vlm_image_ms"
+    record_pass "TC-E10" "VLM image_url (base64)" "${vlm_image_ms}ms"
+fi
+
+if [[ "$DO_RERANK" -eq 1 ]]; then
+    sep
+    echo -e "\n${BOLD}TC-E11${NC}  Rerank endpoint (${RERANK_MODEL})"
+    supports=$(e2e_engine_supports_rerank)
+    if [[ "$supports" != "true" ]]; then
+        warn "TC-E11: active engine lacks reranking — skipping"
+        record_fail "TC-E11" "Rerank endpoint" "engine lacks reranking"
+    else
+        timer_start "rerank"
+        resp=$(e2e_api_rerank "$RERANK_MODEL" 2>&1) || fail "TC-E11: rerank failed: $resp"
+        rerank_ms=$(timer_end "rerank")
+        e2e_assert_rerank_response "$resp" "TC-E11" || fail "${E2E_ASSERT_MSG}"
+        count=$(echo "$resp" | jq -r '.results | length' 2>/dev/null || echo 0)
+        printf "  ${GREEN}✓${NC} Rerank returned ${count} result(s)  ${DIM}%sms${NC}\n" "$rerank_ms"
+        record_pass "TC-E11" "Rerank endpoint" "${rerank_ms}ms count=${count}"
+    fi
+fi
+
+if [[ "$DO_MTP" -eq 1 ]]; then
+    sep
+    echo -e "\n${BOLD}TC-E12${NC}  MTP speculative (${MTP_MODEL})"
+    timer_start "mtp_warm"
+    e2e_api_mtp_warm "$MTP_MODEL"
+    mtp_warm_ms=$(timer_end "mtp_warm")
+    sleep 2
+    read -r spec samples <<< "$(e2e_mtp_status "$MTP_MODEL")"
+    if [[ "$spec" == "mtp" ]] || [[ "${samples:-0}" -ge 1 ]]; then
+        printf "  ${GREEN}✓${NC} MTP active  ${DIM}mode=%s samples=%s warm=%sms${NC}\n" "$spec" "$samples" "$mtp_warm_ms"
+        record_pass "TC-E12" "MTP speculative" "mode=${spec} samples=${samples}"
+    else
+        warn "TC-E12: MTP not active (mode=${spec} samples=${samples})"
+        record_fail "TC-E12" "MTP speculative" "mode=${spec} samples=${samples}"
+        fail "TC-E12: MTP not active"
+    fi
+fi
 
 # ─── Final report ─────────────────────────────────────────────────────────────
 print_report
