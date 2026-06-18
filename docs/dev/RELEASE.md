@@ -37,12 +37,12 @@ Workflows involved:
    full purge (incl. models).
 
    ```powershell
-   # Windows
+   # Windows; -KeepInstall to skip the cleanup steps
    powershell -File scripts\lmforge.ps1 e2e -Source local
    ```
 
    ```bash
-   # macOS / Linux
+   # macOS / Linux; --keep-install to skip the cleanup steps
    ./scripts/lmforge.sh e2e --source local
    ```
 
