@@ -999,19 +999,8 @@ lmforge start --port 8080 --log-level debug
 The quick-start below works on every supported OS. For platform-specific
 notes (CUDA toolkit when needed, WSL2 vs native Windows, Apple Silicon
 quirks, opt-in engine installs, cleanup procedures) see the platform
-dev guides:
-
-- [`docs/INSTALL_LINUX_DEV.md`](docs/INSTALL_LINUX_DEV.md) — Linux +
-  NVIDIA (Ubuntu 24.04 / 26.04 reference, Proxmox passthrough notes).
-- [`docs/INSTALL_MACOS_DEV.md`](docs/INSTALL_MACOS_DEV.md) — Apple
-  Silicon (oMLX default, no opt-in tiers).
-- [`docs/INSTALL_WINDOWS_DEV.md`](docs/INSTALL_WINDOWS_DEV.md) — native
-  Windows + WSL2 paths.
-
-Engine architecture and tier rationale live in the ADRs:
-[ADR-001 — engine tiers](docs/architecture/ADR-001-engine-tiers.md),
-[ADR-002 — `/lf/engines` endpoint](docs/architecture/ADR-002-engines-endpoint.md),
-[ADR-003 — `last_errors` failure surface](docs/architecture/ADR-003-last-errors-surface.md).
+dev docs: [`docs/README.md`](docs/README.md) (install guides, dev scripts,
+architecture ADRs).
 
 ```bash
 git clone https://github.com/phoenixtb/lmforge

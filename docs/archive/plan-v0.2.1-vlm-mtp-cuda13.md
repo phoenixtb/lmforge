@@ -1,7 +1,7 @@
 # v0.2.1 — VLM + MTP on cuda13
 
 **Status:** planning  
-**Depends on:** v0.2.0 cuda13 tarball validated (`TEST-v0.2.0-post-tarball.md`)  
+**Depends on:** v0.2.0 cuda13 tarball validated ([test-v0.2.0-post-tarball.md](./test-v0.2.0-post-tarball.md))  
 **Host target:** RTX 5060 Ti 16 GB, `LMFORGE_LLAMACPP_VARIANT=cuda13`
 
 ---

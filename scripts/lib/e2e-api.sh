@@ -102,7 +102,7 @@ e2e_api_embed_batch() {
 }
 
 e2e_api_chat() {
-    local model="${1:-$CHAT_MODEL}" text="$2" max_tokens="${3:-64}"
+    local model="${1:-$CHAT_MODEL}" text="$2" max_tokens="${3:-${E2E_CHAT_MAX_TOKENS:-128}}"
     local payload
     if [[ "$model" == qwen3* ]]; then
         payload=$(jq -nc --arg m "$model" --arg t "$text" --argjson n "$max_tokens" \
@@ -134,30 +134,30 @@ e2e_api_chat_stream() {
 }
 
 e2e_api_vlm_text() {
-    local model="${1:-$VLM_MODEL}" text="${2:-Say okay in one word.}" max_tokens="${3:-24}"
+    local model="${1:-$VLM_MODEL}" text="${2:-$E2E_VLM_TEXT}" max_tokens="${3:-${E2E_VLM_TEXT_MAX_TOKENS:-128}}"
     e2e_api_chat "$model" "$text" "$max_tokens"
 }
 
 e2e_api_vlm_image_remote() {
-    local model="${1:-$VLM_MODEL}" url="${2:-$E2E_VLM_IMAGE_URL}" max_tokens="${3:-96}"
+    local model="${1:-$VLM_MODEL}" url="${2:-$E2E_VLM_IMAGE_URL}" max_tokens="${3:-${E2E_VLM_IMAGE_MAX_TOKENS:-192}}"
     curl -sf --max-time "${E2E_VLM_TIMEOUT:-240}" -X POST "${LF_HOST}/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d "$(jq -nc \
-            --arg m "$model" --arg u "$url" --argjson n "$max_tokens" \
+            --arg m "$model" --arg u "$url" --arg t "$E2E_VLM_REMOTE_PROMPT" --argjson n "$max_tokens" \
             '{model:$m,messages:[{role:"user",content:[
-                {type:"text",text:"Describe in less than 50 words but more than 35 words."},
+                {type:"text",text:$t},
                 {type:"image_url",image_url:{url:$u}}
             ]}],max_tokens:$n,temperature:0}')"
 }
 
 e2e_api_vlm_image_base64() {
-    local model="${1:-$VLM_MODEL}" b64="${2:-$E2E_RED_PNG_B64}" max_tokens="${3:-16}"
+    local model="${1:-$VLM_MODEL}" b64="${2:-$E2E_RED_PNG_B64}" max_tokens="${3:-${E2E_VLM_IMAGE_MAX_TOKENS:-192}}"
     curl -sf --max-time "${E2E_VLM_TIMEOUT:-180}" -X POST "${LF_HOST}/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d "$(jq -nc \
-            --arg m "$model" --arg b "$b64" --argjson n "$max_tokens" \
+            --arg m "$model" --arg b "$b64" --arg t "$E2E_VLM_BASE64_PROMPT" --argjson n "$max_tokens" \
             '{model:$m,messages:[{role:"user",content:[
-                {type:"text",text:"What color? One word."},
+                {type:"text",text:$t},
                 {type:"image_url",image_url:{url:("data:image/png;base64," + $b)}}
             ]}],max_tokens:$n,temperature:0}')"
 }
@@ -166,19 +166,21 @@ e2e_api_rerank() {
     local model="${1:-$RERANK_MODEL}"
     curl -sf --max-time "${E2E_RERANK_TIMEOUT:-90}" -X POST "${LF_HOST}/v1/rerank" \
         -H "Content-Type: application/json" \
-        -d "$(jq -nc --arg m "$model" \
-            '{model:$m,query:"What is Python?",documents:["Python is a language.","The sky is blue."],top_n:2}')"
+        -d "$(jq -nc \
+            --arg m "$model" --arg q "$E2E_RERANK_QUERY" \
+            --argjson docs "$(e2e_rerank_documents_json)" \
+            '{model:$m,query:$q,documents:$docs,top_n:3}')"
 }
 
 e2e_api_mtp_warm() {
-    local model="${1:-$MTP_MODEL}" max_tokens="${2:-96}"
+    local model="${1:-$MTP_MODEL}" max_tokens="${2:-${E2E_MTP_MAX_TOKENS:-256}}"
     LMFORGE_SPECULATIVE_MODE=auto \
-    curl -sf --max-time "${E2E_CHAT_TIMEOUT:-120}" -X POST "${LF_HOST}/v1/chat/completions" \
+    curl -sf --max-time "${E2E_CHAT_TIMEOUT:-180}" -X POST "${LF_HOST}/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d "$(jq -nc \
-            --arg m "$model" --argjson n "$max_tokens" \
-            '{model:$m,messages:[{role:"user",content:"Count slowly to five."}],max_tokens:$n,temperature:0,think:false}')" \
-        >/dev/null 2>&1 || true
+            --arg m "$model" --arg t "$E2E_MTP_WARM" --argjson n "$max_tokens" \
+            '{model:$m,messages:[{role:"user",content:$t}],max_tokens:$n,temperature:0,think:false,chat_template_kwargs:{enable_thinking:false}}')" \
+        2>&1
 }
 
 e2e_mtp_status() {

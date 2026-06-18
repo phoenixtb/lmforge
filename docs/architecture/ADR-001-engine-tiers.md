@@ -23,7 +23,7 @@ Two issues forced this revision:
    on a 5060 Ti — all fail with `ImportError: libnvrtc.so.12: cannot open
    shared object file` (cu130 toolkit ships `libnvrtc.so.13`) or
    `Could not load any common_ops library!` (no sm_120 binary). See
-   `docs/temp/engine_research_in_cur.md` for the reproduction.
+   [`docs/archive/engine-research-sm120.md`](../archive/engine-research-sm120.md) for the reproduction.
 2. **No platform matrix.** The flat priority list cannot express "this engine
    works on Linux + WSL2 but not native Windows," so the install path
    silently degrades on unsupported hardware instead of refusing cleanly.
@@ -171,8 +171,8 @@ macOS + Intel          llamacpp      —                   —
 
 ## References
 
-- `docs/temp/engine_revamp_plan.md` — phased execution plan
-- `docs/temp/engine_research_in_cur.md` — sm_120 failure reproduction
+- [`docs/archive/engine-revamp-plan.md`](../archive/engine-revamp-plan.md) — phased execution plan
+- [`docs/archive/engine-research-sm120.md`](../archive/engine-research-sm120.md) — sm_120 failure reproduction
 - `compass_artifact_wf-09e2410d-4316-4e11-ba12-470e1e5a9379_text_markdown.md`
   — external research backing the `llama.cpp`-as-default position
 - SGLang GitHub issue tracker — search "sm120" / "Blackwell" for upstream status

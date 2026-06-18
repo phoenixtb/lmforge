@@ -23,7 +23,8 @@ under WSL2; native Windows reports `os_family: "windows-native"`.
 verdict so you never have to guess.
 
 Full per-platform matrix is in
-[ADR-001 § OS / hardware support matrix](architecture/ADR-001-engine-tiers.md).
+[ADR-001 § OS / hardware support matrix](../architecture/ADR-001-engine-tiers.md).
+Dev scripts: [DEV_GUIDE](./DEV_GUIDE.md).
 
 ---
 
@@ -152,7 +153,7 @@ curl http://127.0.0.1:11430/v1/chat/completions `
 If a load **fails**, both surfaces light up the same way as Linux —
 `/lf/status.last_errors` is populated and the UI Overview mounts the
 Engine Load Errors panel. See
-[ADR-003](architecture/ADR-003-last-errors-surface.md).
+[ADR-003](../architecture/ADR-003-last-errors-surface.md).
 
 ## A.7 Optional: TabbyAPI (EXL3) on native Windows
 
@@ -169,7 +170,7 @@ lmforge start --engine tabbyapi
 EXL3 models live on Hugging Face git **branches** (e.g.
 `turboderp/Qwen3-8B-exl3@6.0bpw`). The `repo@revision` syntax is wired
 through both `lmforge pull` and the catalog resolver — see
-[INSTALL_LINUX_DEV.md § 6](./INSTALL_LINUX_DEV.md#6-optional-installing-the-opt-in-engines)
+[INSTALL_LINUX.md § 6](./INSTALL_LINUX.md#6-optional-installing-the-opt-in-engines)
 for usage examples. The Windows-native experience is identical.
 
 > **Want vLLM?** Switch to Path B (WSL2). Upstream vLLM has no native
@@ -181,7 +182,7 @@ for usage examples. The Windows-native experience is identical.
 
 If you need vLLM, want the same dev workflow as your Linux teammates, or
 hit upstream Windows quirks — flip to WSL2. This sub-path is a thin
-wrapper around the [Linux dev guide](./INSTALL_LINUX_DEV.md).
+wrapper around the [Linux dev guide](./INSTALL_LINUX.md).
 
 ## B.1 Enable WSL2 (one-time)
 
@@ -211,7 +212,7 @@ CUDA-in-WSL release. Update it.
 
 From here onward the WSL2 path is identical to native Linux — `uv`-managed
 venvs, opt-in `vllm` / `tabbyapi`, `cu130` torch wheels via auto-
-detection. Follow [`INSTALL_LINUX_DEV.md`](./INSTALL_LINUX_DEV.md) starting
+detection. Follow [`INSTALL_LINUX.md`](./INSTALL_LINUX.md) starting
 at **§ 1 — System packages**. The Ubuntu 24.04 paths apply unchanged.
 
 When the hardware probe reports `os_family: windows-wsl2`, the engine
@@ -255,7 +256,7 @@ Remove-Item "$env:USERPROFILE\.cargo\bin\lmforge.exe"
 
 ## WSL2
 
-Use the cleanup section of [`INSTALL_LINUX_DEV.md § 8`](./INSTALL_LINUX_DEV.md#8-cleaning-up)
+Use the cleanup section of [`INSTALL_LINUX.md § 8`](./INSTALL_LINUX.md#8-cleaning-up)
 inside WSL2 — paths and commands are identical.
 
 ---
@@ -271,7 +272,7 @@ inside WSL2 — paths and commands are identical.
   install with a clear error.
 - **NVFP4 + MoE on `sm_120` under WSL2 vLLM**: same upstream
   attention-path bug as documented in
-  [INSTALL_LINUX_DEV.md § 9](./INSTALL_LINUX_DEV.md#9-hardware-notes-for-the-reference-box).
+  [INSTALL_LINUX.md § 9](./INSTALL_LINUX.md#9-hardware-notes-for-the-reference-box).
 - **WSL2 GPU memory**: `nvidia-smi` inside WSL2 reports the same VRAM
   the Windows-side driver sees. No double-counting.
 
@@ -289,13 +290,10 @@ inside WSL2 — paths and commands are identical.
 
 ## See also
 
-- [ADR-001](architecture/ADR-001-engine-tiers.md) — engine tier model
-  and full per-platform support matrix.
-- [ADR-002](architecture/ADR-002-engines-endpoint.md) — `/lf/engines`
-  endpoint + UI tier-switcher contract.
-- [ADR-003](architecture/ADR-003-last-errors-surface.md) —
-  `last_errors` / `stderr_tail` failure surface contract.
-- [`INSTALL_LINUX_DEV.md`](./INSTALL_LINUX_DEV.md) — native Linux
-  workflow (also the canonical WSL2 reference).
-- [`INSTALL_MACOS_DEV.md`](./INSTALL_MACOS_DEV.md) — Apple Silicon
-  variant.
+- [DEV_GUIDE](./DEV_GUIDE.md) — mother scripts and E2E
+- [ADR-001](../architecture/ADR-001-engine-tiers.md) — engine tier model
+- [ADR-002](../architecture/ADR-002-engines-endpoint.md) — `/lf/engines`
+- [ADR-003](../architecture/ADR-003-last-errors-surface.md) — `last_errors`
+- [INSTALL_LINUX.md](./INSTALL_LINUX.md) — native Linux (WSL2 reference)
+- [INSTALL_MACOS.md](./INSTALL_MACOS.md) — Apple Silicon
+- [RELEASE.md](./RELEASE.md) — cut and publish releases

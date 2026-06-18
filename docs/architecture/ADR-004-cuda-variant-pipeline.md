@@ -1,7 +1,7 @@
 # ADR-004: Linux NVIDIA CUDA variant pipeline
 
 - **Status:** Accepted (2026-05-30)
-- **Follows:** [PLAN-v0.2.0-cuda-mtp](../engineering/PLAN-v0.2.0-cuda-mtp.md) Phase C-1
+- **Follows:** [plan-v0.2.0-cuda-mtp](../archive/plan-v0.2.0-cuda-mtp.md) Phase C-1
 
 ## Context
 

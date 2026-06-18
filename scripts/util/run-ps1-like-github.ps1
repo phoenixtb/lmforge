@@ -67,3 +67,4 @@ Write-Host ""
 # UTF-8 required for install.ps1 (box-drawing / unicode comments).
 $content = Get-Content -LiteralPath $scriptPath -Raw -Encoding UTF8
 Invoke-Expression $content
+exit 0

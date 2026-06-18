@@ -132,3 +132,4 @@ echo ""
 echo    "  To reinstall the UI:"
 echo    "    curl -fsSL https://github.com/phoenixtb/lmforge/releases/latest/download/install-ui.sh | bash"
 echo ""
+exit 0

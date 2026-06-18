@@ -5,8 +5,9 @@
 #
 # Usage:
 #   .\scripts\util\e2e-release.ps1
-#   .\scripts\util\e2e-release.ps1 -Version v0.1.5 -Full
+#   .\scripts\util\e2e-release.ps1 -Version v0.1.5
 #   .\scripts\util\e2e-release.ps1 -KeepInstall          # leave install in place
+#   -Full is a legacy no-op (all suites on by default in multi_model_e2e.ps1)
 #   .\scripts\util\e2e-release.ps1 -SkipCleanup          # skip preclean only
 #   .\scripts\util\e2e-release.ps1 -Purge                # uninstall with data purge
 #
@@ -50,16 +51,18 @@ function Step {
 }
 
 function Invoke-Runner([string]$Script, [switch]$Yes, [switch]$PurgeFlag) {
-    $args = @($Script)
-    if ($Yes) { $args += "-Yes" }
-    if ($PurgeFlag) { $args += "-Purge" }
-    & $Runner @args
-    if ($LASTEXITCODE -ne 0) { throw "$Script exited $LASTEXITCODE" }
+    # Do not assign to $args — shadows PowerShell's automatic parameter array.
+    $runnerArgs = @{ Script = $Script }
+    if ($Yes) { $runnerArgs.Yes = $true }
+    if ($PurgeFlag) { $runnerArgs.Purge = $true }
+    & $Runner @runnerArgs
+    # Inner scripts may leave a stale $LASTEXITCODE from Start-Process; runner exits 0 on success.
+    if ($LASTEXITCODE -gt 0) { throw "$Script failed (exit $LASTEXITCODE)" }
 }
 
 Write-Host ""
 Write-Host "  LMForge Release E2E (Windows)" -ForegroundColor Cyan
-Write-Host "  version: $Version   full: $($Full.IsPresent)   keep: $($KeepInstall.IsPresent)"
+Write-Host "  version: $Version   keep: $($KeepInstall.IsPresent)"
 Write-Host "  burst=$($env:N_REQUESTS)  (models: scripts/lib/e2e-defaults.ps1)"
 Write-Host ""
 
@@ -99,7 +102,6 @@ Step "multi-model e2e" {
     $env:SKIP_BUILD = "1"
     $env:LF_BIN = $CoreBin
     $mmArgs = @("-File", $MmScript)
-    if ($Full) { $mmArgs += "-Full" }
     & powershell -NoProfile -ExecutionPolicy Bypass @mmArgs
     if ($LASTEXITCODE -ne 0) { throw "multi_model_e2e.ps1 exited $LASTEXITCODE" }
 }

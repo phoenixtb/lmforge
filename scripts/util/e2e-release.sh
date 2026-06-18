@@ -6,9 +6,10 @@
 #
 # Usage:
 #   ./scripts/util/e2e-release.sh
-#   ./scripts/util/e2e-release.sh v0.1.5 --full
+#   ./scripts/util/e2e-release.sh v0.1.5
 #   ./scripts/util/e2e-release.sh latest --keep-install
 #   ./scripts/util/e2e-release.sh v0.1.5 --purge
+#   --full is a legacy no-op (all suites on by default in multi_model_e2e.sh)
 # =============================================================================
 set -uo pipefail
 
@@ -61,13 +62,27 @@ step() {
 }
 
 preclean() {
+    case "$OS" in
+        Darwin)
+            if [[ -d "$HOME/Applications/LMForge.app" ]] || [[ -d "/Applications/LMForge.app" ]]; then
+                pkill -x "LMForge" 2>/dev/null || true
+                pkill -x "lmforge-ui" 2>/dev/null || true
+                sleep 2
+                bash "$REPO_ROOT/scripts/uninstall-ui.sh" --yes || true
+            fi
+            ;;
+        Linux)
+            if [[ -x "$HOME/.local/bin/LMForge" ]]; then
+                pkill -x "LMForge" 2>/dev/null || true
+                pkill -x "lmforge-ui" 2>/dev/null || true
+                sleep 2
+                bash "$REPO_ROOT/scripts/uninstall-ui.sh" --yes || true
+            fi
+            ;;
+    esac
     if [[ -x "$BIN" ]] || curl -sf --max-time 2 "$API/health" >/dev/null 2>&1; then
         bash "$REPO_ROOT/scripts/uninstall-core.sh" --yes || true
     fi
-    case "$OS" in
-        Darwin) [[ ! -d "$HOME/Applications/LMForge.app" ]] || bash "$REPO_ROOT/scripts/uninstall-ui.sh" --yes || true ;;
-        Linux)  [[ ! -x "$HOME/.local/bin/LMForge" ]] || bash "$REPO_ROOT/scripts/uninstall-ui.sh" --yes || true ;;
-    esac
     pkill -x lmforge 2>/dev/null || true
     return 0
 }
@@ -78,7 +93,7 @@ health_ok() {
     local body
     body=$(curl -sf --max-time 20 "$API/health") || { echo "unreachable"; return 1; }
     echo "$body"
-    [[ "$body" == *'"ok"'* ]]
+    [[ "$body" =~ \"status\"[[:space:]]*:[[:space:]]*\"ok\" ]]
 }
 
 install_ui() {
@@ -97,9 +112,7 @@ run_multi_model() {
     export SKIP_START=1
     export SKIP_BUILD=1
     export LF_BIN="$BIN"
-    local args=()
-    (( FULL )) && args+=(--full)
-    bash "$REPO_ROOT/tests/multi_model_e2e.sh" "${args[@]}"
+    bash "$REPO_ROOT/tests/multi_model_e2e.sh" "$@"
 }
 
 uninstall_all() {
@@ -115,10 +128,11 @@ uninstall_all() {
 }
 
 echo "LMForge Release E2E — $VERSION on $OS"
-echo "burst=$N_REQUESTS full=$FULL (models: scripts/lib/e2e-defaults.sh)"
+echo "burst=$N_REQUESTS keep=$KEEP_INSTALL (models: scripts/lib/e2e-defaults.sh)"
 
 (( SKIP_CLEANUP )) || step "preclean" preclean
 step "install-core" install_core
+sleep 3
 step "health" health_ok
 step "install-ui" install_ui
 step "multi-model e2e" run_multi_model

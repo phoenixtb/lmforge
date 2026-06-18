@@ -1,7 +1,7 @@
 # ADR-005: Speculative decoding (MTP-first)
 
 - **Status:** Accepted (2026-05-30)
-- **Follows:** [PLAN-v0.2.0-cuda-mtp](../engineering/PLAN-v0.2.0-cuda-mtp.md) Phase S-1/S-2/S-3
+- **Follows:** [plan-v0.2.0-cuda-mtp](../archive/plan-v0.2.0-cuda-mtp.md) Phase S-1/S-2/S-3
 
 ## Context
 

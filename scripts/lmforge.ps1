@@ -4,7 +4,7 @@
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts\lmforge.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts\lmforge.ps1 test-multi
-#   powershell -ExecutionPolicy Bypass -File scripts\lmforge.ps1 release-e2e -Full
+#   powershell -ExecutionPolicy Bypass -File scripts\lmforge.ps1 release-e2e -Version v0.1.5 -KeepInstall
 # ==============================================================================
 param(
     [Parameter(Position = 0)]

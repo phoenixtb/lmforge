@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Legacy quick E2E entry point — delegates to multi_model_e2e.sh.
-# Prefer: bash tests/multi_model_e2e.sh [--full]
+# Prefer: bash tests/multi_model_e2e.sh [--skip-mtp]
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export N_REQUESTS="${N_REQUESTS:-5}"

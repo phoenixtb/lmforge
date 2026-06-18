@@ -85,7 +85,7 @@ function Invoke-E2eChat {
     param(
         [string]$Text,
         [string]$Model = $script:ChatModel,
-        [int]$MaxTokens = 64,
+        [int]$MaxTokens = $E2E_CHAT_MAX_TOKENS,
         [string]$HostUrl = $script:LfHost,
         [switch]$DisableThinking
     )
@@ -103,10 +103,21 @@ function Invoke-E2eChat {
         -Body ($body | ConvertTo-Json -Depth 8 -Compress) -ContentType "application/json" -TimeoutSec 180
 }
 
+function Invoke-E2eVlmText {
+    param(
+        [string]$Model = $script:VlmModel,
+        [string]$Text = $E2E_VLM_TEXT,
+        [int]$MaxTokens = $E2E_VLM_TEXT_MAX_TOKENS,
+        [string]$HostUrl = $script:LfHost
+    )
+    Invoke-E2eChat -Text $Text -Model $Model -MaxTokens $MaxTokens -HostUrl $HostUrl -DisableThinking
+}
+
 function Invoke-E2eVlmImageRemote {
     param(
         [string]$Model = $script:VlmModel,
         [string]$ImageUrl = $E2E_VLM_IMAGE_URL,
+        [int]$MaxTokens = $E2E_VLM_IMAGE_MAX_TOKENS,
         [string]$HostUrl = $script:LfHost
     )
     $body = @{
@@ -114,11 +125,11 @@ function Invoke-E2eVlmImageRemote {
         messages = @(@{
             role = "user"
             content = @(
-                @{ type = "text"; text = "Describe in less than 50 words but more than 35 words." }
+                @{ type = "text"; text = $E2E_VLM_REMOTE_PROMPT }
                 @{ type = "image_url"; image_url = @{ url = $ImageUrl } }
             )
         })
-        max_tokens = 96
+        max_tokens = $MaxTokens
         temperature = 0
     }
     Invoke-RestMethod -Uri "$HostUrl/v1/chat/completions" -Method Post `
@@ -126,17 +137,21 @@ function Invoke-E2eVlmImageRemote {
 }
 
 function Invoke-E2eVlmImageBase64 {
-    param([string]$Model = $script:VlmModel, [string]$HostUrl = $script:LfHost)
+    param(
+        [string]$Model = $script:VlmModel,
+        [int]$MaxTokens = $E2E_VLM_IMAGE_MAX_TOKENS,
+        [string]$HostUrl = $script:LfHost
+    )
     $body = @{
         model = $Model
         messages = @(@{
             role = "user"
             content = @(
-                @{ type = "text"; text = "What color? One word." }
+                @{ type = "text"; text = $E2E_VLM_BASE64_PROMPT }
                 @{ type = "image_url"; image_url = @{ url = "data:image/png;base64,$E2E_RED_PNG_B64" } }
             )
         })
-        max_tokens = 16
+        max_tokens = $MaxTokens
         temperature = 0
     }
     Invoke-RestMethod -Uri "$HostUrl/v1/chat/completions" -Method Post `
@@ -147,25 +162,30 @@ function Invoke-E2eRerank {
     param([string]$Model = $script:RerankModel, [string]$HostUrl = $script:LfHost)
     $body = @{
         model = $Model
-        query = "What is Python?"
-        documents = @("Python is a language.", "The sky is blue.")
-        top_n = 2
+        query = $E2E_RERANK_QUERY
+        documents = (Get-E2eRerankDocuments)
+        top_n = 3
     } | ConvertTo-Json -Compress
     Invoke-RestMethod -Uri "$HostUrl/v1/rerank" -Method Post -Body $body -ContentType "application/json" -TimeoutSec 120
 }
 
 function Invoke-E2eMtpWarm {
-    param([string]$Model = $script:MtpModel, [string]$HostUrl = $script:LfHost)
+    param(
+        [string]$Model = $script:MtpModel,
+        [int]$MaxTokens = $E2E_MTP_MAX_TOKENS,
+        [string]$HostUrl = $script:LfHost
+    )
     $env:LMFORGE_SPECULATIVE_MODE = "auto"
     $body = @{
         model = $Model
-        messages = @(@{ role = "user"; content = "Count slowly to five." })
-        max_tokens = 96
+        messages = @(@{ role = "user"; content = $E2E_MTP_WARM })
+        max_tokens = $MaxTokens
         temperature = 0
         think = $false
+        chat_template_kwargs = @{ enable_thinking = $false }
     } | ConvertTo-Json -Depth 6 -Compress
     try {
-        Invoke-RestMethod -Uri "$HostUrl/v1/chat/completions" -Method Post -Body $body -ContentType "application/json" -TimeoutSec 180 | Out-Null
+        return Invoke-RestMethod -Uri "$HostUrl/v1/chat/completions" -Method Post -Body $body -ContentType "application/json" -TimeoutSec 240
     } finally {
         Remove-Item Env:LMFORGE_SPECULATIVE_MODE -ErrorAction SilentlyContinue
     }

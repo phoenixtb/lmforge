@@ -31,15 +31,14 @@ Workflows involved:
    cargo test --all-targets
    ```
 
-4. **Local E2E** against the release build:
+4. **Local E2E** against the release build (see [DEV_GUIDE.md](./DEV_GUIDE.md)):
 
    ```powershell
    cargo build --release --bin lmforge
-   $env:LMFORGE_LOCAL_BIN = "target\release\lmforge.exe"
-   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\util\e2e-core.ps1
+   powershell -File scripts\lmforge.ps1 test-e2e-core
    ```
 
-   (macOS/Linux box, if available: `LMFORGE_LOCAL_BIN=target/release/lmforge ./scripts/util/e2e-core.sh`)
+   (macOS/Linux: `cargo build --release --bin lmforge && ./scripts/lmforge.sh test-e2e-core`)
 5. **Commit the bump, push main, wait for green.** Both `CI` and `E2E`
    workflows must pass **on the exact commit you will tag**. No "it was green
    two commits ago".
@@ -86,15 +85,15 @@ happens via a pre-release first:
 2. **Smoke-test the published assets** on a real machine (not CI):
 
    ```powershell
-   # Windows — full release-asset + install + UI flow
-   powershell -File scripts\util\test-release-windows.ps1 -Version vX.Y.Z
+   # Windows — release smoke or full install + models + inference
+   powershell -File scripts\lmforge.ps1 test-release -Version vX.Y.Z
+   powershell -File scripts\lmforge.ps1 release-e2e -Version vX.Y.Z -KeepInstall
    ```
 
    ```bash
-   # macOS / Linux — full release-asset + install + UI flow
-   ./scripts/util/test-release-unix.sh vX.Y.Z
-   # core-only alternative:
-   LMFORGE_VERSION=vX.Y.Z ./scripts/util/e2e-core.sh
+   # macOS / Linux
+   LMFORGE_VERSION=vX.Y.Z ./scripts/lmforge.sh test-release
+   ./scripts/lmforge.sh release-e2e vX.Y.Z --keep-install
    ```
 
 3. **Promote**: edit the release, untick "pre-release" → it becomes `latest`

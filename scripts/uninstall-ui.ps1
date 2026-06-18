@@ -162,3 +162,6 @@ Write-Host "    https://github.com/$Repo/releases/latest" -ForegroundColor White
 Write-Host ""
 Write-Host "  To reinstall the UI, run install-ui.ps1 from the same release." -ForegroundColor White
 Write-Host ""
+
+if (Test-Path $AppExe) { exit 1 }
+exit 0

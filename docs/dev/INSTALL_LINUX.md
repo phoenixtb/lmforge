@@ -16,30 +16,14 @@ round-trips. **No system Python required** — LMForge ships its own `uv`
 `~/.lmforge/bin/uv`. Opt-in engines (`vllm`, `tabbyapi`) get their own
 isolated venvs under `~/.lmforge/engines/<id>/venv/`.
 
-## Engine model in one paragraph (read this first)
+## Engine tiers
 
-LMForge ships three tiers (full table in
-[ADR-001](architecture/ADR-001-engine-tiers.md)):
+Default on Linux is **`llama.cpp`** (Vulkan, CUDA12, or CUDA13 per driver —
+see variant table below). Opt-in: **`vllm`**, **`tabbyapi`**. Experimental
+**`sglang`** is refused on consumer Blackwell (`sm_120`).
 
-- **`default` — `llama.cpp` b9351** is downloaded by `lmforge init` on
-  first run (~70 MB; takes 5–15 s on a warm connection). The release binary
-  itself ships naked — no engine payload — so the install script is small
-  and platform-symmetric. Works on every Linux GPU vendor: NVIDIA (including
-  consumer Blackwell `sm_120`), AMD, Intel iGPU — all via the Vulkan path.
-  CPU-only fallback is automatic on machines without a GPU. No Python, no
-  `pip`, no `nvcc` required.
-- **`opt-in` — `vllm` 0.21 and `tabbyapi` (ExLlamaV3)**. ~5 GB each, only
-  installed when you explicitly run `lmforge engine install <id>`. Use
-  vLLM for concurrent batching, EXL3 for fastest single-stream INT4 on
-  Ada+/Blackwell. Both require `nvcc` (vLLM compiles flashinfer JIT
-  modules; EXL3's CUDA kernels are JIT-built on first load).
-- **`experimental` — `sglang`**. Kept in the registry as cheap insurance,
-  never auto-selected, refused outright on `sm_120` because upstream wheels
-  ship `sm_90`/`sm_100` cubins only.
-
-`lmforge engine list` prints the matrix; the desktop UI's Settings → Engine
-section shows the same data with tier badges. Both consult
-`hardware.json` for the per-host compatibility verdict.
+Full tier model and OS matrix: [ADR-001](../architecture/ADR-001-engine-tiers.md).
+Day-to-day dev scripts: [DEV_GUIDE](./DEV_GUIDE.md).
 
 ---
 
@@ -217,7 +201,7 @@ If a load **fails**, both surfaces light up:
 - The UI Overview mounts an **Engine Load Errors** card you can expand
   to see the last 32 lines of the engine's stderr inline.
 
-See [ADR-003](architecture/ADR-003-last-errors-surface.md) for the contract.
+See [ADR-003](../architecture/ADR-003-last-errors-surface.md) for the contract.
 
 ## 6. Optional: installing the opt-in engines
 
@@ -247,7 +231,7 @@ lmforge run --engine vllm qwen3:8b:4bit
 
 The UI's Settings → Engine page surfaces the same `lmforge engine install`
 commands as copy-to-clipboard chips per row. Installs run in your terminal
-on purpose — see [ADR-002](architecture/ADR-002-engines-endpoint.md) for
+on purpose — see [ADR-002](../architecture/ADR-002-engines-endpoint.md) for
 why we don't trigger them from the GUI.
 
 ### PyTorch wheel auto-detection
@@ -278,14 +262,8 @@ cargo build && lmforge stop && lmforge start
 # After UI/Cargo deps change: `npm ci` (UI) or wait for cargo to refetch
 ```
 
-Useful helpers under `scripts/util/`:
-
-- `dev_test.sh` — smoke test the daemon (status / catalog / sysinfo /
-  engines / chat / embed).
-- `dev_logs.sh` — `tail -F` rotated logs for the active engine.
-- `dev_ui_ubuntu24.sh` / `dev_ui_fedora.sh` / `dev_ui_arch.sh` — start the
-  UI with the right WebKit deps for your distro.
-- `dev-clean-reinstall-ui.sh` — nuke `node_modules`, rebuild, restart.
+Useful helpers: [DEV_GUIDE](./DEV_GUIDE.md) (mother menu `./scripts/lmforge.sh`,
+E2E tiers, `dev_test.sh`, `dev_logs.sh`, UI wrappers).
 
 ## 8. Cleaning up
 
@@ -354,31 +332,15 @@ for you.
 
 ## 11. When testing is green → cut a release
 
-```bash
-git checkout -b release/0.2.x
-# bump versions in Cargo.toml, ui/package.json, ui/src-tauri/{Cargo.toml,tauri.conf.json}
-git tag -a v0.2.x -m "..." && git push origin v0.2.x
-```
-
-Release workflow at `.github/workflows/release.yml` builds 4 naked core
-binaries (linux x86_64, linux arm64, windows x86_64, macOS arm64) plus
-the Tauri UI bundles. The `llama.cpp` engine is **not** bundled into the
-release artifacts — it's pulled from upstream on first `lmforge init` by
-the variant matrix above. This keeps the release artifacts small (<10 MB
-per platform) and lets us track upstream `llama.cpp` releases without
-re-cutting our own.
+See [RELEASE.md](./RELEASE.md).
 
 ---
 
 ## See also
 
-- [ADR-001](architecture/ADR-001-engine-tiers.md) — engine tier model and
-  per-platform support matrix.
-- [ADR-002](architecture/ADR-002-engines-endpoint.md) — `/lf/engines`
-  endpoint + UI tier-switcher contract.
-- [ADR-003](architecture/ADR-003-last-errors-surface.md) —
-  `last_errors` / `stderr_tail` failure surface contract.
-- [`INSTALL_MACOS_DEV.md`](./INSTALL_MACOS_DEV.md) — Apple Silicon
-  variant (oMLX default, no opt-in tiers).
-- [`INSTALL_WINDOWS_DEV.md`](./INSTALL_WINDOWS_DEV.md) — native Windows
-  + WSL2 distinction.
+- [DEV_GUIDE](./DEV_GUIDE.md) — mother scripts and E2E
+- [ADR-001](../architecture/ADR-001-engine-tiers.md) — engine tier model
+- [ADR-002](../architecture/ADR-002-engines-endpoint.md) — `/lf/engines`
+- [ADR-003](../architecture/ADR-003-last-errors-surface.md) — `last_errors`
+- [INSTALL_MACOS.md](./INSTALL_MACOS.md) — Apple Silicon
+- [INSTALL_WINDOWS.md](./INSTALL_WINDOWS.md) — native Windows + WSL2

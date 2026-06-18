@@ -36,8 +36,8 @@ This is the working tracker for v0.2.0. Check items off as they complete. Update
 | S-2 — Spec-dec launch + telemetry | ✅ | agent | `v0.2.0-cuda-mtp` (S-2.1–S-2.9; live MTP + spec_stats verified on cuda12/cuda13 with `Qwen3.5-4B-MTP-GGUF`) |
 | S-3 — Draft-model pairs | ✅ | agent | `draft_pairs.toml` + lookup/cache + auto resolution in `speculative::resolve` (qwen3.x → qwen3:0.6b:4bit; llama/qwen2.5 pairs commented pending catalog entries) |
 | Polish — docs + UI + ADRs | ✅ | | |
-| Post-tarball live matrix | ⏳ | user | See [TEST-v0.2.0-post-tarball.md](./TEST-v0.2.0-post-tarball.md) — blocked on NCCL-fixed cuda12 + cuda13 tarball rebuild |
-| VLM + MTP (cuda13) | 📋 | | See [PLAN-v0.2.1-vlm-mtp-cuda13.md](./PLAN-v0.2.1-vlm-mtp-cuda13.md) — VLM vision fix v0.2.1; VLM+MTP blocked upstream (`--mmproj` + `draft-mtp`) |
+| Post-tarball live matrix | ⏳ | user | See [test-v0.2.0-post-tarball.md](./test-v0.2.0-post-tarball.md) — blocked on NCCL-fixed cuda12 + cuda13 tarball rebuild |
+| VLM + MTP (cuda13) | 📋 | | See [plan-v0.2.1-vlm-mtp-cuda13.md](./plan-v0.2.1-vlm-mtp-cuda13.md) — VLM vision fix v0.2.1; VLM+MTP blocked upstream (`--mmproj` + `draft-mtp`) |
 
 ---
 

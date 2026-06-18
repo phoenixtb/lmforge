@@ -11,23 +11,13 @@ Concise. Reference box: macOS 14+ (Sonoma / Sequoia), Apple Silicon
 Iterate locally, restart the daemon after `cargo build`, no release-
 pipeline round-trips.
 
-## Engine model in one paragraph (read this first)
+## Engine tiers
 
-LMForge ships three tiers (full table in
-[ADR-001](architecture/ADR-001-engine-tiers.md)). On macOS the only ones
-that auto-select are:
+Default on Apple Silicon is **`omlx`** (MLX); **`llama.cpp`** is the Metal
+fallback on Intel Macs. NVIDIA-only opt-in engines are gated off on Darwin.
 
-- **`default` — `omlx`** (the [MLX](https://github.com/ml-explore/mlx)
-  engine, Apple's native ML stack). Unified memory + Metal kernels. Fastest
-  single-stream throughput on Apple Silicon. Catalog: `mlx.json`.
-- **`default` — `llama.cpp` b9351** as a Metal-built fallback. Used
-  automatically on Intel Macs or when an MLX-format model is unavailable.
-  Catalog: `gguf.json`.
-
-The NVIDIA-only opt-in engines (`vllm`, `tabbyapi`) are gated off on
-Darwin — they won't appear in `lmforge engine list` as compatible. The
-experimental `sglang` is likewise refused. The UI's Settings → Engine
-section will show them grayed out with "OS/arch/gpu mismatch …" notes.
+Details: [ADR-001](../architecture/ADR-001-engine-tiers.md). Dev scripts:
+[DEV_GUIDE](./DEV_GUIDE.md).
 
 ---
 
@@ -135,7 +125,7 @@ If a load **fails**, both surfaces light up:
   (`message`, `at`, optional `stderr_tail`).
 - The UI Overview mounts an **Engine Load Errors** card you can expand.
 
-See [ADR-003](architecture/ADR-003-last-errors-surface.md) for the
+See [ADR-003](../architecture/ADR-003-last-errors-surface.md) for the
 contract.
 
 ## 6. Why no opt-in engines on macOS
@@ -153,7 +143,7 @@ Caused by: OS/arch/gpu mismatch (Darwin Aarch64 GPU:Apple)
 
 When MLX-LM gets a unified inference server or vLLM lands the MPS
 backend, we'll re-evaluate. The trigger is documented in
-[ADR-001 § Re-evaluation triggers](architecture/ADR-001-engine-tiers.md).
+[ADR-001 § Re-evaluation triggers](../architecture/ADR-001-engine-tiers.md).
 
 ## 7. Rapid iteration loop
 
@@ -165,14 +155,9 @@ cargo build && lmforge stop && lmforge start
 # After Cargo dep change: cargo will refetch on next build
 ```
 
-Useful helpers under `scripts/util/`:
-
-- `dev_test.sh` — smoke test the daemon end-to-end.
-- `dev_logs.sh` — `tail -F` rotated logs for the active engine.
-
-> macOS-specific note: `dev_ui_ubuntu24.sh` and friends are Linux-only.
-> On the Mac, plain `cd ui && npm run tauri dev` is the right command —
-> no WebKit dep dance is needed (system WebKit ships with the OS).
+Dev tooling: [DEV_GUIDE](./DEV_GUIDE.md) (`./scripts/lmforge.sh`, E2E,
+`dev_test.sh`, `dev_logs.sh`). On macOS use `cd ui && npm run tauri dev`
+for the UI — no WebKit dep scripts needed.
 
 ## 8. Cleaning up
 
@@ -223,25 +208,15 @@ The `~/Library/LaunchAgents/dev.lmforge.daemon.plist` (if you ran
 
 ## 11. When testing is green → cut a release
 
-```bash
-git checkout -b release/0.2.x
-# bump versions in Cargo.toml, ui/package.json, ui/src-tauri/{Cargo.toml,tauri.conf.json}
-git tag -a v0.2.x -m "..." && git push origin v0.2.x
-```
-
-Release workflow at `.github/workflows/release.yml` builds the universal
-DMG and the macOS Apple Silicon `lmforge-macos-aarch64.tar.gz`.
+See [RELEASE.md](./RELEASE.md).
 
 ---
 
 ## See also
 
-- [ADR-001](architecture/ADR-001-engine-tiers.md) — engine tier model.
-- [ADR-002](architecture/ADR-002-engines-endpoint.md) — `/lf/engines`
-  endpoint + UI tier-switcher contract.
-- [ADR-003](architecture/ADR-003-last-errors-surface.md) —
-  `last_errors` / `stderr_tail` failure surface contract.
-- [`INSTALL_LINUX_DEV.md`](./INSTALL_LINUX_DEV.md) — Linux + NVIDIA
-  workflow (different default engine, opt-in tiers available).
-- [`INSTALL_WINDOWS_DEV.md`](./INSTALL_WINDOWS_DEV.md) — native Windows
-  + WSL2 distinction.
+- [DEV_GUIDE](./DEV_GUIDE.md) — mother scripts and E2E
+- [ADR-001](../architecture/ADR-001-engine-tiers.md) — engine tier model
+- [ADR-002](../architecture/ADR-002-engines-endpoint.md) — `/lf/engines`
+- [ADR-003](../architecture/ADR-003-last-errors-surface.md) — `last_errors`
+- [INSTALL_LINUX.md](./INSTALL_LINUX.md) — Linux + NVIDIA
+- [INSTALL_WINDOWS.md](./INSTALL_WINDOWS.md) — native Windows + WSL2
