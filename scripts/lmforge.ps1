@@ -1,34 +1,54 @@
 # ==============================================================================
-# LMForge CLI — interactive dev / test / release menu (Windows)
+# LMForge CLI — dev / test / release menu (Windows)
+#
+# Module model (install SOURCE is a parameter, not a separate script):
+#   clean    [-Purge] [-Dev]                 uninstall core + UI (+ dev artefacts)
+#   install  -Source local|release[:TAG]     build+install local, or install release
+#   e2e      -Source local|release[:TAG] [-Inference|-NoInference] [-WithUi|-NoUi]
+#                                            [-VerifyAssets] [-KeepInstall] [-Purge]
+#   dev-up                                    build+run from repo, debug (dev loop)
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts\lmforge.ps1
-#   powershell -ExecutionPolicy Bypass -File scripts\lmforge.ps1 test-multi
-#   powershell -ExecutionPolicy Bypass -File scripts\lmforge.ps1 release-e2e -Version v0.1.5 -KeepInstall
+#   powershell -ExecutionPolicy Bypass -File scripts\lmforge.ps1 e2e -Source local -Inference
+#   powershell -ExecutionPolicy Bypass -File scripts\lmforge.ps1 e2e -Source release:v0.1.5 -KeepInstall
+#   powershell -ExecutionPolicy Bypass -File scripts\lmforge.ps1 install -Source release:v0.1.5
+#   powershell -ExecutionPolicy Bypass -File scripts\lmforge.ps1 clean -Dev -Purge
 # ==============================================================================
 param(
     [Parameter(Position = 0)]
     [string]$Action = "",
-    [string]$Version = $(if ($env:LMFORGE_VERSION) { $env:LMFORGE_VERSION } else { "latest" }),
-    [switch]$Full,
-    [switch]$KeepInstall
+    [string]$Source = "",
+    [switch]$Inference,
+    [switch]$NoInference,
+    [switch]$WithUi,
+    [switch]$NoUi,
+    [switch]$VerifyAssets,
+    [switch]$KeepInstall,
+    [switch]$Purge,
+    [switch]$Dev
 )
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Util     = Join-Path $RepoRoot "scripts\util"
+$UiExe    = "$env:LOCALAPPDATA\LMForge\lmforge-ui.exe"
+
+# Run an installer/uninstaller in a child pwsh so its `exit` can't kill us.
+function Invoke-Lf([string]$Name) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "scripts\$Name")
+    if ($LASTEXITCODE -ne 0) { throw "$Name exited $LASTEXITCODE" }
+}
 
 $Menu = @(
-    @{ Key = "status";            Label = "Status             Snapshot binaries, daemon, disk" },
-    @{ Key = "dev-reinstall";     Label = "Dev reinstall      Build + install core + UI from repo" },
-    @{ Key = "test-dev";          Label = "Test: dev matrix   API + inference (dev_test.sh)" },
-    @{ Key = "test-multi";        Label = "Test: multi-model  Chat+embed co-load E2E" },
-    @{ Key = "test-e2e-core";     Label = "Test: install E2E  Core install lifecycle (local bin)" },
-    @{ Key = "test-release";      Label = "Test: release      Release smoke (no model pull)" },
-    @{ Key = "release-e2e";       Label = "Release E2E        Install release + models + inference" },
-    @{ Key = "cleanup-ui";        Label = "Uninstall UI       uninstall-ui.ps1" },
-    @{ Key = "cleanup-core";      Label = "Uninstall core     uninstall-core.ps1" },
-    @{ Key = "quit";              Label = "Quit" }
+    @{ Key = "status";     Label = "Status             Snapshot binaries, daemon, disk" },
+    @{ Key = "install";    Label = "Install            Install core (-Source local|release[:TAG])" },
+    @{ Key = "e2e";        Label = "E2E                Install + lifecycle + inference (-Source …)" },
+    @{ Key = "clean";      Label = "Clean              Uninstall core + UI (-Dev -Purge)" },
+    @{ Key = "dev-up";     Label = "Dev up             Build + install core + UI from repo" },
+    @{ Key = "test-dev";   Label = "Test: dev matrix   API + inference (dev_test.sh)" },
+    @{ Key = "test-multi"; Label = "Test: multi-model  Inference suite against running daemon" },
+    @{ Key = "quit";       Label = "Quit" }
 )
 
 function Invoke-Action([string]$Key) {
@@ -38,44 +58,60 @@ function Invoke-Action([string]$Key) {
                 bash (Join-Path $Util "dev_status.sh")
             } else {
                 Write-Host "  core: $(Test-Path "$env:LOCALAPPDATA\lmforge\bin\lmforge.exe")"
-                Write-Host "  ui:   $(Test-Path "$env:LOCALAPPDATA\LMForge\lmforge-ui.exe")"
+                Write-Host "  ui:   $(Test-Path $UiExe)"
                 try {
                     $h = Invoke-WebRequest "http://127.0.0.1:11430/health" -UseBasicParsing -TimeoutSec 3
                     Write-Host "  daemon: $($h.Content)"
                 } catch { Write-Host "  daemon: down" }
             }
         }
-        "dev-reinstall" {
+        "install" {
+            $src = if ($Source) { $Source } else { "release" }
+            if ($src -eq "local") {
+                & cargo build --release --bin lmforge
+                if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+                $env:LMFORGE_LOCAL_BIN = (Join-Path $RepoRoot "target\release\lmforge.exe")
+                Invoke-Lf "install-core.ps1"
+            } else {
+                $tag = $src -replace '^release:?', ''
+                if ($tag -and $tag -ne "latest") { $env:LMFORGE_VERSION = $tag }
+                Invoke-Lf "install-core.ps1"
+                Invoke-Lf "install-ui.ps1"
+            }
+        }
+        "e2e" {
+            $a = @{}
+            if ($Source)       { $a.Source = $Source }
+            if ($Inference)    { $a.Inference = $true }
+            if ($NoInference)  { $a.NoInference = $true }
+            if ($WithUi)       { $a.WithUi = $true }
+            if ($NoUi)         { $a.NoUi = $true }
+            if ($VerifyAssets) { $a.VerifyAssets = $true }
+            if ($KeepInstall)  { $a.KeepInstall = $true }
+            if ($Purge)        { $a.Purge = $true }
+            & (Join-Path $Util "e2e.ps1") @a
+        }
+        "clean" {
+            $env:LMFORGE_YES = "1"
+            if (Test-Path $UiExe) {
+                Get-Process lmforge-ui -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+                Start-Sleep 2
+                Invoke-Lf "uninstall-ui.ps1"
+            }
+            if ($Purge) { $env:LMFORGE_PURGE = "1" }
+            Invoke-Lf "uninstall-core.ps1"
+            if ($Dev -and (Get-Command bash -EA SilentlyContinue)) {
+                bash (Join-Path $Util "dev_clean.sh") --all --yes
+            }
+        }
+        "dev-up" {
             & (Join-Path $Util "dev-reinstall.ps1")
         }
         "test-dev" {
             bash (Join-Path $Util "dev_test.sh") --yes
         }
         "test-multi" {
-            $args = @("-File", (Join-Path $RepoRoot "tests\multi_model_e2e.ps1"))
-            if ($Full) { $args += "-Full" }
-            & powershell -NoProfile -ExecutionPolicy Bypass @args
-        }
-        "test-e2e-core" {
-            $bin = Join-Path $RepoRoot "target\release\lmforge.exe"
-            if (-not (Test-Path $bin)) { throw "Build first: cargo build --release --bin lmforge" }
-            $env:LMFORGE_LOCAL_BIN = $bin
-            & (Join-Path $Util "e2e-core.ps1")
-        }
-        "test-release" {
-            & (Join-Path $Util "test-release-windows.ps1") -Version $Version
-        }
-        "release-e2e" {
-            $args = @{ Version = $Version }
-            if ($Full) { $args.Full = $true }
-            if ($KeepInstall) { $args.KeepInstall = $true }
-            & (Join-Path $Util "e2e-release.ps1") @args
-        }
-        "cleanup-ui" {
-            & (Join-Path $Util "run-ps1-like-github.ps1") uninstall-ui -Yes
-        }
-        "cleanup-core" {
-            & (Join-Path $Util "run-ps1-like-github.ps1") uninstall-core -Yes
+            & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "tests\multi_model_e2e.ps1")
         }
         "quit" { exit 0 }
         default { throw "Unknown action: $Key" }

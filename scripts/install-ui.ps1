@@ -108,25 +108,32 @@ if ($HasWebView2) {
     }
 }
 
-# --- Download ---
-Section "Downloading LMForge UI..."
-
-if ($Version -eq "latest") {
-    $DownloadUrl = "https://github.com/$Repo/releases/latest/download/$AssetName"
-} else {
-    $DownloadUrl = "https://github.com/$Repo/releases/download/$Version/$AssetName"
-}
-
-Info "Asset: $AssetName"
-Info "URL:   $DownloadUrl"
-
+# --- Obtain installer (local build or GitHub download) ---
 $TmpInstaller = Join-Path $env:TEMP "lmforge-ui-installer.exe"
-try {
-    Invoke-WebRequest -Uri $DownloadUrl -OutFile $TmpInstaller -UseBasicParsing
-} catch {
-    Err "Download failed from $DownloadUrl`n  Check https://github.com/$Repo/releases for available versions."
+
+if ($env:LMFORGE_UI_LOCAL) {
+    # Dev/E2E path: install a locally built NSIS .exe, skip the GitHub download.
+    # Mirrors LMFORGE_LOCAL_BIN in install-core.ps1.
+    Section "Using local LMForge UI artifact..."
+    if (-not (Test-Path $env:LMFORGE_UI_LOCAL)) { Err "LMFORGE_UI_LOCAL not found: $($env:LMFORGE_UI_LOCAL)" }
+    Copy-Item $env:LMFORGE_UI_LOCAL $TmpInstaller -Force
+    Info "Local artifact: $($env:LMFORGE_UI_LOCAL)"
+} else {
+    Section "Downloading LMForge UI..."
+    if ($Version -eq "latest") {
+        $DownloadUrl = "https://github.com/$Repo/releases/latest/download/$AssetName"
+    } else {
+        $DownloadUrl = "https://github.com/$Repo/releases/download/$Version/$AssetName"
+    }
+    Info "Asset: $AssetName"
+    Info "URL:   $DownloadUrl"
+    try {
+        Invoke-WebRequest -Uri $DownloadUrl -OutFile $TmpInstaller -UseBasicParsing
+    } catch {
+        Err "Download failed from $DownloadUrl`n  Check https://github.com/$Repo/releases for available versions."
+    }
+    Info "Downloaded $AssetName"
 }
-Info "Downloaded $AssetName"
 
 # --- Install (silent NSIS - per-user, no admin) ---
 Section "Installing LMForge UI..."

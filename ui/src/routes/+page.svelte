@@ -7,15 +7,15 @@
   import { metricsStore, startMetricsPolling, stopMetricsPolling } from '$lib/stores/metrics';
   import { fmtUptime } from '$lib/api';
   import { dragOnEmpty } from '$lib/drag';
+  import LoadErrorBanner from '$lib/components/LoadErrorBanner.svelte';
 
   $: status  = $statusStore.overall_status;
   $: engine  = $statusStore.engine_id;
   $: version = $statusStore.engine_version;
   $: slots   = Object.values($statusStore.running_models);
   // model_id → ModelLoadError. Empty when every recent load succeeded.
-  // Surfaces below the Model Processes panel so failed loads aren't silent.
+  // Rendered as a dismissable banner above Model Processes (LoadErrorBanner).
   $: lastErrors = Object.entries($statusStore.last_errors ?? {});
-  $: hasLoadErrors = lastErrors.length > 0;
   $: hw      = $hardwareStore;
   $: sys     = $sysInfoStore;
   // Live metrics from /lf/metrics (5 s poll). Replaces the legacy
@@ -44,15 +44,6 @@
     return fmtUptime(s);
   }
 
-  // Tracks which last_errors cards have their stderr_tail expanded. Keyed by
-  // model_id so toggle state survives reactive re-renders of the list.
-  let expandedErrors = new Set<string>();
-  function toggleError(id: string) {
-    if (expandedErrors.has(id)) expandedErrors.delete(id);
-    else                        expandedErrors.add(id);
-    expandedErrors = new Set(expandedErrors); // trigger Svelte reactivity
-  }
-
   function fmtSpecMode(mode?: string): string {
     if (!mode || mode === 'off') return 'off';
     return mode;
@@ -62,18 +53,6 @@
     if (!stats || stats.samples === 0) return '—';
     return `${Math.round(stats.cumulative_accept_rate * 100)}%`;
   }
-  function fmtRelative(iso: string): string {
-    try {
-      const d = new Date(iso);
-      const now = Date.now();
-      const delta = Math.round((now - d.getTime()) / 1000);
-      if (delta < 60)   return `${delta}s ago`;
-      if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
-      if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
-      return d.toLocaleString();
-    } catch { return iso; }
-  }
-
   // ── Metrics ────────────────────────────────────────────────────────────────
   // Avg TTFT proxy: chat p95 (closest signal until we instrument true TTFT).
   $: chatP95 = mx.endpoints['/v1/chat/completions']?.p95_ms ?? null;
@@ -119,6 +98,10 @@
   $: gpuMemTotal = gpu?.mem_total_mb ?? null;
   $: gpuMemPct   = (gpuMemUsed !== null && gpuMemTotal !== null && gpuMemTotal > 0)
     ? (gpuMemUsed / gpuMemTotal * 100) : null;
+  // Label the GPU memory line per platform: Apple Silicon shares one pool
+  // (unified), everything else (CUDA/ROCm) has discrete VRAM. "Metal" is
+  // macOS-only and was wrong on Windows/Linux.
+  $: gpuMemLabel = hw?.unified_mem ? 'Unified mem' : 'VRAM';
   $: gpuColor    = gpuUtil !== null
     ? (gpuUtil > 85 ? 'var(--danger)' : gpuUtil > 60 ? 'var(--warn)' : 'var(--accent)')
     : 'var(--text-3)';
@@ -204,6 +187,9 @@
       </div>
     </div>
 
+    <!-- ── Engine load errors (dismissable, severity-aware) ─────────────────── -->
+    <LoadErrorBanner errors={lastErrors} />
+
     <!-- ── Main panels ────────────────────────────────────────────────────────── -->
     <div class="panels">
 
@@ -268,46 +254,6 @@
         {/if}
       </section>
 
-      <!-- ── Engine Load Errors ─────────────────────────────────────────────
-           Only mounts when last_errors is non-empty. Surfaces the daemon's
-           most recent failure per model with a collapsible stderr tail —
-           saves users from grep'ing ~/.lmforge/logs/. -->
-      {#if hasLoadErrors}
-        <section class="panel panel--err" aria-label="Engine Load Errors">
-          <header class="panel-hd">
-            <div class="panel-hd-l">
-              <h2>Engine Load Errors</h2>
-              <span class="ps">{lastErrors.length} model{lastErrors.length === 1 ? '' : 's'} · most recent failures</span>
-            </div>
-          </header>
-          <div class="err-cards">
-            {#each lastErrors as [modelId, err] (modelId)}
-              {@const isOpen = expandedErrors.has(modelId)}
-              <div class="err-card">
-                <div class="err-r1">
-                  <span class="dot dot--err" style="margin-top:3px"></span>
-                  <span class="sn mono">{modelId}</span>
-                  <span class="err-when ps">{fmtRelative(err.at)}</span>
-                </div>
-                <div class="err-msg">{err.message}</div>
-                {#if err.stderr_tail && err.stderr_tail.length > 0}
-                  <button
-                    class="err-toggle"
-                    onclick={() => toggleError(modelId)}
-                    aria-expanded={isOpen}
-                  >
-                    {isOpen ? '▾' : '▸'} stderr tail ({err.stderr_tail.length.toLocaleString()} bytes)
-                  </button>
-                  {#if isOpen}
-                    <pre class="err-tail">{err.stderr_tail}</pre>
-                  {/if}
-                {/if}
-              </div>
-            {/each}
-          </div>
-        </section>
-      {/if}
-
       <!-- ── Hardware / System panel (scrollable) ──────────────────────────── -->
       <section class="panel panel--hw" aria-label="Hardware">
         <header class="panel-hd" style="flex-shrink:0">
@@ -355,10 +301,10 @@
               </div>
             {/if}
 
-            <!-- GPU Metal memory -->
+            <!-- GPU memory (VRAM, or unified on Apple Silicon) -->
             {#if gpuMemUsed !== null}
               <div class="hwc-row">
-                <span class="hw-k">Metal mem</span>
+                <span class="hw-k">{gpuMemLabel}</span>
                 <span class="hw-v mono">{(gpuMemUsed/1024).toFixed(2)} GB{#if gpuMemTotal !== null} / {(gpuMemTotal/1024).toFixed(1)} GB{/if}</span>
               </div>
               {#if gpuMemPct !== null}
@@ -567,47 +513,6 @@
   .cap-track { flex: 1; height: 4px; background: rgba(255,255,255,0.07); border-radius: 99px; overflow: hidden; }
   .cap-fill  { height: 100%; border-radius: 99px; transition: width 600ms; }
   .cap-nums  { font-size: 10.5px; color: var(--text-2); flex-shrink: 0; }
-
-  /* ── Engine load errors ─────────────────────────────────────────────────── */
-  .panel--err {
-    border-color: rgba(248, 113, 113, 0.35);
-    background: rgba(248, 113, 113, 0.04);
-  }
-  .panel--err .panel-hd h2 { color: #fcaaaa; }
-  .err-cards { display: flex; flex-direction: column; gap: 8px; }
-  .err-card {
-    background: rgba(0, 0, 0, 0.20);
-    border: 1px solid rgba(248, 113, 113, 0.25);
-    border-radius: var(--radius);
-    padding: 10px 12px;
-    display: flex; flex-direction: column; gap: 6px;
-  }
-  .err-r1 { display: flex; align-items: center; gap: 8px; }
-  .err-when { color: var(--text-3); font-size: 10.5px; margin-left: auto; }
-  .err-msg {
-    font-size: 12px; color: #fcaaaa; line-height: 1.5;
-    font-family: var(--font-mono); white-space: pre-wrap; word-break: break-word;
-  }
-  .err-toggle {
-    align-self: flex-start;
-    background: none; border: none; cursor: pointer;
-    font-size: 11px; color: var(--text-2);
-    padding: 2px 0;
-    font-family: var(--font-mono);
-  }
-  .err-toggle:hover { color: var(--text); }
-  .err-tail {
-    font-family: var(--font-mono); font-size: 10.5px; line-height: 1.45;
-    color: var(--text-2);
-    background: rgba(0, 0, 0, 0.40);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 8px 10px;
-    margin: 0;
-    max-height: 220px; overflow: auto;
-    white-space: pre;
-    user-select: text;
-  }
 
   /* ── Hardware resource cards ─────────────────────────────────────────────── */
   .hw-card {

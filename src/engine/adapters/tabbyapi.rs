@@ -218,16 +218,18 @@ impl EngineAdapter for TabbyApiAdapter {
         let main_py = source.join("main.py");
 
         if !python.is_file() {
-            anyhow::bail!(
+            return Err(crate::engine::adapter::EngineLoadError::EngineNotInstalled(format!(
                 "TabbyAPI venv Python not found at {}. Run: lmforge engine install tabbyapi",
                 python.display()
-            );
+            ))
+            .into());
         }
         if !main_py.is_file() {
-            anyhow::bail!(
+            return Err(crate::engine::adapter::EngineLoadError::EngineNotInstalled(format!(
                 "TabbyAPI source not found at {}. Run: lmforge engine install tabbyapi",
                 main_py.display()
-            );
+            ))
+            .into());
         }
 
         info!(model_id = %model_id, port = port, "Spawning TabbyAPI (ExLlamaV3)");

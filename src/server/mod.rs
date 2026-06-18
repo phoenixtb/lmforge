@@ -223,6 +223,7 @@ pub fn build_router(
         .route("/lf/model/switch", post(native::model_switch))
         .route("/lf/model/pull", post(native::model_pull))
         .route("/lf/model/unload", post(native::model_unload))
+        .route("/lf/errors/dismiss", post(native::dismiss_error))
         .route("/lf/model/delete/{name}", delete(native::model_delete))
         .route(
             "/lf/config",

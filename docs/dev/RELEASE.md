@@ -31,14 +31,24 @@ Workflows involved:
    cargo test --all-targets
    ```
 
-4. **Local E2E** against the release build (see [DEV_GUIDE.md](./DEV_GUIDE.md)):
+4. **Full pre-release E2E** from the current code (see [DEV_GUIDE.md](./DEV_GUIDE.md)).
+   `e2e -Source local` does the whole cycle: full clean → build core **and UI** →
+   install both → lifecycle → multi-model inference (auto-pulls required models) →
+   full purge (incl. models).
 
    ```powershell
-   cargo build --release --bin lmforge
-   powershell -File scripts\lmforge.ps1 test-e2e-core
+   # Windows
+   powershell -File scripts\lmforge.ps1 e2e -Source local
    ```
 
-   (macOS/Linux: `cargo build --release --bin lmforge && ./scripts/lmforge.sh test-e2e-core`)
+   ```bash
+   # macOS / Linux
+   ./scripts/lmforge.sh e2e --source local
+   ```
+
+   Quick lifecycle-only gate (no model pull, no UI build): add `-NoInference -NoUi`
+   (`--no-inference --no-ui`). Use `-NoBuild` (`--no-build`) to reuse an existing
+   `target/release` binary.
 5. **Commit the bump, push main, wait for green.** Both `CI` and `E2E`
    workflows must pass **on the exact commit you will tag**. No "it was green
    two commits ago".
@@ -85,15 +95,15 @@ happens via a pre-release first:
 2. **Smoke-test the published assets** on a real machine (not CI):
 
    ```powershell
-   # Windows — release smoke or full install + models + inference
-   powershell -File scripts\lmforge.ps1 test-release -Version vX.Y.Z
-   powershell -File scripts\lmforge.ps1 release-e2e -Version vX.Y.Z -KeepInstall
+   # Windows — release smoke (assets) or full install + models + inference
+   powershell -File scripts\lmforge.ps1 e2e -Source release:vX.Y.Z -VerifyAssets -NoInference
+   powershell -File scripts\lmforge.ps1 e2e -Source release:vX.Y.Z -KeepInstall
    ```
 
    ```bash
    # macOS / Linux
-   LMFORGE_VERSION=vX.Y.Z ./scripts/lmforge.sh test-release
-   ./scripts/lmforge.sh release-e2e vX.Y.Z --keep-install
+   ./scripts/lmforge.sh e2e --source release:vX.Y.Z --verify-assets --no-inference
+   ./scripts/lmforge.sh e2e --source release:vX.Y.Z --keep-install
    ```
 
 3. **Promote**: edit the release, untick "pre-release" → it becomes `latest`

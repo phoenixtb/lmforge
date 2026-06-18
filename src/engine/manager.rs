@@ -84,9 +84,85 @@ pub struct ModelLoadError {
     /// One-line error message from the orchestrator side
     /// (e.g. "Engine Adapter failed health verify on port 11521").
     pub message: String,
+    /// Coarse failure classification so consumers can decide presentation
+    /// and retry policy without parsing the message. Derived at record time.
+    pub severity: LoadErrorSeverity,
+    /// How many consecutive times this same failure (same signature) has
+    /// occurred for this model since it was last cleared. Lets the UI render a
+    /// single "last seen · Nx" entry instead of stacking duplicate cards.
+    pub count: u32,
+}
+
+/// Stable grouping key for a failure: severity + the message with digit runs
+/// collapsed to `#`, so volatile tokens (ports, sizes, timings) don't fragment
+/// otherwise-identical failures. Used to dedupe the occurrence counter and to
+/// decide whether a dismissal still applies (same signature) or a genuinely
+/// new failure should resurface (different signature).
+fn error_signature(severity: LoadErrorSeverity, message: &str) -> String {
+    let mut norm = String::with_capacity(message.len());
+    let mut in_digits = false;
+    for c in message.chars() {
+        if c.is_ascii_digit() {
+            if !in_digits {
+                norm.push('#');
+            }
+            in_digits = true;
+        } else {
+            norm.push(c);
+            in_digits = false;
+        }
+    }
+    format!("{severity:?}|{norm}")
+}
+
+/// Coarse failure classification for a `ModelLoadError`. Drives UI treatment
+/// (a `transient` failure may auto-collapse; a `user_error` stays actionable
+/// until the user resolves or dismisses it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoadErrorSeverity {
+    /// Actionable config / input problem the user must fix (missing weights,
+    /// model not pulled, bad model id). Should persist in the UI.
+    UserError,
+    /// Likely-recoverable runtime hiccup (port race, health timeout, OOM).
+    /// Safe to auto-demote in the UI after a short window.
+    Transient,
+    /// Anything else — treated as a hard error worth surfacing.
+    EngineBug,
+}
+
+impl LoadErrorSeverity {
+    /// Severity for a failure during the **spawn** phase (the engine never
+    /// reached a health check). Adapters raise `EngineLoadError` for the
+    /// user-actionable cases (weights not pulled, engine not installed); we
+    /// classify those as `UserError` by error type rather than message text.
+    /// Anything else that prevents a spawn is a hard `EngineBug`.
+    fn for_spawn_failure(err: &anyhow::Error) -> Self {
+        if err
+            .downcast_ref::<crate::engine::adapter::EngineLoadError>()
+            .is_some()
+        {
+            Self::UserError
+        } else {
+            Self::EngineBug
+        }
+    }
 }
 
 const MAX_LAST_ERRORS: usize = 8;
+
+/// How long a `last_errors` entry is retained before the heartbeat sweep
+/// evicts it. Bounds "stale failure" noise so a one-off cold-load error does
+/// not linger for the whole daemon lifetime. Override via
+/// `LMFORGE_LAST_ERROR_TTL_SECS` (0 disables the sweep).
+const DEFAULT_LAST_ERROR_TTL_SECS: i64 = 600;
+
+fn last_error_ttl_secs() -> i64 {
+    std::env::var("LMFORGE_LAST_ERROR_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(DEFAULT_LAST_ERROR_TTL_SECS)
+}
 
 /// Shared engine state accessible from API handlers
 #[derive(Debug, Clone, serde::Serialize)]
@@ -101,6 +177,71 @@ pub struct EngineState {
     /// Cleared individually when a model loads successfully.
     #[serde(default)]
     pub last_errors: std::collections::HashMap<String, ModelLoadError>,
+    /// Per-model dismissal: `model_id → dismissed error signature`. Suppresses
+    /// re-surfacing only while the SAME failure (same signature) keeps firing —
+    /// a genuinely *different* failure, or a success then a new failure, lifts
+    /// the suppression. Internal bookkeeping — not part of the wire status.
+    #[serde(skip)]
+    pub dismissed_errors: std::collections::HashMap<String, String>,
+}
+
+impl EngineState {
+    /// Record a load failure for `model_id`. Returns whether it was stored.
+    ///
+    /// Suppressed only while the user has dismissed *this same* failure
+    /// signature (the model keeps getting re-attempted per request and would
+    /// otherwise reappear on every retry). A different failure signature lifts
+    /// the dismissal and surfaces. Repeats of the currently-shown signature
+    /// bump the occurrence `count` and refresh the timestamp rather than
+    /// stacking. Caps the map at `MAX_LAST_ERRORS`, evicting the oldest by `at`.
+    pub fn record_error(&mut self, model_id: &str, mut entry: ModelLoadError) -> bool {
+        let sig = error_signature(entry.severity, &entry.message);
+
+        if self.dismissed_errors.get(model_id).map(String::as_str) == Some(sig.as_str()) {
+            return false;
+        }
+        // Different (or first) failure — any prior dismissal no longer applies.
+        self.dismissed_errors.remove(model_id);
+
+        // Same signature already showing → it's another occurrence, not a new
+        // distinct error: increment the counter instead of resetting to 1.
+        if let Some(existing) = self.last_errors.get(model_id)
+            && error_signature(existing.severity, &existing.message) == sig
+        {
+            entry.count = existing.count.saturating_add(1);
+        }
+
+        self.last_errors.insert(model_id.to_string(), entry);
+        if self.last_errors.len() > MAX_LAST_ERRORS
+            && let Some(oldest_key) = self
+                .last_errors
+                .iter()
+                .min_by(|a, b| a.1.at.cmp(&b.1.at))
+                .map(|(k, _)| k.clone())
+        {
+            self.last_errors.remove(&oldest_key);
+        }
+        true
+    }
+
+    /// A successful load clears any recorded error AND lifts a prior dismissal,
+    /// so a genuine *future* failure for this model resurfaces.
+    pub fn clear_error(&mut self, model_id: &str) {
+        self.last_errors.remove(model_id);
+        self.dismissed_errors.remove(model_id);
+    }
+
+    /// User dismissed this model's error in the UI: drop it now and suppress
+    /// re-surfacing of the *same* failure signature. A different failure (or a
+    /// success then a new failure) will resurface on its own.
+    pub fn dismiss_error(&mut self, model_id: &str) {
+        if let Some(e) = self.last_errors.remove(model_id) {
+            self.dismissed_errors
+                .insert(model_id.to_string(), error_signature(e.severity, &e.message));
+        } else {
+            self.dismissed_errors.remove(model_id);
+        }
+    }
 }
 
 pub struct ActiveSlot {
@@ -164,6 +305,7 @@ impl EngineManager {
             running_models: std::collections::HashMap::new(),
             metrics: EngineMetrics::default(),
             last_errors: std::collections::HashMap::new(),
+            dismissed_errors: std::collections::HashMap::new(),
         }));
 
         Self {
@@ -218,27 +360,22 @@ impl EngineManager {
     ///
     /// Intentionally swallows all I/O errors — surfacing diagnostics must
     /// never fail the load path. Phase 2.3.
-    async fn record_load_failure(&self, model_id: &str, err: &anyhow::Error) {
+    async fn record_load_failure(
+        &self,
+        model_id: &str,
+        err: &anyhow::Error,
+        severity: LoadErrorSeverity,
+    ) {
         let stderr_tail = crate::logging::rotation::read_stderr_tail(&self.logs_dir, model_id);
         let entry = ModelLoadError {
             at: chrono::Utc::now().to_rfc3339(),
             stderr_tail,
             message: format!("{err}"),
+            severity,
+            count: 1,
         };
 
-        let mut state = self.state.write().await;
-        state.last_errors.insert(model_id.to_string(), entry);
-
-        // Cap at MAX_LAST_ERRORS — evict oldest by `at`.
-        if state.last_errors.len() > MAX_LAST_ERRORS
-            && let Some(oldest_key) = state
-                .last_errors
-                .iter()
-                .min_by(|a, b| a.1.at.cmp(&b.1.at))
-                .map(|(k, _)| k.clone())
-        {
-            state.last_errors.remove(&oldest_key);
-        }
+        self.state.write().await.record_error(model_id, entry);
     }
 
     pub fn state(&self) -> Arc<RwLock<EngineState>> {
@@ -571,7 +708,8 @@ impl EngineManager {
         {
             Ok(e) => e,
             Err(e) => {
-                self.record_load_failure(model_id, &e).await;
+                let sev = LoadErrorSeverity::for_spawn_failure(&e);
+                self.record_load_failure(model_id, &e, sev).await;
                 self.state.write().await.running_models.remove(model_id);
                 crate::server::metrics::observe_model_load(
                     model_id,
@@ -665,7 +803,10 @@ impl EngineManager {
                                  (first attempt failed in {}ms with: {e})",
                                 elapsed.as_millis()
                             );
-                            self.record_load_failure(model_id, &combined).await;
+                            // Engine spawned but never went healthy on either
+                            // attempt — a runtime crash/timeout, not a config error.
+                            self.record_load_failure(model_id, &combined, LoadErrorSeverity::Transient)
+                                .await;
                             self.state.write().await.running_models.remove(model_id);
                             crate::server::metrics::observe_model_load(
                                 model_id,
@@ -682,12 +823,13 @@ impl EngineManager {
                         engine = retry_engine;
                     }
                     Err(e2) => {
+                        let sev = LoadErrorSeverity::for_spawn_failure(&e2);
                         let combined = anyhow::anyhow!(
                             "spec-dec retry spawn failed: {e2} \
                              (first attempt failed in {}ms with: {e})",
                             elapsed.as_millis()
                         );
-                        self.record_load_failure(model_id, &combined).await;
+                        self.record_load_failure(model_id, &combined, sev).await;
                         self.state.write().await.running_models.remove(model_id);
                         crate::server::metrics::observe_model_load(
                             model_id,
@@ -699,7 +841,10 @@ impl EngineManager {
                     }
                 }
             } else {
-                self.record_load_failure(model_id, &e).await;
+                // Engine spawned but failed its health check — runtime
+                // crash/timeout, classified transient (may recover on retry).
+                self.record_load_failure(model_id, &e, LoadErrorSeverity::Transient)
+                    .await;
                 self.state.write().await.running_models.remove(model_id);
                 crate::server::metrics::observe_model_load(
                     model_id,
@@ -729,8 +874,9 @@ impl EngineManager {
             if let Some(slot) = state.running_models.get_mut(model_id) {
                 slot.status = EngineStatus::Ready;
             }
-            // The previous load attempt (if any) succeeded — drop its stderr tail.
-            state.last_errors.remove(model_id);
+            // The previous load attempt (if any) succeeded — drop its stderr tail
+            // and lift any user dismissal so a genuine future failure resurfaces.
+            state.clear_error(model_id);
         }
 
         // Notify all status subscribers that a new model is ready.
@@ -803,6 +949,20 @@ impl EngineManager {
                             public_slot.idle_secs = now.saturating_sub(slot.last_accessed);
                         }
                     }
+                    // Evict stale load errors (TTL). Successful loads already clear
+                    // their entry; this bounds one-off failures that never recover.
+                    let ttl = last_error_ttl_secs();
+                    if ttl > 0 && !state.last_errors.is_empty() {
+                        let now_ts = chrono::Utc::now().timestamp();
+                        state.last_errors.retain(|_, e| {
+                            match chrono::DateTime::parse_from_rfc3339(&e.at) {
+                                Ok(at) => now_ts - at.timestamp() < ttl,
+                                // Unparseable timestamp: keep it rather than risk
+                                // dropping a real error on a parse quirk.
+                                Err(_) => true,
+                            }
+                        });
+                    }
                     // Notify after every heartbeat tick so idle_secs stays fresh
                     // in the tray / SSE stream without requiring a state-change event.
                     drop(state);
@@ -864,5 +1024,150 @@ fn kill_port_holder_via_lsof(port: u16) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod last_error_tests {
+    use super::*;
+
+    fn blank_state() -> EngineState {
+        EngineState {
+            overall_status: EngineStatus::Ready,
+            engine_id: "test".into(),
+            engine_version: "0".into(),
+            running_models: std::collections::HashMap::new(),
+            metrics: EngineMetrics::default(),
+            last_errors: std::collections::HashMap::new(),
+            dismissed_errors: std::collections::HashMap::new(),
+        }
+    }
+
+    fn err(at: &str, sev: LoadErrorSeverity) -> ModelLoadError {
+        msg_err(at, sev, "boom")
+    }
+
+    fn msg_err(at: &str, sev: LoadErrorSeverity, message: &str) -> ModelLoadError {
+        ModelLoadError {
+            at: at.into(),
+            stderr_tail: None,
+            message: message.into(),
+            severity: sev,
+            count: 1,
+        }
+    }
+
+    #[test]
+    fn record_error_stores_when_not_dismissed() {
+        let mut s = blank_state();
+        assert!(s.record_error("m", err("t0", LoadErrorSeverity::Transient)));
+        assert!(s.last_errors.contains_key("m"));
+    }
+
+    #[test]
+    fn dismiss_removes_current_error_and_suppresses_same_signature() {
+        let mut s = blank_state();
+        s.record_error("m", err("t0", LoadErrorSeverity::Transient));
+
+        s.dismiss_error("m");
+        assert!(!s.last_errors.contains_key("m"), "current error cleared");
+        assert!(s.dismissed_errors.contains_key("m"), "model marked dismissed");
+
+        // Same failure keeps firing (fresh timestamp, same message) — stays quiet.
+        let stored = s.record_error("m", err("t1", LoadErrorSeverity::Transient));
+        assert!(!stored, "same-signature failure should be suppressed");
+        assert!(!s.last_errors.contains_key("m"), "no new error surfaced");
+    }
+
+    #[test]
+    fn volatile_numbers_do_not_break_suppression() {
+        // Same failure kind, different port/timing → same signature → suppressed.
+        let mut s = blank_state();
+        s.record_error(
+            "m",
+            msg_err("t0", LoadErrorSeverity::Transient, "exited port=11432 in 4563ms"),
+        );
+        s.dismiss_error("m");
+        let stored = s.record_error(
+            "m",
+            msg_err("t1", LoadErrorSeverity::Transient, "exited port=11888 in 9012ms"),
+        );
+        assert!(!stored, "digit-only differences must not defeat dismissal");
+    }
+
+    #[test]
+    fn different_signature_resurfaces_without_a_successful_load() {
+        let mut s = blank_state();
+        s.record_error("m", msg_err("t0", LoadErrorSeverity::UserError, "no .gguf found"));
+        s.dismiss_error("m");
+
+        // A genuinely different failure mode should surface immediately.
+        assert!(s.record_error("m", msg_err("t1", LoadErrorSeverity::Transient, "out of VRAM")));
+        assert!(s.last_errors.contains_key("m"));
+        assert!(!s.dismissed_errors.contains_key("m"), "stale dismissal lifted");
+    }
+
+    #[test]
+    fn successful_load_lifts_dismissal_so_real_failures_resurface() {
+        let mut s = blank_state();
+        s.record_error("m", err("t0", LoadErrorSeverity::Transient));
+        s.dismiss_error("m");
+
+        // Model finally loads OK → clears error and the suppression.
+        s.clear_error("m");
+        assert!(!s.dismissed_errors.contains_key("m"), "dismissal lifted on success");
+
+        // The same failure after a good load should surface again.
+        assert!(s.record_error("m", err("t2", LoadErrorSeverity::Transient)));
+        assert!(s.last_errors.contains_key("m"));
+    }
+
+    #[test]
+    fn repeat_of_same_signature_bumps_count() {
+        let mut s = blank_state();
+        s.record_error("m", err("t0", LoadErrorSeverity::Transient));
+        s.record_error("m", err("t1", LoadErrorSeverity::Transient));
+        s.record_error("m", err("t2", LoadErrorSeverity::Transient));
+        assert_eq!(s.last_errors["m"].count, 3);
+        assert_eq!(s.last_errors["m"].at, "t2", "timestamp refreshed to latest");
+    }
+
+    #[test]
+    fn different_signature_resets_count() {
+        let mut s = blank_state();
+        s.record_error("m", msg_err("t0", LoadErrorSeverity::Transient, "kind A"));
+        s.record_error("m", msg_err("t1", LoadErrorSeverity::Transient, "kind A"));
+        s.record_error("m", msg_err("t2", LoadErrorSeverity::Transient, "kind B"));
+        assert_eq!(s.last_errors["m"].count, 1, "new signature starts a fresh count");
+    }
+
+    #[test]
+    fn dismissal_is_per_model() {
+        let mut s = blank_state();
+        s.record_error("a", err("t0", LoadErrorSeverity::Transient));
+        s.record_error("b", err("t0", LoadErrorSeverity::UserError));
+
+        s.dismiss_error("a");
+        assert!(!s.record_error("a", err("t1", LoadErrorSeverity::Transient)));
+        // 'b' is untouched and still surfaces new failures.
+        assert!(s.record_error("b", err("t1", LoadErrorSeverity::UserError)));
+        assert!(s.last_errors.contains_key("b"));
+        assert!(!s.last_errors.contains_key("a"));
+    }
+
+    #[test]
+    fn record_error_caps_at_max() {
+        let mut s = blank_state();
+        for i in 0..(MAX_LAST_ERRORS + 4) {
+            // Lexicographically sortable timestamps so the oldest evicts first.
+            s.record_error(
+                &format!("m{i:02}"),
+                err(&format!("2026-01-01T00:00:{i:02}Z"), LoadErrorSeverity::Transient),
+            );
+        }
+        assert_eq!(s.last_errors.len(), MAX_LAST_ERRORS);
+        // Oldest (m00) evicted, newest retained.
+        assert!(!s.last_errors.contains_key("m00"));
+        assert!(s.last_errors.contains_key(&format!("m{:02}", MAX_LAST_ERRORS + 3)));
     }
 }

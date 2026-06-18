@@ -75,12 +75,12 @@ impl EngineAdapter for LlamacppAdapter {
         // llama-server requires a single .gguf file path, not a directory.
         // Find the largest .gguf file in the model directory.
         let gguf_path = find_gguf_file(model_dir).ok_or_else(|| {
-            anyhow::anyhow!(
+            crate::engine::adapter::EngineLoadError::NotMaterialized(format!(
                 "No .gguf file found in model directory: {}. \
                  Pull the model first with: lmforge pull {}",
                 model_dir.display(),
                 model_id
-            )
+            ))
         })?;
 
         info!(

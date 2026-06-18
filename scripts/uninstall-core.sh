@@ -98,6 +98,10 @@ fi
 pkill -x "$BINARY_NAME" 2>/dev/null || true
 sleep 1
 pkill -9 -x "$BINARY_NAME" 2>/dev/null || true
+# Stop orphaned engine subprocesses (e.g. llama-server) so they don't hold GPU
+# memory or files under the engines dir after the daemon is gone.
+pkill -x llama-server 2>/dev/null || true
+pkill -f "$DATA_DIR/engines/" 2>/dev/null || true
 info "No lmforge processes running"
 
 # ── 5. Remove binary (or symlink) from every known install location ──────────

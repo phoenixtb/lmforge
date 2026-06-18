@@ -58,11 +58,12 @@ impl EngineAdapter for OmlxAdapter {
 
         // Verify the specific model subdirectory exists before starting.
         if !model_subdir.exists() {
-            anyhow::bail!(
+            return Err(crate::engine::adapter::EngineLoadError::NotMaterialized(format!(
                 "Model directory not found: {}. Pull the model first with: lmforge pull {}",
                 model_subdir.display(),
                 model_id
-            );
+            ))
+            .into());
         }
 
         info!(

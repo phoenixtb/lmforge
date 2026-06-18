@@ -36,9 +36,9 @@ on `GET /lf/status`. The map is **always present** (it may be `{}`).
 Every successful load **clears** the entry for that `model_id`; every
 failed load **replaces** it.
 
-`ModelLoadError` carries an RFC3339 timestamp, a short human message, and
-an optional `stderr_tail` containing the last N lines of the engine
-subprocess's stderr. The UI renders the message inline and the
+`ModelLoadError` carries an RFC3339 timestamp, a short human message, a coarse
+`severity`, and an optional `stderr_tail` containing the last N lines of the
+engine subprocess's stderr. The UI renders the message inline and the
 `stderr_tail` behind a per-card toggle.
 
 ### `ModelLoadError` schema
@@ -47,7 +47,8 @@ subprocess's stderr. The UI renders the message inline and the
 {
   "at": "2026-05-27T16:26:13.737175765+00:00",   // RFC3339 UTC
   "message": "No .gguf file found in model directory: /home/u/.lmforge/models/qwen3:8b:4bit. Pull the model first with: lmforge pull qwen3:8b:4bit",
-  "stderr_tail": "ERROR cuda kernel sm_120 missing\nFATAL aborting"
+  "stderr_tail": "ERROR cuda kernel sm_120 missing\nFATAL aborting",
+  "severity": "user_error"                        // user_error | transient | engine_bug
 }
 ```
 
@@ -56,6 +57,7 @@ subprocess's stderr. The UI renders the message inline and the
 | `at` | RFC3339 UTC string | When the failure was recorded. UI renders relative ("5m ago") + absolute on hover. |
 | `message` | `string` | Single human-readable line describing the failure. **Never** an opaque error code. When the daemon can suggest a fix (e.g. "Pull the model first with: …"), the suggestion is appended. |
 | `stderr_tail` | `string \| null` | Last bytes of `~/.lmforge/logs/<model_id>/stderr.log`. `null` when the engine never spawned (pre-flight failures) or when no log file exists. |
+| `severity` | `"user_error" \| "transient" \| "engine_bug"` | Set **explicitly at the failure site** (not by parsing `message`). `user_error` = adapter raised a typed `EngineLoadError` (weights not pulled, engine not installed) → UI keeps it visible + actionable. `transient` = engine spawned but failed/never passed its health check (runtime crash/timeout) → UI may auto-demote after a short window. `engine_bug` = any other spawn-phase failure (surfaced loudly). |
 
 ### Bounds and tuning knobs
 
@@ -64,6 +66,7 @@ Both bounds live in the daemon, **not** the UI:
 | Limit | Default | Override | Source |
 | --- | --- | --- | --- |
 | Max simultaneous tracked failures | **8 models** | *(not user-tunable)* | `MAX_LAST_ERRORS` in `src/engine/manager.rs` |
+| Entry retention (TTL) | **600 s** | `LMFORGE_LAST_ERROR_TTL_SECS` (`0` disables) | `DEFAULT_LAST_ERROR_TTL_SECS` in `src/engine/manager.rs` |
 | `stderr_tail` line count | **32 lines** | `LMFORGE_STDERR_TAIL_LINES` | `DEFAULT_STDERR_TAIL_LINES` in `src/logging/rotation.rs` |
 | `stderr_tail` byte cap | **8 KiB** | *(not user-tunable)* | `DEFAULT_STDERR_TAIL_MAX_BYTES` in `src/logging/rotation.rs` |
 
@@ -77,13 +80,26 @@ a single malformed engine line cannot blow the snapshot size.
 on successful load of <model_id>:    last_errors.remove(<model_id>)
 on failed     load of <model_id>:    last_errors.insert(<model_id>, ModelLoadError { ... })
 on map.len() > MAX_LAST_ERRORS:      evict the entry with the smallest `at`
+on heartbeat tick (every 2 s):       evict entries older than LMFORGE_LAST_ERROR_TTL_SECS
 on `lmforge stop`:                   last_errors persists as long as the daemon process lives;
                                      on cold start it begins empty again.
 ```
 
 Successful loads clear because keeping a stale failure next to a now-
 working slot is **strictly worse** than silence. Users would interpret
-the stale card as "still failing" and re-run diagnosis.
+the stale card as "still failing" and re-run diagnosis. The TTL sweep
+bounds the opposite case: a one-off cold-load failure for a model the user
+never retries no longer lingers for the whole daemon lifetime.
+
+### Dismissal (client-side)
+
+The daemon does **not** expose a dismiss endpoint. Because the snapshot is
+re-pushed every 2 s, dismissal is a **UI concern**: the Overview banner
+tracks dismissed occurrences keyed by `${model_id}@${at}` in `sessionStorage`.
+Dismissing hides that specific occurrence; a **new** failure (new `at`)
+re-appears automatically. This keeps the server contract stateless while
+letting users clear noise. `severity` lets the UI auto-demote `transient`
+failures to a compact pill after a short window without losing the data.
 
 ### Capture path (engine subprocess → `last_errors`)
 
@@ -93,11 +109,15 @@ engine subprocess
         └── ~/.lmforge/logs/<model_id>/stderr.log  (rotated, capped)
 
 EngineManager::load(model_id) fails with anyhow::Error
-  └── EngineManager::record_load_failure(model_id, err)
+  └── caller picks severity at the failure site:
+  │     spawn phase  → LoadErrorSeverity::for_spawn_failure(err)
+  │                    (downcast to EngineLoadError ⇒ user_error, else engine_bug)
+  │     health phase → LoadErrorSeverity::Transient
+  └── EngineManager::record_load_failure(model_id, err, severity)
         ├── stderr_tail = read_stderr_tail(&logs_dir, model_id)
         │     reads last DEFAULT_STDERR_TAIL_LINES (env-overridable)
         │     within DEFAULT_STDERR_TAIL_MAX_BYTES bytes
-        ├── entry = ModelLoadError { at: now(), message: err.to_string(), stderr_tail }
+        ├── entry = ModelLoadError { at: now(), message: err.to_string(), stderr_tail, severity }
         ├── state.last_errors.insert(model_id, entry)
         └── if len > MAX_LAST_ERRORS: evict oldest by `at`
 ```
@@ -169,7 +189,8 @@ non-active models with old entries are advisory only.
   daemon side; trivial. The status snapshot stays under ~100 KiB even
   in worst case.
 - **Self-clearing.** Map entries vanish when their model loads
-  successfully — no manual dismissal UX needed.
+  successfully, and otherwise expire via the TTL sweep. The UI adds
+  occurrence-keyed dismissal on top for immediate noise control.
 
 ### Negative / costs
 
@@ -212,10 +233,13 @@ non-active models with old entries are advisory only.
 - **Crash-after-load entries.** Promote runtime crashes from
   `restart_count` only into a sibling `runtime_errors` map keyed by
   `model_id`. New ADR if/when needed.
-- **Severity classification.** Adding a coarse `severity:
-  "transient" | "user_error" | "engine_bug"` field would let UIs surface
-  the difference between "out of disk" and "this hardware can't run
-  this model".
+- **Severity classification.** ~~Adding a coarse `severity` field~~ —
+  **shipped.** `severity` (`user_error | transient | engine_bug`) is set
+  explicitly at the failure site: adapters raise a typed
+  `engine::adapter::EngineLoadError` for user-actionable cases (weights not
+  pulled, engine not installed), the manager classifies spawn-phase failures
+  by downcasting that error and tags health-phase failures `transient`. No
+  message-text parsing on the daemon side.
 - **Streamed stderr.** Once Phase 7 lands a streaming-output subsystem,
   the UI could `follow` a failing model's stderr in real-time rather
   than reading the post-mortem tail. Until then, the post-mortem is
@@ -223,8 +247,10 @@ non-active models with old entries are advisory only.
 
 ## References
 
-- `src/engine/manager.rs` — `ModelLoadError`, `MAX_LAST_ERRORS`,
-  `record_load_failure`.
+- `src/engine/manager.rs` — `ModelLoadError`, `LoadErrorSeverity`,
+  `MAX_LAST_ERRORS`, `DEFAULT_LAST_ERROR_TTL_SECS`, `record_load_failure`.
+- `src/engine/adapter.rs` — `EngineLoadError` (typed user-actionable
+  failures raised by adapters' `start()` paths).
 - `src/logging/rotation.rs` — `read_stderr_tail` + bounds.
 - `src/server/native.rs::status` — `/lf/status` response builder.
 - `ui/src/lib/api.ts` — `ModelLoadError`, `LfStatus.last_errors`,

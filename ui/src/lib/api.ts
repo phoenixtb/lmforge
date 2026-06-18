@@ -62,6 +62,12 @@ export interface ModelLoadError {
   at: string;                     // ISO timestamp
   message: string;                // short human-readable failure
   stderr_tail?: string | null;    // last N lines of engine stderr (may be null)
+  /** Coarse classification from the daemon (ADR-003). Optional for back-compat
+   *  with older daemons that predate the field. */
+  severity?: 'user_error' | 'transient' | 'engine_bug';
+  /** Consecutive occurrences of this same failure signature since last cleared.
+   *  Rendered as a "Nx" badge. Optional for back-compat. */
+  count?: number;
 }
 
 /**
@@ -267,6 +273,14 @@ export const listModels = (): Promise<{ schema_version: number; models: ModelEnt
 /** POST /lf/model/switch — hot-swap active model */
 export const switchModel = (modelId: string): Promise<{ status: string }> =>
   post('/lf/model/switch', { model: modelId });
+
+/**
+ * POST /lf/errors/dismiss — clear a model's load error on the daemon and
+ * suppress it until the model loads successfully again. The daemon re-records
+ * a failing model on every request, so dismissal must be server-side to stick.
+ */
+export const dismissLoadError = (modelId: string): Promise<{ status: string }> =>
+  post('/lf/errors/dismiss', { model: modelId });
 
 /** POST /lf/model/unload — unload all or specific model from VRAM */
 export const unloadModel = (modelId?: string): Promise<{ status: string }> =>

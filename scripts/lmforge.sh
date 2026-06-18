@@ -1,12 +1,22 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# LMForge CLI — interactive dev / test / release menu (macOS / Linux)
+# LMForge CLI — dev / test / release menu (macOS / Linux)
+#
+# Module model (install SOURCE is a parameter, not a separate script):
+#   clean    [--dev] [--purge]            uninstall core + UI (+ dev artefacts)
+#   install  --source local|release[:TAG] build+install local, or install release
+#   e2e      --source local|release[:TAG] [--inference|--no-inference] [--with-ui]
+#                                          [--verify-assets] [--keep-install]
+#   dev-up   [flags…]                      build+run from repo in debug (dev loop)
+#   dev-down [flags…]                      tear down / wipe dev artefacts
 #
 # Usage:
-#   ./scripts/lmforge.sh                  # interactive menu
-#   ./scripts/lmforge.sh status           # non-interactive dispatch
-#   ./scripts/lmforge.sh test-multi       # run multi-model E2E
-#   ./scripts/lmforge.sh release-e2e      # install from release + inference E2E
+#   ./scripts/lmforge.sh                              # interactive menu
+#   ./scripts/lmforge.sh status
+#   ./scripts/lmforge.sh e2e --source local --inference
+#   ./scripts/lmforge.sh e2e --source release:v0.1.5 --keep-install
+#   ./scripts/lmforge.sh install --source release:v0.1.5
+#   ./scripts/lmforge.sh clean --dev --purge
 # ==============================================================================
 set -euo pipefail
 
@@ -20,102 +30,98 @@ source "$SCRIPT_DIR/lib/menu-common.sh"
 
 ACTIONS=(
     "status"
-    "dev-reinstall-core"
-    "dev-reinstall-ui"
-    "dev-clean"
+    "install"
+    "e2e"
+    "clean"
+    "dev-up"
+    "dev-up-ui"
+    "dev-down"
     "dev-logs"
     "test-unit"
     "test-dev"
     "test-multi"
-    "test-e2e-core"
-    "test-release"
-    "release-e2e"
-    "cleanup-core"
-    "cleanup-ui"
     "quit"
 )
 
 LABELS=(
     "Status             Snapshot binaries, daemon, disk"
-    "Reinstall core     Clean build + install core from repo"
-    "Reinstall UI       Clean build + launch UI from repo"
-    "Dev clean          Audit / wipe build artefacts"
+    "Install            Install core (--source local|release[:TAG])"
+    "E2E                Install + lifecycle + inference (--source …)"
+    "Clean              Uninstall core + UI (--dev --purge)"
+    "Dev up             Build + run from repo, debug (dev loop)"
+    "Dev up UI          Clean build + launch UI from repo"
+    "Dev down           Audit / wipe dev build artefacts"
     "Logs               Tail daemon / dev logs"
     "Test: cargo        Unit + integration (cargo test)"
     "Test: dev matrix   API + inference (dev_test.sh)"
-    "Test: multi-model  Chat+embed co-load E2E"
-    "Test: install E2E  Core install lifecycle (local bin)"
-    "Test: release      Release smoke (no model pull)"
-    "Release E2E        Install release + models + inference + cleanup"
-    "Uninstall core     uninstall-core.sh"
-    "Uninstall UI       uninstall-ui.sh"
+    "Test: multi-model  Inference suite against running daemon"
     "Quit"
 )
 
+# install --source local|release[:TAG]
+run_install() {
+    local src="release"
+    while (($#)); do
+        case "$1" in
+            --source)   src="${2:?--source requires local|release[:TAG]}"; shift ;;
+            --source=*) src="${1#*=}" ;;
+            *) echo "install: unknown flag $1" >&2; return 1 ;;
+        esac
+        shift
+    done
+    case "$src" in
+        local)
+            cargo build --release --bin lmforge || return 1
+            LMFORGE_LOCAL_BIN="$REPO_ROOT/target/release/lmforge" \
+                bash "$REPO_ROOT/scripts/install-core.sh"
+            ;;
+        release|release:*|latest)
+            local tag="${src#release}"; tag="${tag#:}"
+            [[ -n "$tag" && "$tag" != "latest" ]] && export LMFORGE_VERSION="$tag"
+            bash "$REPO_ROOT/scripts/install-core.sh"
+            bash "$REPO_ROOT/scripts/install-ui.sh" || true
+            ;;
+        *) echo "install: bad --source $src (want local|release[:TAG])" >&2; return 1 ;;
+    esac
+}
+
+# clean [--dev] [--purge]
+run_clean() {
+    local dev=0 purge=0
+    while (($#)); do
+        case "$1" in
+            --dev)   dev=1 ;;
+            --purge) purge=1 ;;
+            *) echo "clean: unknown flag $1" >&2; return 1 ;;
+        esac
+        shift
+    done
+    bash "$REPO_ROOT/scripts/uninstall-ui.sh" --yes || true
+    if (( purge )); then
+        bash "$REPO_ROOT/scripts/uninstall-core.sh" --yes --purge || true
+    else
+        bash "$REPO_ROOT/scripts/uninstall-core.sh" --yes || true
+    fi
+    (( dev )) && bash "$UTIL/dev_clean.sh" --all --yes
+    return 0
+}
+
 dispatch() {
-    local action="$1"
+    local action="$1"; shift || true
     case "$action" in
-        status)
-            bash "$UTIL/dev_status.sh"
-            ;;
-        dev-reinstall-core)
-            bash "$UTIL/dev-reinstall-core.sh"
-            ;;
-        dev-reinstall-ui)
-            bash "$UTIL/dev-clean-reinstall-ui.sh"
-            ;;
-        dev-clean)
-            bash "$UTIL/dev_clean.sh"
-            ;;
-        dev-logs)
-            bash "$UTIL/dev_logs.sh" "$@"
-            ;;
-        test-unit)
-            cargo test --lib && cargo test --tests -- --test-threads=1
-            ;;
-        test-dev)
-            bash "$UTIL/dev_test.sh"
-            ;;
-        test-multi)
-            bash "$REPO_ROOT/tests/multi_model_e2e.sh" "$@"
-            ;;
-        test-e2e-core)
-            if [[ -x "$REPO_ROOT/target/release/lmforge" ]]; then
-                LMFORGE_LOCAL_BIN="$REPO_ROOT/target/release/lmforge" bash "$UTIL/e2e-core.sh"
-            else
-                echo "Build release binary first: cargo build --release --bin lmforge"
-                exit 1
-            fi
-            ;;
-        test-release)
-            local ver="${LMFORGE_VERSION:-latest}"
-            if [[ "$ver" == "latest" ]]; then
-                read -r -p "  Release tag [latest]: " ver
-                ver="${ver:-latest}"
-            fi
-            bash "$UTIL/test-release-unix.sh" "$ver"
-            ;;
-        release-e2e)
-            local ver="${LMFORGE_VERSION:-latest}"
-            if [[ "$ver" == "latest" ]]; then
-                read -r -p "  Release tag [latest]: " ver
-                ver="${ver:-latest}"
-            fi
-            bash "$UTIL/e2e-release.sh" "$ver" "$@"
-            ;;
-        cleanup-core)
-            bash "$REPO_ROOT/scripts/uninstall-core.sh"
-            ;;
-        cleanup-ui)
-            bash "$REPO_ROOT/scripts/uninstall-ui.sh"
-            ;;
-        quit|__quit__)
-            exit 0
-            ;;
-        *)
-            echo "Unknown action: $action" >&2
-            exit 1
-            ;;
+        status)        bash "$UTIL/dev_status.sh" ;;
+        install)       run_install "$@" ;;
+        e2e)           bash "$UTIL/e2e.sh" "$@" ;;
+        clean)         run_clean "$@" ;;
+        dev-up)        bash "$UTIL/dev-reinstall-core.sh" "$@" ;;
+        dev-up-ui)     bash "$UTIL/dev-clean-reinstall-ui.sh" "$@" ;;
+        dev-down)      bash "$UTIL/dev_clean.sh" "$@" ;;
+        dev-logs)      bash "$UTIL/dev_logs.sh" "$@" ;;
+        test-unit)     cargo test --lib && cargo test --tests -- --test-threads=1 ;;
+        test-dev)      bash "$UTIL/dev_test.sh" "$@" ;;
+        test-multi)    bash "$REPO_ROOT/tests/multi_model_e2e.sh" "$@" ;;
+        quit|__quit__) exit 0 ;;
+        *) echo "Unknown action: $action" >&2; exit 1 ;;
     esac
 }
 

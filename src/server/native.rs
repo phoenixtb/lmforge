@@ -744,6 +744,48 @@ pub async fn model_unload(
         .unwrap()
 }
 
+/// `POST /lf/errors/dismiss` — Dismiss a model's load error.
+///
+/// Removes the `last_errors` entry AND suppresses re-surfacing of new failures
+/// for this model until its next successful load. The engine re-attempts a
+/// failing model on every request (each attempt re-records with a fresh `at`),
+/// so a client-side or plain-clear dismissal reappears instantly — the daemon
+/// is the only place that can make a dismissal stick.
+pub async fn dismiss_error(
+    State(state): State<AppState>,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    let model_id = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(String::from));
+    let model_id = match model_id {
+        Some(m) if !m.is_empty() => m,
+        _ => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"error":"Missing or invalid 'model' parameter."}"#,
+                ))
+                .unwrap();
+        }
+    };
+
+    let snapshot = {
+        let mut es = state.engine_state.write().await;
+        es.dismiss_error(&model_id);
+        es.clone()
+    };
+    info!(model = %model_id, "Dismissed load error via API");
+    state.notify_state(snapshot);
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"status":"dismissed"}"#))
+        .unwrap()
+}
+
 /// `DELETE /lf/model/:name` — Remove a model from the index and optionally from disk
 pub async fn model_delete(
     State(state): State<AppState>,

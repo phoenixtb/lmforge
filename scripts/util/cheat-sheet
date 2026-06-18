@@ -56,11 +56,15 @@ LMFORGE_YES_EXPERIMENTAL=1 lmforge start --engine sglang   # same, for systemd/s
 scripts/lmforge.sh                         # unix: dev / test / release menu
 powershell -File scripts\lmforge.ps1       # windows: same
 
+# ── unified E2E (install SOURCE is a flag) ───────────────────────────────────
 # Default E2E models (override via env): scripts/lib/e2e-defaults.{sh,ps1}
 # All suites (embed/chat/VLM/rerank/MTP) on by default; --skip-* to disable
-# Realistic workloads: E2E_CHAT_MAX_TOKENS, E2E_VLM_IMAGE_URL (picsum), etc.
-scripts/util/e2e-release.sh v0.1.5 --keep-install   # unix post-release holistic test
-powershell -File scripts\util\e2e-release.ps1 -Version v0.1.5 -KeepInstall
+scripts/util/e2e.sh --source local                            # FULL pre-release: clean>build>install(core+UI)>e2e>purge
+scripts/util/e2e.sh --source local --no-inference --no-ui     # quick lifecycle gate (no model pull)
+scripts/util/e2e.sh --source release:v0.1.5 --keep-install    # post-release holistic (keep install+models)
+scripts/util/e2e.sh --source release:v0.1.5 --verify-assets --no-inference   # release smoke
+powershell -File scripts\util\e2e.ps1 -Source local
+scripts/util/e2e-core.sh                    # CI install-lifecycle gate (LMFORGE_LOCAL_BIN/VERSION)
 
 # ── tests ────────────────────────────────────────────────────────────────────
 scripts/util/dev_test.sh                    # interactive test matrix

@@ -28,6 +28,19 @@ function Success { param($m) Write-Host "  [+] $m" -ForegroundColor Green }
 function Warn    { param($m) Write-Host "  [!] $m" -ForegroundColor Yellow }
 function Section { param($m) Write-Host ""; Write-Host "  $m" -ForegroundColor White }
 
+# Resilient recursive delete: engine DLLs (e.g. cublas) can be briefly locked by
+# a just-exited llama-server child, so retry instead of aborting the uninstall.
+function Remove-Tree {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return $true }
+    for ($i = 0; $i -lt 5; $i++) {
+        try { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop; return $true }
+        catch { Start-Sleep -Milliseconds 600 }
+    }
+    Warn "Could not fully remove $Path (file in use): $($Error[0].Exception.Message)"
+    return $false
+}
+
 $Repo       = "phoenixtb/lmforge"
 $Binary     = "lmforge.exe"
 $InstallDir = "$env:LOCALAPPDATA\lmforge\bin"
@@ -115,6 +128,14 @@ try {
 } catch {}
 
 Get-Process -Name "lmforge" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+# Stop engine subprocesses (e.g. llama-server) that keep DLL handles (cublas, …)
+# open under the engines dir — otherwise a --purge can't delete them on Windows.
+Get-Process -Name "llama-server" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+try {
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -and $_.ExecutablePath -like "$DataDir\engines\*" } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+} catch {}
 Start-Sleep -Seconds 1
 Info "No lmforge processes running"
 
@@ -157,33 +178,21 @@ Remove-Item "$DataDir\lmforge.sock" -Force -ErrorAction SilentlyContinue
 # --- 8. Engine installs ---
 Section "Removing installed engines..."
 if (Test-Path "$DataDir\engines") {
-    Remove-Item "$DataDir\engines" -Recurse -Force
-    Info "Removed $DataDir\engines"
+    if (Remove-Tree "$DataDir\engines") { Info "Removed $DataDir\engines" }
 }
 if (Test-Path "$DataDir\bin") {
-    Remove-Item "$DataDir\bin" -Recurse -Force
-    Info "Removed $DataDir\bin"
+    if (Remove-Tree "$DataDir\bin") { Info "Removed $DataDir\bin" }
 }
 
 # --- 9. Data directory ---
 Section "Data directory..."
 if ($Purge) {
     if (Test-Path $DataDir) {
-        try {
-            Remove-Item -LiteralPath $DataDir -Recurse -Force -ErrorAction Stop
-            Info "Data directory removed"
-        } catch {
-            Warn "Could not remove $DataDir : $($_.Exception.Message)"
-        }
+        if (Remove-Tree $DataDir) { Info "Data directory removed" }
     }
     $uiData = "$env:APPDATA\com.lmforge.app"
     if (Test-Path $uiData) {
-        try {
-            Remove-Item -LiteralPath $uiData -Recurse -Force -ErrorAction Stop
-            Info "Removed $uiData"
-        } catch {
-            Warn "Could not remove $uiData : $($_.Exception.Message)"
-        }
+        if (Remove-Tree $uiData) { Info "Removed $uiData" }
     }
 } else {
     Info "Keeping $DataDir (set LMFORGE_PURGE=1 to remove)"

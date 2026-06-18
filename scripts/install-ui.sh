@@ -313,22 +313,29 @@ if [[ "$OS" == "Linux" ]]; then
     fi
 fi
 
-# ── Download ──────────────────────────────────────────────────────────────────
-section "Downloading LMForge UI..."
-
-ASSET=$(detect_ui_asset)
-URL=$(resolve_url "$ASSET")
-echo    "  Asset:  $ASSET"
-echo    "  URL:    $URL"
-echo ""
-
+# ── Obtain artifact (local build or GitHub download) ──────────────────────────
 TMP_FILE=$(mktemp "/tmp/lmforge-ui-XXXXXX")
 trap 'rm -f "$TMP_FILE"' EXIT
 
-if ! curl -fSL --progress-bar "$URL" -o "$TMP_FILE"; then
-    error "Download failed from $URL\n  Check https://github.com/$REPO/releases for available versions."
+if [[ -n "${LMFORGE_UI_LOCAL:-}" ]]; then
+    # Dev/E2E path: install a locally built artifact (.dmg / .AppImage), skip the
+    # GitHub download. Mirrors LMFORGE_LOCAL_BIN in install-core.sh.
+    section "Using local LMForge UI artifact..."
+    [[ -f "$LMFORGE_UI_LOCAL" ]] || error "LMFORGE_UI_LOCAL not found: $LMFORGE_UI_LOCAL"
+    cp "$LMFORGE_UI_LOCAL" "$TMP_FILE"
+    info "Local artifact: $LMFORGE_UI_LOCAL"
+else
+    section "Downloading LMForge UI..."
+    ASSET=$(detect_ui_asset)
+    URL=$(resolve_url "$ASSET")
+    echo    "  Asset:  $ASSET"
+    echo    "  URL:    $URL"
+    echo ""
+    if ! curl -fSL --progress-bar "$URL" -o "$TMP_FILE"; then
+        error "Download failed from $URL\n  Check https://github.com/$REPO/releases for available versions."
+    fi
+    info "Downloaded $ASSET"
 fi
-info "Downloaded $ASSET"
 
 # ── Install macOS DMG ─────────────────────────────────────────────────────────
 if [[ "$OS" == "Darwin" ]]; then

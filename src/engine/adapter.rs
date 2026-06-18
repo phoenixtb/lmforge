@@ -4,6 +4,24 @@ use tokio::sync::mpsc::Sender;
 
 use crate::model::downloader::DownloadProgress;
 
+/// Typed, user-actionable load failures raised by adapters' `start()` paths.
+///
+/// Lets `EngineManager` set `ModelLoadError.severity = user_error` by
+/// downcasting the `anyhow::Error` instead of grepping the message text
+/// (ADR-003). Anything an adapter raises as a plain `anyhow!`/`bail!` stays
+/// unclassified and is treated as a (loud) engine failure.
+#[derive(Debug, thiserror::Error)]
+pub enum EngineLoadError {
+    /// Model weights are not present on disk (e.g. no `.gguf`, missing model
+    /// directory). The fix is `lmforge pull <model>`.
+    #[error("{0}")]
+    NotMaterialized(String),
+    /// The engine runtime itself is not installed (missing venv / source).
+    /// The fix is `lmforge engine install <engine>`.
+    #[error("{0}")]
+    EngineNotInstalled(String),
+}
+
 /// The functional role an engine slot is serving.
 ///
 /// The role is derived from `ModelCapabilities` at model-load time and determines

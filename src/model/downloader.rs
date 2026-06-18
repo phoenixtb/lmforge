@@ -192,6 +192,23 @@ fn sha256_file(path: &std::path::Path) -> std::io::Result<String> {
     Ok(hex_lower(&hasher.finalize()))
 }
 
+/// Verify a finished download is complete against the advertised size.
+///
+/// `total_size == 0` means the server sent no usable Content-Length (rare for
+/// HF's `resolve` endpoint, but possible for chunked transfers) — we cannot
+/// verify and must accept what we got. A non-zero mismatch is always a
+/// truncated/corrupt download.
+fn verify_complete(file_name: &str, downloaded: u64, total_size: u64) -> Result<()> {
+    if total_size > 0 && downloaded != total_size {
+        anyhow::bail!(
+            "incomplete download for {file_name}: got {downloaded} of {total_size} bytes \
+             ({:.1}%). Removed the partial file — re-run `lmforge pull` to retry.",
+            (downloaded as f64 / total_size as f64) * 100.0
+        );
+    }
+    Ok(())
+}
+
 fn hex_lower(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -313,6 +330,18 @@ async fn download_file(
     // Drop the file handle before re-opening it for hashing so the OS flushes.
     drop(file);
 
+    // Guard against truncated downloads. A dropped connection or an early
+    // stream close (proxy, flaky network, interrupted run) can leave a short
+    // file on disk that later fails to load with a confusing
+    // "tensor data is not within the file bounds" error. When the server
+    // advertised a Content-Length, require the on-disk byte count to match
+    // exactly — this catches truncation even for non-LFS files that carry no
+    // sha256 to verify against.
+    if let Err(e) = verify_complete(file_name, downloaded, total_size) {
+        let _ = std::fs::remove_file(dest);
+        return Err(e);
+    }
+
     // Verify sha256 when HF advertised one and the response was a complete
     // (non-resumed) download. For resumed downloads we'd need to re-hash from
     // the start, which we still do — see below — but we skip silently if the
@@ -393,6 +422,33 @@ mod tests {
         assert_eq!(sha256_file(&p).unwrap(), expected);
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn verify_complete_accepts_exact_match() {
+        assert!(verify_complete("m.gguf", 2_500_000, 2_500_000).is_ok());
+    }
+
+    #[test]
+    fn verify_complete_accepts_unknown_total() {
+        // Server sent no Content-Length — cannot verify, must accept.
+        assert!(verify_complete("m.gguf", 760_000_000, 0).is_ok());
+    }
+
+    #[test]
+    fn verify_complete_rejects_truncated() {
+        // The real-world case: 760 MB of an expected 2.5 GB file.
+        let err = verify_complete("Qwen3.5-4B.gguf", 760_000_000, 2_500_000_000)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("incomplete download"), "got: {err}");
+        assert!(err.contains("Qwen3.5-4B.gguf"), "got: {err}");
+    }
+
+    #[test]
+    fn verify_complete_rejects_overrun() {
+        // Defensive: more bytes than advertised is also a mismatch.
+        assert!(verify_complete("m.gguf", 3_000, 2_000).is_err());
     }
 
     #[test]

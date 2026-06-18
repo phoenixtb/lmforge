@@ -15,40 +15,46 @@ Interactive menus dispatch to `scripts/util/` and `tests/`. Run from repo root.
 | Platform | Interactive | Non-interactive |
 |----------|-------------|-----------------|
 | macOS / Linux | `./scripts/lmforge.sh` | `./scripts/lmforge.sh <action> [args…]` |
-| Windows | `powershell -File scripts\lmforge.ps1` | `powershell -File scripts\lmforge.ps1 <action> [-KeepInstall] [-Version vX.Y.Z]` |
+| Windows | `powershell -File scripts\lmforge.ps1` | `powershell -File scripts\lmforge.ps1 <action> [-Source …] [flags]` |
+
+The install **source** is a parameter (`--source local` builds + installs from this
+checkout; `--source release[:TAG]` installs a published GitHub release), so the same
+`install` / `e2e` verbs cover dev, pre-release, and post-release.
 
 ### Action map
 
 | Action | Script / command | Unix | Win |
 |--------|------------------|:----:|:---:|
 | `status` | `dev_status.sh` (or inline health check) | ✓ | ✓ |
-| `dev-reinstall-core` | `dev-reinstall-core.sh` | ✓ | — |
-| `dev-reinstall-ui` | `dev-clean-reinstall-ui.sh` | ✓ | — |
-| `dev-reinstall` | `dev-reinstall.ps1` (core + UI) | — | ✓ |
-| `dev-clean` | `dev_clean.sh` | ✓ | — |
+| `install` | `install-core` (+ `install-ui`); `--source local\|release[:TAG]` | ✓ | ✓ |
+| `e2e` | `util/e2e.{sh,ps1}`; `--source …` + lifecycle/inference/UI/asset flags | ✓ | ✓ |
+| `clean` | `uninstall-core` + `uninstall-ui` (`--dev` adds `dev_clean.sh`, `--purge` data) | ✓ | ✓ |
+| `dev-up` | `dev-reinstall-core.sh` / `dev-reinstall.ps1` (build + run, debug) | ✓ | ✓ |
+| `dev-up-ui` | `dev-clean-reinstall-ui.sh` | ✓ | — |
+| `dev-down` | `dev_clean.sh` (audit / wipe build artefacts) | ✓ | — |
 | `dev-logs` | `dev_logs.sh` | ✓ | — |
 | `test-unit` | `cargo test --lib` + integration | ✓ | — |
 | `test-dev` | `dev_test.sh` | ✓ | ✓ |
-| `test-multi` | `tests/multi_model_e2e.{sh,ps1}` | ✓ | ✓ |
-| `test-e2e-core` | `e2e-core.{sh,ps1}` (local release bin) | ✓ | ✓ |
-| `test-release` | `test-release-unix.sh` / `test-release-windows.ps1` | ✓ | ✓ |
-| `release-e2e` | `e2e-release.{sh,ps1}` | ✓ | ✓ |
-| `cleanup-core` | `uninstall-core.{sh,ps1}` | ✓ | ✓ |
-| `cleanup-ui` | `uninstall-ui.{sh,ps1}` | ✓ | ✓ |
+| `test-multi` | `tests/multi_model_e2e.{sh,ps1}` (against running daemon) | ✓ | ✓ |
+
+> `e2e-core.{sh,ps1}` still exists as the CI install-lifecycle gate (no inference/UI);
+> `e2e` is the human-facing superset.
 
 Examples:
 
 ```bash
-./scripts/lmforge.sh test-multi
-./scripts/lmforge.sh test-multi --skip-mtp
-./scripts/lmforge.sh release-e2e v0.1.5 --keep-install
-LMFORGE_VERSION=v0.1.5 ./scripts/lmforge.sh test-release
+./scripts/lmforge.sh e2e --source local                      # full pre-release cycle
+./scripts/lmforge.sh e2e --source release:v0.1.5 --keep-install
+./scripts/lmforge.sh e2e --source release:v0.1.5 --verify-assets --no-inference
+./scripts/lmforge.sh install --source release:v0.1.5
+./scripts/lmforge.sh clean --dev --purge
 ```
 
 ```powershell
-powershell -File scripts\lmforge.ps1 test-multi
-powershell -File scripts\lmforge.ps1 release-e2e -Version v0.1.5 -KeepInstall
-powershell -File scripts\lmforge.ps1 test-e2e-core
+powershell -File scripts\lmforge.ps1 e2e -Source local
+powershell -File scripts\lmforge.ps1 e2e -Source release:v0.1.5 -KeepInstall
+powershell -File scripts\lmforge.ps1 install -Source release:v0.1.5
+powershell -File scripts\lmforge.ps1 clean -Dev -Purge
 ```
 
 ---
@@ -60,9 +66,8 @@ powershell -File scripts\lmforge.ps1 test-e2e-core
 | **Unit / integration** | Rust changes, no GPU | `cargo test` or `lmforge.sh test-unit` |
 | **Dev matrix** | API shape, single-model inference | `dev_test.sh` / mother `test-dev` |
 | **Multi-model E2E** | Chat+embed co-load, bursts, VLM/rerank/MTP (SKIP if unavailable) | `multi_model_e2e.*` / mother `test-multi` |
-| **Install E2E** | Core install lifecycle on local build | `e2e-core.*` / mother `test-e2e-core` |
-| **Release smoke** | Published assets, no model pull | `test-release-*` / mother `test-release` |
-| **Release E2E** | Full install + models + inference + cleanup | `e2e-release.*` / mother `release-e2e` |
+| **Install E2E (CI gate)** | Core install lifecycle, no inference/UI | `e2e-core.*` (CI: `e2e.yml` / `release.yml`) |
+| **Unified E2E** | Install (any source) + lifecycle + UI + inference + asset verify | `util/e2e.*` / mother `e2e --source …` |
 
 ### `dev_test.sh`
 
@@ -147,20 +152,33 @@ Qwen3 chat models need `enable_thinking: false` in API requests; the shared
 
 ## Release E2E flow
 
-`e2e-release.{sh,ps1}` installs core (+ UI when available) from a GitHub
-release, pulls default models, runs `multi_model_e2e` (all suites on by default;
-optional probes → `SKIP` when model/engine unavailable), then uninstalls unless
-`-KeepInstall` / `--keep-install`.
+`util/e2e.{sh,ps1}` is the one runner for every install source. Each run is a full
+cycle: **full clean** (remove any prior install — GitHub script, dev symlink, … —
+and `~/.lmforge` data) → install → lifecycle → `multi_model_e2e` (all suites on by
+default; optional probes → `SKIP` when model/engine unavailable) → **full purge**
+(binary, service, UI, models) — unless `--keep-install` / `-KeepInstall`.
+
+- `--source local` **builds core + UI from this checkout** (`cargo build --release`
+  and `npm run tauri build` via `build-ui-local.{sh,ps1}`), then installs both. This
+  is the full pre-release cycle. `--no-build` reuses an existing `target/release`
+  binary (core only).
+- `--source release[:TAG]` installs a published release. `--verify-assets` adds the
+  published-asset + scripts-match checks (the old release smoke).
+- UI is installed by default on both (`--no-ui` to skip). Local builds the UI from
+  source via `build-ui-local.{sh,ps1}` (Tauri build → install via the `LMFORGE_UI_LOCAL`
+  path in `install-ui`); release installs the published artifact. UI build needs the
+  Tauri toolchain (node, Rust, webkit2gtk on Linux / WebView2 on Windows).
 
 ```bash
-scripts/util/e2e-release.sh v0.1.5
-scripts/util/e2e-release.sh v0.1.5 --keep-install
-LMFORGE_VERSION=v0.1.5 scripts/util/e2e-release.sh v0.1.5 --keep-install
+scripts/util/e2e.sh --source local                                # full pre-release cycle
+scripts/util/e2e.sh --source release:v0.1.5 --keep-install
+scripts/util/e2e.sh --source release:v0.1.5 --verify-assets --no-inference   # smoke
 ```
 
 ```powershell
-powershell -File scripts\util\e2e-release.ps1 -Version v0.1.5
-powershell -File scripts\util\e2e-release.ps1 -Version v0.1.5 -KeepInstall
+powershell -File scripts\util\e2e.ps1 -Source local
+powershell -File scripts\util\e2e.ps1 -Source release:v0.1.5 -KeepInstall
+powershell -File scripts\util\e2e.ps1 -Source release:v0.1.5 -VerifyAssets -NoInference
 ```
 
 Platform notes:
@@ -170,8 +188,6 @@ Platform notes:
 | Linux arm64 | Release has no UI AppImage; `install-ui` step skips (core E2E still runs) |
 | macOS (MLX) | VLM / rerank / MTP may `SKIP` if the MLX engine lacks that capability |
 | Windows | Full core + UI install path; same default suites as Unix |
-
-`--full` / `-Full` is a legacy no-op (kept for old scripts).
 
 See [RELEASE.md](./RELEASE.md) for tag → draft → publish workflow.
 
@@ -184,6 +200,7 @@ See [RELEASE.md](./RELEASE.md) for tag → draft → publish workflow.
 | `dev_status.sh` | Binaries, daemon, disk snapshot |
 | `dev_logs.sh` | Tail engine logs |
 | `dev-reinstall-core.sh` / `dev-reinstall.ps1` | Clean build + install |
+| `build-ui-local.{sh,ps1}` | Build UI from source + install locally (used by `e2e --source local`) |
 | `dev-clean-reinstall-ui.sh` | UI node_modules reset + dev launch |
 | `dev_ui_*.sh` | Distro-specific WebKit deps for Tauri dev |
 | `release_binary_test.sh` | CUDA12/13 release binary matrix |
