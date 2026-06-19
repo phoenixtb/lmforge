@@ -2,7 +2,10 @@
 
 Applies to core + UI releases cut from `main`. The hard rule: **a tag is only
 pushed from a clean, pushed, CI-green commit, and a release is only published
-after the E2E gate passed on all three platforms.**
+after the E2E gate passed on every platform profile it ships to** (Apple
+Silicon, Linux CUDA, Linux non-CUDA, Windows CUDA, Windows non-CUDA — see the
+[E2E platform matrix](#e2e-platform-matrix)). CI's `e2e.yml` covers the three
+OSes; CUDA-specific paths must be smoke-tested on real GPU hardware.
 
 Workflows involved:
 
@@ -16,6 +19,14 @@ Workflows involved:
 
 ## 1. Pre-release
 
+**Toolchain prerequisites** (the e2e harness will abort with these exact hints
+if missing): Rust via **rustup** — `curl --proto '=https' --tlsv1.2 -sSf
+https://sh.rustup.rs | sh -s -- -y && source "$HOME/.cargo/env"` (Windows:
+`winget install Rustlang.Rustup`); Node.js LTS for the UI build (`brew install
+node` / `winget install OpenJS.NodeJS.LTS`). Use rustup, not `brew install
+rust` — it wires `~/.cargo/bin` into your shell profiles and ships
+clippy/rustfmt.
+
 1. **Freeze scope.** No unrelated changes after this point; only release fixes.
 2. **Version bump** (all must match):
    - `Cargo.toml` → `[package] version`
@@ -23,32 +34,64 @@ Workflows involved:
    - `ui/src-tauri/Cargo.toml` → `version`
    - `ui/src-tauri/tauri.conf.json` → `version`
    - `cargo build` once to refresh `Cargo.lock`
-3. **Local checks** (Windows dev box; Linux-cfg lints are caught by CI only):
+3. **Local checks** (run on any dev box; Linux-cfg lints are caught by CI only):
 
-   ```powershell
+   ```bash
    cargo fmt --all -- --check
    cargo clippy --all-targets -- -D warnings
    cargo test --all-targets
    ```
 
 4. **Full pre-release E2E** from the current code (see [DEV_GUIDE.md](./DEV_GUIDE.md)).
-   `e2e -Source local` does the whole cycle: full clean → build core **and UI** →
-   install both → lifecycle → multi-model inference (auto-pulls required models) →
-   full purge (incl. models).
+   The `e2e --source local` cycle is the same everywhere: full clean → build core
+   **and UI** → install both → lifecycle → multi-model inference (auto-pulls
+   required models) → full purge (incl. models). The harness auto-detects the
+   platform, sources `cargo` from `~/.cargo` if it isn't already on PATH, and
+   auto-skips capability suites the active engine can't run — so the command is
+   identical per OS. **Run it on every platform you ship to** (see the matrix
+   below); a green gate on one platform does not cover the others.
 
-   ```powershell
-   # Windows; -KeepInstall to skip the cleanup steps
-   powershell -File scripts\lmforge.ps1 e2e -Source local
-   ```
+   See [§E2E platform matrix](#e2e-platform-matrix) for the exact command and
+   what each platform exercises.
 
-   ```bash
-   # macOS / Linux; --keep-install to skip the cleanup steps
-   ./scripts/lmforge.sh e2e --source local
-   ```
+   Quick lifecycle-only gate (no model pull, no UI build): add `--no-inference
+   --no-ui` (`-NoInference -NoUi`). Use `--no-build` (`-NoBuild`) to reuse an
+   existing `target/release` binary.
 
-   Quick lifecycle-only gate (no model pull, no UI build): add `-NoInference -NoUi`
-   (`--no-inference --no-ui`). Use `-NoBuild` (`--no-build`) to reuse an existing
-   `target/release` binary.
+### E2E platform matrix
+
+The default engine and which inference suites run depend on the platform. The
+harness picks the engine and skips unsupported suites automatically — the table
+documents what actually gets exercised and the override knobs.
+
+| Platform | Default engine | MTP / spec-dec | Command |
+|---|---|---|---|
+| **Apple Silicon** (macOS arm64) | oMLX (MLX) | **auto-skipped** (oMLX `spec_mode=Off`) | `./scripts/lmforge.sh e2e --source local` |
+| **Linux + NVIDIA/CUDA** | llama.cpp | on | `./scripts/lmforge.sh e2e --source local` |
+| **Linux non-CUDA** (CPU / AMD / Intel — Vulkan) | llama.cpp | on (CPU/Vulkan, slow) | `./scripts/lmforge.sh e2e --source local` |
+| **Windows + NVIDIA/CUDA** | llama.cpp (CUDA build) | on | `powershell -File scripts\lmforge.ps1 e2e -Source local` |
+| **Windows non-CUDA** (CPU / AMD / Intel — Vulkan) | llama.cpp (Vulkan build) | on | `powershell -File scripts\lmforge.ps1 e2e -Source local` |
+
+Notes / overrides:
+
+- **MTP** is a `llama-server` feature, so it only runs on the llama.cpp engine
+  (Linux/Windows). On Apple Silicon the harness passes `--skip-mtp` for you and
+  does not pull the 4B MTP GGUF. Force it on (e.g. to test a draft-pair) with
+  `E2E_WITH_MTP=1`.
+- **VLM** and **rerank** self-skip at runtime when the active engine or model
+  lacks the capability — no flag needed. Disable explicitly with
+  `--skip-vlm` / `--skip-rerank` if you want a faster core-only inference pass.
+- **CUDA vs non-CUDA** on the same OS run the identical command; only the
+  llama.cpp build that `install-core` resolves differs (CUDA build for NVIDIA,
+  Vulkan build otherwise). Verify which engine bound with `lmforge status`.
+- **Headless Linux** (no `DISPLAY`/`WAYLAND_DISPLAY`): the UI-launch check
+  auto-skips; add `--no-ui` to skip building the UI entirely.
+- A failed local `cargo`/UI build now **aborts** the run — it will no longer
+  silently download a release binary and report a misleading `install-core PASS`.
+- An **engine preflight** runs the active engine binary (`omlx --version` /
+  `llama-server --version`) before inference, so a broken engine install fails
+  fast with a fix hint instead of an opaque empty `TC-E01` error. Cold-load
+  failures now print the actual HTTP status + body (e.g. a 503 spawn error).
 5. **Commit the bump, push main, wait for green.** Both `CI` and `E2E`
    workflows must pass **on the exact commit you will tag**. No "it was green
    two commits ago".
@@ -92,19 +135,26 @@ happens via a pre-release first:
 
 1. **Publish as pre-release.** `latest/download/...` install URLs still point
    at the previous stable, so users are unaffected.
-2. **Smoke-test the published assets** on a real machine (not CI):
+2. **Smoke-test the published assets** on a real machine (not CI), **per
+   platform** — same engine/suite auto-detection as the pre-release matrix
+   above, so the only thing that changes between platforms is the launcher
+   (`.sh` vs `.ps1`). Two passes: asset verification, then a full
+   install→inference run.
+
+   ```bash
+   # macOS / Linux (Apple Silicon, Linux CUDA, Linux non-CUDA)
+   ./scripts/lmforge.sh e2e --source release:vX.Y.Z --verify-assets --no-inference
+   ./scripts/lmforge.sh e2e --source release:vX.Y.Z --keep-install
+   ```
 
    ```powershell
-   # Windows — release smoke (assets) or full install + models + inference
+   # Windows (CUDA and non-CUDA)
    powershell -File scripts\lmforge.ps1 e2e -Source release:vX.Y.Z -VerifyAssets -NoInference
    powershell -File scripts\lmforge.ps1 e2e -Source release:vX.Y.Z -KeepInstall
    ```
 
-   ```bash
-   # macOS / Linux
-   ./scripts/lmforge.sh e2e --source release:vX.Y.Z --verify-assets --no-inference
-   ./scripts/lmforge.sh e2e --source release:vX.Y.Z --keep-install
-   ```
+   MTP auto-skips on Apple Silicon; `--verify-assets` HEAD-checks only the core
+   binary + scripts (and the UI asset where one ships for the platform).
 
 3. **Promote**: edit the release, untick "pre-release" → it becomes `latest`
    and the `irm .../latest/download/install-core.ps1 | iex` path goes live.

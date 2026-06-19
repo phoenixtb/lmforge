@@ -120,7 +120,30 @@ e2e_ui_runtime_deps() {
 }
 
 # ── Build from current source (local install only) ──────────────────────────
+# rustup installs cargo to ~/.cargo/bin and relies on ~/.cargo/env being sourced
+# by the login shell. A non-login shell (or the menu launched from Finder/an IDE)
+# often lacks it, so the build step dies with "cargo: command not found". Pull it
+# onto PATH ourselves so the harness runs out of the box.
+e2e_ensure_cargo() {
+    command -v cargo >/dev/null 2>&1 && { echo "cargo resolved at $(command -v cargo)"; return 0; }
+    [[ -f "$HOME/.cargo/env" ]] && . "$HOME/.cargo/env"
+    [[ -d "$HOME/.cargo/bin" ]] && export PATH="$HOME/.cargo/bin:$PATH"
+    if command -v cargo >/dev/null 2>&1; then
+        echo "cargo resolved at $(command -v cargo)"
+        return 0
+    fi
+    cat >&2 <<'EOF'
+cargo not found — the Rust toolchain is not installed. Install rustup (macOS/Linux):
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    source "$HOME/.cargo/env"
+Then re-run this command. (Use rustup, not `brew install rust` — rustup wires
+PATH into your shell profiles and ships clippy/rustfmt that the release checks need.)
+EOF
+    return 1
+}
+
 e2e_build_local() {
+    e2e_ensure_cargo || return 1
     ( cd "$E2E_REPO_ROOT" && cargo build --release --bin lmforge ) || return 1
     local b="$E2E_REPO_ROOT/target/release/lmforge"
     [[ -x "$b" ]] || { echo "build produced no binary at $b"; return 1; }
@@ -320,8 +343,58 @@ e2e_autostart_removed() {
     echo "autostart artifacts removed"
 }
 
+# ── Engine preflight ─────────────────────────────────────────────────────────
+# Run the ACTIVE engine's binary directly (not via the daemon) so a broken
+# install fails fast with remediation guidance instead of an opaque 503 deep in
+# TC-E01. Catches e.g. a Homebrew oMLX venv whose pinned python was upgraded out
+# from under it ("bad interpreter"), or a half-extracted llama-server.
+e2e_engine_preflight() {
+    local engine
+    engine=$(curl -sf --max-time 5 "$E2E_API/lf/engines" 2>/dev/null \
+        | jq -r '.engines[] | select(.active==true) | .id' 2>/dev/null | head -1)
+    [[ -n "$engine" ]] || { echo "could not read active engine from $E2E_API/lf/engines (daemon up?)"; return 1; }
+    echo "active engine: $engine"
+
+    local bin=""
+    case "$engine" in
+        omlx)
+            bin="$(command -v omlx 2>/dev/null)"
+            [[ -n "$bin" ]] || { echo "omlx not on PATH — reinstall: brew install jundot/omlx/omlx"; return 1; } ;;
+        llamacpp)
+            bin="$(command -v llama-server 2>/dev/null)"
+            [[ -n "$bin" ]] || bin="$(ls -t "$HOME"/.lmforge/engines/llamacpp/*/llama-server 2>/dev/null | head -1)"
+            [[ -n "$bin" ]] || { echo "llama-server not found — reinstall: lmforge engine install llamacpp"; return 1; } ;;
+        *)
+            echo "no preflight defined for engine '$engine' — skipped"; return 0 ;;
+    esac
+
+    local out
+    if out=$("$bin" --version 2>&1); then
+        echo "engine binary OK: $bin"
+        echo "$out" | head -1
+        return 0
+    fi
+    echo "engine binary BROKEN: $bin"
+    echo "$out" | head -3
+    case "$engine" in
+        omlx)     echo "  fix: brew reinstall omlx  (or restore its interpreter, e.g. brew install python@3.11)" ;;
+        llamacpp) echo "  fix: lmforge engine install llamacpp  (re-extract the llama.cpp build)" ;;
+    esac
+    return 1
+}
+
 # ── Inference (delegates to the shared multi-model suite) ────────────────────
+# Per-platform capability auto-skip so the suite runs out of the box:
+#   • Apple Silicon (oMLX) has no speculative/MTP path — the adapter hardcodes
+#     spec_mode=Off — so skip MTP and avoid pulling a 4B MTP GGUF that cannot
+#     accelerate here. Override with E2E_WITH_MTP=1.
+# Other suites (VLM, rerank) already skip themselves at runtime when the active
+# engine/model lacks the capability, so they need no OS gate.
 e2e_inference() {
+    local extra=()
+    if [[ "$E2E_OS" == "Darwin" && "${E2E_WITH_MTP:-0}" != "1" ]]; then
+        extra+=(--skip-mtp)
+    fi
     SKIP_START=1 SKIP_BUILD=1 LF_BIN="$E2E_BIN" \
-        bash "$E2E_REPO_ROOT/tests/multi_model_e2e.sh" "$@"
+        bash "$E2E_REPO_ROOT/tests/multi_model_e2e.sh" ${extra[@]+"${extra[@]}"} "$@"
 }

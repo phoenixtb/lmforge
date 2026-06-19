@@ -17,8 +17,23 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $UiDir    = Join-Path $RepoRoot "ui"
 
-if (-not (Get-Command npm   -EA SilentlyContinue)) { Write-Host "npm not on PATH"   -ForegroundColor Red; exit 1 }
-if (-not (Get-Command cargo -EA SilentlyContinue)) { Write-Host "cargo not on PATH" -ForegroundColor Red; exit 1 }
+# cargo (rustup) lives under %USERPROFILE%\.cargo\bin — add it if the shell
+# didn't inherit the installer's PATH edit, so the build runs out of the box.
+if (-not (Get-Command cargo -EA SilentlyContinue)) {
+    $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+    if (Test-Path $cargoBin) { $env:PATH = "$cargoBin;$env:PATH" }
+}
+
+if (-not (Get-Command npm -EA SilentlyContinue)) {
+    Write-Host "npm not on PATH - install Node.js LTS (ships npm):" -ForegroundColor Red
+    Write-Host "    winget install OpenJS.NodeJS.LTS        # or download from https://nodejs.org"
+    exit 1
+}
+if (-not (Get-Command cargo -EA SilentlyContinue)) {
+    Write-Host "cargo not on PATH - install the Rust toolchain (rustup):" -ForegroundColor Red
+    Write-Host "    winget install Rustlang.Rustup          # or rustup-init.exe from https://rustup.rs"
+    exit 1
+}
 
 Push-Location $UiDir
 try {

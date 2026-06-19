@@ -119,6 +119,17 @@ if [[ "$KIND" == "local" && $DO_BUILD -eq 1 ]]; then
     e2e_step "build (cargo release)" e2e_build_local
 fi
 
+# A failed local build must NOT silently fall through to install-core, which
+# would then download a *release* binary and report a misleading "install-core
+# PASS" for a --source local run. Abort loudly instead.
+if [[ "$KIND" == "local" && ( -z "${LMFORGE_LOCAL_BIN:-}" || ! -x "${LMFORGE_LOCAL_BIN:-}" ) ]]; then
+    echo ""
+    echo "  local build unavailable (LMFORGE_LOCAL_BIN unset/not executable)."
+    echo "  Refusing to install a release binary under --source local. Aborting."
+    e2e_summary || true
+    exit 1
+fi
+
 # ── Install + lifecycle ──────────────────────────────────────────────────────
 e2e_step "install-core"         e2e_install_core
 e2e_step "binary installed"     e2e_binary_installed
@@ -141,6 +152,7 @@ fi
 
 # ── Inference ────────────────────────────────────────────────────────────────
 if (( INFERENCE )); then
+    e2e_step "engine preflight"      e2e_engine_preflight
     e2e_step "multi-model inference" e2e_inference
 fi
 

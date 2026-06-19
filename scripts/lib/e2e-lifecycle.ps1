@@ -82,7 +82,24 @@ function E2eReleaseCoreBinary {
 }
 
 # ── Build from current source (local install only) ──────────────────────────
+# rustup installs cargo under %USERPROFILE%\.cargo\bin; a shell that didn't pick
+# up the installer's PATH edit dies with "cargo not recognized". Add it ourselves
+# so the harness runs out of the box.
+function E2eEnsureCargo {
+    if (Get-Command cargo -EA SilentlyContinue) { Write-Host "cargo resolved at $((Get-Command cargo).Source)"; return }
+    $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+    if (Test-Path $cargoBin) { $env:PATH = "$cargoBin;$env:PATH" }
+    if (-not (Get-Command cargo -EA SilentlyContinue)) {
+        Write-Host "cargo not found - the Rust toolchain is not installed. Install rustup (Windows):" -ForegroundColor Yellow
+        Write-Host "    winget install Rustlang.Rustup        # or download rustup-init.exe from https://rustup.rs"
+        Write-Host "    (open a new shell afterwards so PATH picks up %USERPROFILE%\.cargo\bin)"
+        throw "cargo not found - install rustup, then re-run"
+    }
+    Write-Host "cargo resolved at $((Get-Command cargo).Source)"
+}
+
 function E2eBuildLocal {
+    E2eEnsureCargo
     Push-Location $E2E_RepoRoot
     try {
         & cargo build --release --bin lmforge
@@ -242,6 +259,44 @@ function E2eAutostartRemoved {
     if ($val) { throw "Run key value still present: $($val.LMForge)" }
     if (Test-Path $E2E_Vbs) { throw "launcher still present: $E2E_Vbs" }
     Write-Host "autostart artifacts removed"
+}
+
+# ── Engine preflight ─────────────────────────────────────────────────────────
+# Run the ACTIVE engine's binary directly (not via the daemon) so a broken
+# install fails fast with remediation guidance instead of an opaque 503 deep in
+# TC-E01 (e.g. a half-extracted llama-server.exe missing its CUDA DLLs).
+function E2eEnginePreflight {
+    $engine = $null
+    try {
+        $engine = ((Invoke-RestMethod "$E2E_Api/lf/engines" -TimeoutSec 5).engines |
+            Where-Object { $_.active } | Select-Object -First 1).id
+    } catch {}
+    if (-not $engine) { throw "could not read active engine from $E2E_Api/lf/engines (daemon up?)" }
+    Write-Host "active engine: $engine"
+
+    $bin = $null
+    switch ($engine) {
+        "llamacpp" {
+            $cmd = Get-Command llama-server -EA SilentlyContinue
+            if ($cmd) { $bin = $cmd.Source }
+            else {
+                $root = Join-Path $env:USERPROFILE ".lmforge\engines\llamacpp"
+                $bin = Get-ChildItem $root -Recurse -Filter "llama-server.exe" -EA SilentlyContinue |
+                    Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
+            }
+            if (-not $bin) { throw "llama-server.exe not found - reinstall: lmforge engine install llamacpp" }
+        }
+        default { Write-Host "no preflight defined for engine '$engine' - skipped"; return }
+    }
+
+    $out = (& $bin --version 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "engine binary BROKEN: $bin" -ForegroundColor Red
+        Write-Host $out.Trim()
+        throw "engine binary failed to run - fix: lmforge engine install llamacpp"
+    }
+    Write-Host "engine binary OK: $bin"
+    Write-Host (($out -split "`n")[0].Trim())
 }
 
 # ── Inference (delegates to the shared multi-model suite) ────────────────────

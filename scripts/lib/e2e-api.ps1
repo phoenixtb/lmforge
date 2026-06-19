@@ -216,6 +216,47 @@ function Get-E2eHttpPostCode {
     }
 }
 
+# ── Failure diagnostics ──────────────────────────────────────────────────────
+# Capture HTTP status + error body for a failed request so a cold-load failure
+# isn't an opaque exception message. Used only on the failure path.
+function Get-E2ePostDiag {
+    param([string]$Path, [string]$BodyJson, [string]$HostUrl = $script:LfHost)
+    try {
+        $resp = Invoke-WebRequest -Uri "$HostUrl$Path" -Method Post -Body $BodyJson `
+            -ContentType "application/json" -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+        $b = [string]$resp.Content
+        if ($b.Length -gt 300) { $b = $b.Substring(0, 300) }
+        return "HTTP $([int]$resp.StatusCode) — $b"
+    } catch {
+        $code = 0
+        if ($_.Exception.Response) { try { $code = [int]$_.Exception.Response.StatusCode } catch {} }
+        $body = $null
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+            $body = $_.ErrorDetails.Message              # PowerShell 7 puts the body here
+        } elseif ($_.Exception.Response) {
+            try {
+                $sr = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+                $body = $sr.ReadToEnd()
+            } catch {}
+        }
+        if (-not $body) { $body = $_.Exception.Message }
+        if ($body.Length -gt 300) { $body = $body.Substring(0, 300) }
+        return "HTTP $code — $body"
+    }
+}
+
+function Get-E2eEmbedDiag {
+    param([string]$Model = $script:EmbedModel, [string]$Text = "probe")
+    Get-E2ePostDiag "/v1/embeddings" (@{ model = $Model; input = $Text } | ConvertTo-Json -Compress)
+}
+
+function Get-E2eChatDiag {
+    param([string]$Model = $script:ChatModel, [string]$Text = "probe")
+    $b = @{ model = $Model; messages = @(@{ role = "user"; content = $Text }); stream = $false; max_tokens = 16 } |
+        ConvertTo-Json -Depth 6 -Compress
+    Get-E2ePostDiag "/v1/chat/completions" $b
+}
+
 function Remove-E2ePulledModels {
     param([string]$Bin, [hashtable]$PulledMap)
     $prevEap = $ErrorActionPreference

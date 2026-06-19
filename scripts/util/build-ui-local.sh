@@ -21,8 +21,29 @@ UI_DIR="$REPO_ROOT/ui"
 DO_DEPS=1
 [[ "${1:-}" == "--no-deps" ]] && DO_DEPS=0
 
-command -v npm >/dev/null  || { echo "npm not on PATH" >&2; exit 1; }
-command -v cargo >/dev/null || { echo "cargo not on PATH" >&2; exit 1; }
+# cargo (rustup) lives in ~/.cargo/bin and needs ~/.cargo/env sourced — a
+# non-login shell often lacks it. Pull it onto PATH so the build runs out of box.
+if ! command -v cargo >/dev/null; then
+    [[ -f "$HOME/.cargo/env" ]] && . "$HOME/.cargo/env"
+    [[ -d "$HOME/.cargo/bin" ]] && export PATH="$HOME/.cargo/bin:$PATH"
+fi
+
+if ! command -v npm >/dev/null; then
+    cat >&2 <<'EOF'
+npm not on PATH — install Node.js LTS (ships npm):
+    macOS:  brew install node       (or download from https://nodejs.org)
+    Linux:  https://github.com/nvm-sh/nvm  then: nvm install --lts
+EOF
+    exit 1
+fi
+if ! command -v cargo >/dev/null; then
+    cat >&2 <<'EOF'
+cargo not on PATH — install the Rust toolchain (rustup, macOS/Linux):
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    source "$HOME/.cargo/env"
+EOF
+    exit 1
+fi
 
 cd "$UI_DIR"
 if (( DO_DEPS )) || [[ ! -d node_modules ]]; then

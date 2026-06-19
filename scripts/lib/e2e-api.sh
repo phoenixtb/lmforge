@@ -196,6 +196,31 @@ e2e_http_post_code() {
         -H "Content-Type: application/json" -d "$body"
 }
 
+# ── Failure diagnostics ──────────────────────────────────────────────────────
+# Re-issue a request WITHOUT curl -f so the error body is visible. The normal
+# API helpers use -f, which discards the body on HTTP 4xx/5xx — that is why a
+# failed embed/chat surfaced as an empty string. Use only on the failure path.
+e2e_api_post_diag() {
+    local path="$1" payload="$2" body code
+    body="$(mktemp)"
+    code=$(curl -s -o "$body" -w "%{http_code}" --max-time "${E2E_DIAG_TIMEOUT:-30}" \
+        -X POST "${LF_HOST}${path}" -H "Content-Type: application/json" \
+        -d "$payload" 2>/dev/null)
+    printf 'HTTP %s — %s' "$code" "$(tr -d '\r' < "$body" | tr '\n' ' ' | cut -c1-300)"
+    rm -f "$body"
+}
+
+e2e_embed_diag() {
+    e2e_api_post_diag "/v1/embeddings" \
+        "$(jq -nc --arg m "${1:-$EMBED_MODEL}" --arg t "${2:-probe}" '{model:$m,input:$t}')"
+}
+
+e2e_chat_diag() {
+    e2e_api_post_diag "/v1/chat/completions" \
+        "$(jq -nc --arg m "${1:-$CHAT_MODEL}" --arg t "${2:-probe}" \
+            '{model:$m,messages:[{role:"user",content:$t}],stream:false,max_tokens:16}')"
+}
+
 # ── assertions (return 0 ok / 1 fail; set E2E_ASSERT_MSG) ───────────────────
 
 e2e_assert_embed_response() {

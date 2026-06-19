@@ -385,13 +385,15 @@ assert_chat_response() {
 echo -e "\n${BOLD}TC-E01${NC}  Cold-start co-load"
 
 timer_start "embed_cold"
-resp=$(lf_embed "$E2E_EMBED_COLD" 2>&1) || fail "TC-E01: embed cold-load failed: $resp"
+resp=$(lf_embed "$E2E_EMBED_COLD" 2>&1) \
+    || fail "TC-E01: embed cold-load failed — $(e2e_embed_diag "$EMBED_MODEL" "$E2E_EMBED_COLD")"
 embed_cold_ms=$(timer_end "embed_cold")
 assert_embed_response "$resp" "TC-E01 embed"
 printf "  ${GREEN}✓${NC} Embed model loaded  ${DIM}%sms${NC}\n" "$embed_cold_ms"
 
 timer_start "chat_cold"
-resp=$(lf_chat "$E2E_CHAT_COLD" 2>&1) || fail "TC-E01: chat cold-load failed: $resp"
+resp=$(lf_chat "$E2E_CHAT_COLD" 2>&1) \
+    || fail "TC-E01: chat cold-load failed — $(e2e_chat_diag "$CHAT_MODEL" "$E2E_CHAT_COLD")"
 chat_cold_ms=$(timer_end "chat_cold")
 assert_chat_response "$resp" "TC-E01 chat" 20
 printf "  ${GREEN}✓${NC} Chat model loaded   ${DIM}%sms${NC}\n" "$chat_cold_ms"

@@ -125,10 +125,13 @@ try {
     }
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $r = Invoke-E2eEmbed -Text $E2E_EMBED_COLD
+    try { $r = Invoke-E2eEmbed -Text $E2E_EMBED_COLD }
+    catch { Fail "TC-E01: embed cold-load failed — $(Get-E2eEmbedDiag -Model $script:EmbedModel -Text $E2E_EMBED_COLD)" }
     $sw.Stop(); Assert-E2eEmbed $r "TC-E01 embed"
     $embedColdMs = $sw.ElapsedMilliseconds
-    $sw.Restart(); $r = Invoke-E2eChat -Text $E2E_CHAT_COLD -MaxTokens $E2E_CHAT_MAX_TOKENS
+    $sw.Restart()
+    try { $r = Invoke-E2eChat -Text $E2E_CHAT_COLD -MaxTokens $E2E_CHAT_MAX_TOKENS }
+    catch { Fail "TC-E01: chat cold-load failed — $(Get-E2eChatDiag -Model $script:ChatModel -Text $E2E_CHAT_COLD)" }
     $sw.Stop(); Assert-E2eChat $r "TC-E01 chat" 20
     $chatColdMs = $sw.ElapsedMilliseconds
     $status = Get-E2eStatus

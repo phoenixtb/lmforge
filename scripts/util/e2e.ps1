@@ -97,6 +97,17 @@ if ($Kind -eq "local" -and -not $NoBuild) {
     E2eStep "build (cargo release)" { E2eBuildLocal }
 }
 
+# A failed local build must NOT silently fall through to install-core (which
+# would download a *release* binary and report a misleading install-core PASS
+# for a -Source local run). Abort loudly instead.
+if ($Kind -eq "local" -and (-not $env:LMFORGE_LOCAL_BIN -or -not (Test-Path $env:LMFORGE_LOCAL_BIN))) {
+    Write-Host ""
+    Write-Host "  local build unavailable (LMFORGE_LOCAL_BIN unset/missing)." -ForegroundColor Red
+    Write-Host "  Refusing to install a release binary under -Source local. Aborting." -ForegroundColor Red
+    E2eSummary | Out-Null
+    exit 1
+}
+
 # ── Install + lifecycle ──────────────────────────────────────────────────────
 E2eStep "install-core"         { E2eInstallCore }
 Start-Sleep 3
@@ -120,6 +131,7 @@ if ($RunUi) {
 
 # ── Inference ────────────────────────────────────────────────────────────────
 if ($RunInference) {
+    E2eStep "engine preflight"      { E2eEnginePreflight }
     E2eStep "multi-model inference" { E2eInference }
 }
 
