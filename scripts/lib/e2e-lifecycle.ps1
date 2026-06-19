@@ -280,7 +280,10 @@ function E2eEnginePreflight {
             $cmd = Get-Command llama-server -EA SilentlyContinue
             if ($cmd) { $bin = $cmd.Source }
             else {
-                $root = Join-Path $env:USERPROFILE ".lmforge\engines\llamacpp"
+                # Search the whole engines tree so both the variant-aware layout
+                # (engines\llamacpp\variants\<id>\) and the legacy flat layout
+                # (engines\llama-server.exe) are covered.
+                $root = Join-Path $env:USERPROFILE ".lmforge\engines"
                 $bin = Get-ChildItem $root -Recurse -Filter "llama-server.exe" -EA SilentlyContinue |
                     Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
             }

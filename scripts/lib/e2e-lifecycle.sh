@@ -361,7 +361,12 @@ e2e_engine_preflight() {
             bin="$(command -v omlx 2>/dev/null)"
             [[ -n "$bin" ]] || { echo "omlx not on PATH — reinstall: brew install jundot/omlx/omlx"; return 1; } ;;
         llamacpp)
+            # Mirror the daemon's resolve_executable() order: PATH, then the
+            # variant-aware layout (engines/llamacpp/variants/<id>/llama-server),
+            # then the legacy flat layout (engines/llama-server).
             bin="$(command -v llama-server 2>/dev/null)"
+            [[ -n "$bin" ]] || bin="$(ls -t "$HOME"/.lmforge/engines/llamacpp/variants/*/llama-server 2>/dev/null | head -1)"
+            [[ -n "$bin" ]] || bin="$(ls -t "$HOME"/.lmforge/engines/llama-server 2>/dev/null | head -1)"
             [[ -n "$bin" ]] || bin="$(ls -t "$HOME"/.lmforge/engines/llamacpp/*/llama-server 2>/dev/null | head -1)"
             [[ -n "$bin" ]] || { echo "llama-server not found — reinstall: lmforge engine install llamacpp"; return 1; } ;;
         *)
