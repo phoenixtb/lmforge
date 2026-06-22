@@ -125,11 +125,19 @@ fn spawn_fake_manager(port_map: HashMap<String, u16>, mut cmd_rx: mpsc::Receiver
                 ManagerCommand::EnsureModel {
                     model_id,
                     keep_alive_override: _,
+                    for_request: _,
                     reply,
                 } => {
-                    let result = port_map.get(&model_id).copied().ok_or_else(|| {
-                        anyhow::anyhow!("FakeEngineManager: unknown model '{}'", model_id)
-                    });
+                    let result = port_map
+                        .get(&model_id)
+                        .copied()
+                        .map(|port| lmforge::engine::manager::ModelHandle {
+                            port,
+                            inflight: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+                        })
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("FakeEngineManager: unknown model '{}'", model_id)
+                        });
                     let _ = reply.send(result);
                 }
                 ManagerCommand::UnloadModel(_) | ManagerCommand::UnloadAll => {}
@@ -155,6 +163,7 @@ fn build_app_state(
         running_models: HashMap::new(),
         metrics: EngineMetrics::default(),
         last_errors: HashMap::new(),
+        dismissed_errors: HashMap::new(),
     }));
 
     let mut cfg = lmforge::config::LmForgeConfig::default();
@@ -698,6 +707,7 @@ async fn tc09_request_body_limit_enforced_and_configurable() {
         running_models: HashMap::new(),
         metrics: EngineMetrics::default(),
         last_errors: HashMap::new(),
+        dismissed_errors: HashMap::new(),
     }));
     let cfg = lmforge::config::LmForgeConfig::default();
     let state = AppState {
@@ -933,6 +943,7 @@ async fn tc14_model_list_resolves_relative_index_against_custom_models_dir() {
         running_models: HashMap::new(),
         metrics: EngineMetrics::default(),
         last_errors: HashMap::new(),
+        dismissed_errors: HashMap::new(),
     }));
     let state = AppState {
         engine_state,

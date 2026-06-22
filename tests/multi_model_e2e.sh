@@ -24,6 +24,9 @@
 #    SKIP_START    Set to 1 to skip daemon start (daemon must already be running)
 #    SKIP_BUILD    Set to 1 to skip `cargo build` (use installed LF_BIN / PATH)
 #    DO_VLM/DO_RERANK/DO_MTP  Default 1 (all suites on). Set 0 to disable.
+#    NO_BURST       Set to 1 for low-memory hosts: skip parallel/co-resident
+#                   probes (TC-E04/E05) and don't require co-residency in
+#                   TC-E01/E07. Every capability is still exercised sequentially.
 #
 #  FLAGS
 #  -----
@@ -32,6 +35,9 @@
 #    --skip-mtp      Skip MTP probe (TC-E12)
 #    --full          Alias: all suites on (default)
 #    --with-vlm / --with-rerank / --with-mtp  Force-enable a suite
+#    --no-burst      Low-memory mode — no parallel execution; capabilities are
+#                    checked sequentially (models may evict between loads)
+#    --burst         Force parallel/co-resident probes on (default)
 #
 #  EXAMPLE
 #  -------
@@ -57,6 +63,7 @@ SKIP_BUILD="${SKIP_BUILD:-0}"
 DO_VLM="${DO_VLM:-1}"
 DO_RERANK="${DO_RERANK:-1}"
 DO_MTP="${DO_MTP:-1}"
+NO_BURST="${NO_BURST:-0}"
 LF_BIN="${LF_BIN:-./target/debug/lmforge}"
 
 while (($#)); do
@@ -68,7 +75,9 @@ while (($#)); do
         --with-vlm)     DO_VLM=1 ;;
         --with-rerank)  DO_RERANK=1 ;;
         --with-mtp)     DO_MTP=1 ;;
-        -h|--help)      sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --no-burst)     NO_BURST=1 ;;
+        --burst)        NO_BURST=0 ;;
+        -h|--help)      sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *)              echo "Unknown flag: $1 (try --help)" >&2; exit 1 ;;
     esac
     shift
@@ -263,8 +272,14 @@ printf "  ${DIM}%-16s${NC}  vlm=%s rerank=%s mtp=%s\n" "Suites" \
     "$([[ $DO_VLM -eq 1 ]] && echo on || echo off)" \
     "$([[ $DO_RERANK -eq 1 ]] && echo on || echo off)" \
     "$([[ $DO_MTP -eq 1 ]] && echo on || echo off)"
+printf "  ${DIM}%-16s${NC}  %s\n" "Execution" \
+    "$([[ $NO_BURST -eq 1 ]] && echo 'sequential (--no-burst: no parallel/co-resident probes)' || echo 'parallel (co-resident + concurrent bursts)')"
 printf "  ${DIM}%-16s${NC}  chat_max_tokens=%s\n" "Load profile" "${E2E_CHAT_MAX_TOKENS:-128}"
 hdr
+
+# Parallel-only measurements; stay "n/a" when --no-burst skips those probes.
+concurrent_ms="n/a"
+mixed_ms="n/a"
 
 # ─── Trap / cleanup ───────────────────────────────────────────────────────────
 # Track which models this test run downloaded (vs found pre-existing).
@@ -398,17 +413,26 @@ chat_cold_ms=$(timer_end "chat_cold")
 assert_chat_response "$resp" "TC-E01 chat" 20
 printf "  ${GREEN}✓${NC} Chat model loaded   ${DIM}%sms${NC}\n" "$chat_cold_ms"
 
-status_resp=$(lf_status)
-# running_models is a JSON array; find each model by .model_id
-for _model in "$EMBED_MODEL" "$CHAT_MODEL"; do
-    found=$(echo "$status_resp" | jq -r --arg m "$_model" \
-        '[.running_models[] | select(.model_id == $m)] | length' 2>/dev/null)
-    [[ "$found" -gt 0 ]] \
-        || fail "TC-E01: model '${_model}' not found in /lf/status running_models"
-done
+if [[ "$NO_BURST" -eq 1 ]]; then
+    # Low-memory mode: the orchestrator may evict the embed model to make room
+    # for chat (sequential residency). Both already loaded and returned valid
+    # responses above, which is what we assert here — co-residency is not required.
+    printf "  ${DIM}↳ sequential mode: each model loaded & responded (co-residency not required)${NC}\n"
+    record_pass "TC-E01" "Sequential load embed+chat" \
+        "embed=${embed_cold_ms}ms  chat=${chat_cold_ms}ms"
+else
+    status_resp=$(lf_status)
+    # running_models is a JSON array; find each model by .model_id
+    for _model in "$EMBED_MODEL" "$CHAT_MODEL"; do
+        found=$(echo "$status_resp" | jq -r --arg m "$_model" \
+            '[.running_models[] | select(.model_id == $m)] | length' 2>/dev/null)
+        [[ "$found" -gt 0 ]] \
+            || fail "TC-E01: model '${_model}' not co-resident in /lf/status running_models (low memory? retry with --no-burst)"
+    done
 
-record_pass "TC-E01" "Cold-start co-load" \
-    "embed=${embed_cold_ms}ms  chat=${chat_cold_ms}ms"
+    record_pass "TC-E01" "Cold-start co-load" \
+        "embed=${embed_cold_ms}ms  chat=${chat_cold_ms}ms"
+fi
 
 # ─── TC-E02: Sequential embed burst ───────────────────────────────────────────
 sep
@@ -464,6 +488,10 @@ record_pass "TC-E03" "Sequential chat (${N}x)" \
 
 # ─── TC-E04: Concurrent embed burst ───────────────────────────────────────────
 sep
+if [[ "$NO_BURST" -eq 1 ]]; then
+    echo -e "\n${BOLD}TC-E04${NC}  Concurrent embed burst  ${DIM}(skipped — --no-burst)${NC}"
+    record_skip "TC-E04" "Concurrent embed (${N}x)" "skipped (--no-burst: low memory)"
+else
 echo -e "\n${BOLD}TC-E04${NC}  Concurrent embed burst  ${DIM}(${N} parallel requests)${NC}"
 
 tmpdir=$(mktemp -d)
@@ -495,9 +523,14 @@ rm -rf "$tmpdir"
 printf "  ${GREEN}✓${NC} All ${N} concurrent embed requests succeeded  ${DIM}(wall: %sms)${NC}\n" "$concurrent_ms"
 record_pass "TC-E04" "Concurrent embed (${N}x)" \
     "wall=${concurrent_ms}ms  throughput=$(( N * 1000 / concurrent_ms )) req/s"
+fi
 
 # ─── TC-E05: Simultaneous embed + chat ────────────────────────────────────────
 sep
+if [[ "$NO_BURST" -eq 1 ]]; then
+    echo -e "\n${BOLD}TC-E05${NC}  Simultaneous embed + chat  ${DIM}(skipped — --no-burst)${NC}"
+    record_skip "TC-E05" "Simultaneous embed+chat" "skipped (--no-burst: low memory)"
+else
 echo -e "\n${BOLD}TC-E05${NC}  Simultaneous embed + chat  ${DIM}(1 of each in parallel)${NC}"
 
 tmpdir=$(mktemp -d)
@@ -518,6 +551,7 @@ rm -rf "$tmpdir"
 
 printf "  ${GREEN}✓${NC} Embed + chat completed simultaneously  ${DIM}(wall: %sms)${NC}\n" "$mixed_ms"
 record_pass "TC-E05" "Simultaneous embed+chat" "wall=${mixed_ms}ms"
+fi
 
 # ─── TC-E06: Cross-endpoint rejection ─────────────────────────────────────────
 sep
@@ -547,6 +581,19 @@ fi
 sep
 echo -e "\n${BOLD}TC-E07${NC}  State consistency after full burst"
 
+if [[ "$NO_BURST" -eq 1 ]]; then
+    # Sequential mode evicts to fit memory, so embed+chat are not both resident.
+    # Assert instead that every currently-resident slot reports a healthy status.
+    bad=$(lf_status | jq -r '[.running_models[] | select(.status != "ready")] | length' 2>/dev/null || echo "?")
+    n_running=$(lf_status | jq -r '.running_models | length' 2>/dev/null || echo 0)
+    if [[ "$bad" == "0" ]]; then
+        printf "  ${GREEN}✓${NC} ${DIM}%s resident slot(s), all status=ready${NC}\n" "$n_running"
+        record_pass "TC-E07" "State consistency (sequential)" "${n_running} ready"
+    else
+        record_fail "TC-E07" "State consistency (sequential)" "${bad} slot(s) not ready"
+        fail "TC-E07: ${bad} resident slot(s) not ready"
+    fi
+else
 state_detail=""
 state_ok=true
 for _label_model in "embed:${EMBED_MODEL}" "chat:${CHAT_MODEL}"; do
@@ -573,6 +620,7 @@ fi
 
 printf "  ${GREEN}✓${NC} ${DIM}%s${NC}\n" "$state_detail"
 record_pass "TC-E07" "State consistency" "$state_detail"
+fi
 
 # ─── TC-E08..E12: capability suites (graceful skip on unavailable) ───────────
 if [[ "$DO_VLM" -eq 1 ]]; then

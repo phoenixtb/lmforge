@@ -16,15 +16,60 @@ pub mod thinking;
 
 use axum::{
     Router,
+    body::Body,
+    response::Response,
     routing::{delete, get, post},
 };
+use futures::StreamExt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::engine::adapter::EngineAdapterInstance;
-use crate::engine::manager::{EngineState, ManagerCommand};
+use crate::engine::manager::{EngineState, ManagerCommand, ModelHandle};
 use crate::engine::registry::EngineConfig;
+
+/// RAII marker that a request is actively using a model. While alive it keeps the
+/// slot's in-flight count above zero so the orchestrator will not evict the model
+/// mid-request. The count is incremented by the orchestrator when the model is
+/// ensured `for_request`; this guard performs the matching decrement on drop —
+/// including when a streaming response body is dropped (client disconnect) — via
+/// [`attach_inflight_guard`].
+pub struct InflightGuard {
+    port: u16,
+    inflight: Arc<AtomicU32>,
+}
+
+impl InflightGuard {
+    /// Engine port to proxy this request to.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        self.inflight.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Keep an [`InflightGuard`] alive for the entire lifetime of a response body.
+///
+/// Streaming responses outlive the handler function, so the guard must ride along
+/// with the body and only release (decrement the model's in-flight count) when the
+/// stream finishes or is dropped (e.g. the client disconnects mid-generation).
+/// Buffered responses are wrapped uniformly — harmless, the guard simply drops a
+/// moment later once the single chunk is consumed.
+pub fn attach_inflight_guard(resp: Response, guard: InflightGuard) -> Response {
+    let (parts, body) = resp.into_parts();
+    let guarded = body.into_data_stream().map(move |chunk| {
+        // `guard` is moved into this closure; it drops with the stream.
+        let _keep = &guard;
+        chunk
+    });
+    Response::from_parts(parts, Body::from_stream(guarded))
+}
 
 /// Shared application state passed to all handlers
 #[derive(Clone)]
@@ -126,15 +171,44 @@ impl AppState {
         }
     }
 
+    /// Ensure a model is loaded for a *preload* (no request will immediately
+    /// follow, e.g. `/lf/model/switch`). Does not touch the in-flight count.
     pub async fn ensure_model(
         &self,
         model_id: &str,
         keep_alive: Option<String>,
-    ) -> Result<u16, axum::http::Response<axum::body::Body>> {
+    ) -> Result<u16, Response> {
+        self.ensure_model_inner(model_id, keep_alive, false)
+            .await
+            .map(|h| h.port)
+    }
+
+    /// Ensure a model is loaded to *serve a request*. Returns an [`InflightGuard`]
+    /// that holds the model busy (uneviccible) until dropped — attach it to the
+    /// response with [`attach_inflight_guard`] so it survives streaming bodies.
+    pub async fn ensure_model_request(
+        &self,
+        model_id: &str,
+        keep_alive: Option<String>,
+    ) -> Result<InflightGuard, Response> {
+        let handle = self.ensure_model_inner(model_id, keep_alive, true).await?;
+        Ok(InflightGuard {
+            port: handle.port,
+            inflight: handle.inflight,
+        })
+    }
+
+    async fn ensure_model_inner(
+        &self,
+        model_id: &str,
+        keep_alive: Option<String>,
+        for_request: bool,
+    ) -> Result<ModelHandle, Response> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let cmd = ManagerCommand::EnsureModel {
             model_id: model_id.to_string(),
             keep_alive_override: keep_alive,
+            for_request,
             reply: tx,
         };
         if self.command_tx.send(cmd).await.is_err() {
@@ -146,7 +220,7 @@ impl AppState {
                 .unwrap());
         }
         match rx.await {
-            Ok(Ok(port)) => Ok(port),
+            Ok(Ok(handle)) => Ok(handle),
             Ok(Err(e)) => Err(axum::http::Response::builder()
                 .status(axum::http::StatusCode::SERVICE_UNAVAILABLE)
                 .body(axum::body::Body::from(format!(

@@ -74,12 +74,19 @@ install_linux_ui_launcher() {
     fi
     rm -rf "$extract_dir"
 
+    # Without libfuse2 the AppImage can't self-mount, so the launcher must run
+    # it in extract-and-run mode for the desktop entry to work.
+    local exec_line="$appimage_path %u"
+    if ! ldconfig -p 2>/dev/null | grep -q "libfuse.so.2"; then
+        exec_line="env APPIMAGE_EXTRACT_AND_RUN=1 $appimage_path %u"
+    fi
+
     mkdir -p "$desktop_dir"
     cat > "$desktop_dir/lmforge.desktop" <<EOF
 [Desktop Entry]
 Name=LMForge
 Comment=LMForge — Local LLM Orchestrator UI
-Exec=$appimage_path %u
+Exec=$exec_line
 Icon=lmforge-ui
 StartupWMClass=lmforge-ui
 Terminal=false
@@ -94,6 +101,46 @@ EOF
 OS=$(uname -s)
 ARCH=$(uname -m)
 
+# Native Linux package facts (must match what Tauri's deb/rpm bundles install).
+LINUX_PKG_NAME="lm-forge"                          # rpm/deb package name
+LINUX_NATIVE_BIN="/usr/bin/lmforge-ui"             # binary installed by deb/rpm
+LINUX_NATIVE_DESKTOP="/usr/share/applications/LMForge.desktop"
+
+# Root vs sudo. Native package install/removal needs root; user-local AppImage
+# does not. Resolved once so every code path uses the same escalation.
+if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then SUDO=""; else SUDO="sudo"; fi
+
+# Choose the Linux UI distribution format for this host:
+#   rpm  → Fedora/RHEL/SUSE families (dnf/zypper resolve webkit deps natively)
+#   deb  → Debian/Ubuntu families    (apt resolves webkit deps natively)
+#   appimage → portable fallback for everything else (or when the native package
+#              manager is missing). AppImage needs libfuse2 at runtime, which is
+#              why native packages are preferred where available.
+detect_linux_pkg_kind() {
+    local id="" like=""
+    if [[ -f /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        id="${ID:-}"; like="${ID_LIKE:-}"
+    fi
+    case "$id" in
+        fedora|rhel|centos|rocky|almalinux|ol|amzn|opensuse*|suse|sles)
+            command -v dnf &>/dev/null || command -v zypper &>/dev/null || command -v rpm &>/dev/null \
+                && { echo rpm; return; } ;;
+        ubuntu|debian|pop|linuxmint|elementary|zorin|kali|raspbian|neon)
+            command -v apt-get &>/dev/null || command -v dpkg &>/dev/null \
+                && { echo deb; return; } ;;
+    esac
+    case " $like " in
+        *rhel*|*fedora*|*suse*)   command -v dnf &>/dev/null   && { echo rpm; return; } ;;
+        *debian*|*ubuntu*)        command -v apt-get &>/dev/null && { echo deb; return; } ;;
+    esac
+    echo appimage
+}
+
+LINUX_PKG_KIND=""
+[[ "$OS" == "Linux" ]] && LINUX_PKG_KIND=$(detect_linux_pkg_kind)
+
 detect_ui_asset() {
     case "$OS" in
         Darwin)
@@ -104,7 +151,12 @@ detect_ui_asset() {
             esac ;;
         Linux)
             case "$ARCH" in
-                x86_64)  echo "LMForge-UI-linux-x86_64.AppImage" ;;
+                x86_64)
+                    case "$LINUX_PKG_KIND" in
+                        rpm) echo "LMForge-UI-linux-x86_64.rpm" ;;
+                        deb) echo "LMForge-UI-linux-x86_64.deb" ;;
+                        *)   echo "LMForge-UI-linux-x86_64.AppImage" ;;
+                    esac ;;
                 *)        error "Unsupported Linux arch: $ARCH. Only x86_64 is supported currently." ;;
             esac ;;
         *)
@@ -172,15 +224,17 @@ else
     sleep 2
 fi
 
-# ── Linux UI runtime deps (Tauri 2 needs webkit2gtk on the host) ──────────────
-# The AppImage bundles most libraries but webkit2gtk/webkitgtk MUST come from
-# the host system — it's the HTML rendering engine and cannot be relocated.
+# ── Linux UI runtime deps (AppImage fallback only) ───────────────────────────
+# Native deb/rpm packages declare webkit2gtk/appindicator as dependencies, so
+# the system package manager resolves them automatically — this manual block is
+# ONLY needed for the portable AppImage path, which bundles most libraries but
+# cannot relocate the host's webkit2gtk HTML renderer.
 # Package names differ by distro AND distro version (Tauri 2 needs webkit 4.1+,
 # the 4.0 series was deprecated). We probe `/etc/os-release` and install
 # conservatively, with explicit confirmation. Unknown distros: print
 # instructions and continue (the AppImage may still launch if libs are
 # pre-installed, or fail with a clear message).
-if [[ "$OS" == "Linux" ]]; then
+if [[ "$OS" == "Linux" && "$LINUX_PKG_KIND" == "appimage" ]]; then
     section "Checking UI runtime dependencies..."
 
     # Default — overridden per distro below.
@@ -314,19 +368,51 @@ if [[ "$OS" == "Linux" ]]; then
 fi
 
 # ── Obtain artifact (local build or GitHub download) ──────────────────────────
+# Figure out the file suffix up front: dnf/apt/dpkg identify a package by its
+# `.rpm`/`.deb` extension, so the temp file must carry it. A local artifact also
+# overrides the detected kind (a hand-built .rpm installs as rpm regardless of
+# what the host probe guessed).
+artifact_suffix() {  # <filename>
+    case "$1" in
+        *.rpm)      echo ".rpm" ;;
+        *.deb)      echo ".deb" ;;
+        *.AppImage) echo ".AppImage" ;;
+        *.dmg)      echo ".dmg" ;;
+        *)          echo "" ;;
+    esac
+}
+
+ART_SUFFIX=""
+if [[ -n "${LMFORGE_UI_LOCAL:-}" ]]; then
+    ART_SUFFIX=$(artifact_suffix "$LMFORGE_UI_LOCAL")
+    if [[ "$OS" == "Linux" ]]; then
+        case "$ART_SUFFIX" in
+            .rpm)      LINUX_PKG_KIND="rpm" ;;
+            .deb)      LINUX_PKG_KIND="deb" ;;
+            .AppImage) LINUX_PKG_KIND="appimage" ;;
+        esac
+    fi
+else
+    ASSET=$(detect_ui_asset)
+    ART_SUFFIX=$(artifact_suffix "$ASSET")
+fi
+
 TMP_FILE=$(mktemp "/tmp/lmforge-ui-XXXXXX")
+if [[ -n "$ART_SUFFIX" ]]; then
+    mv "$TMP_FILE" "$TMP_FILE$ART_SUFFIX"
+    TMP_FILE="$TMP_FILE$ART_SUFFIX"
+fi
 trap 'rm -f "$TMP_FILE"' EXIT
 
 if [[ -n "${LMFORGE_UI_LOCAL:-}" ]]; then
-    # Dev/E2E path: install a locally built artifact (.dmg / .AppImage), skip the
-    # GitHub download. Mirrors LMFORGE_LOCAL_BIN in install-core.sh.
+    # Dev/E2E path: install a locally built artifact (.dmg / .deb / .rpm /
+    # .AppImage), skip the GitHub download. Mirrors LMFORGE_LOCAL_BIN in install-core.sh.
     section "Using local LMForge UI artifact..."
     [[ -f "$LMFORGE_UI_LOCAL" ]] || error "LMFORGE_UI_LOCAL not found: $LMFORGE_UI_LOCAL"
     cp "$LMFORGE_UI_LOCAL" "$TMP_FILE"
     info "Local artifact: $LMFORGE_UI_LOCAL"
 else
     section "Downloading LMForge UI..."
-    ASSET=$(detect_ui_asset)
     URL=$(resolve_url "$ASSET")
     echo    "  Asset:  $ASSET"
     echo    "  URL:    $URL"
@@ -372,8 +458,43 @@ if [[ "$OS" == "Darwin" ]]; then
     info "LMForge opened"
 fi
 
-# ── Install Linux AppImage ────────────────────────────────────────────────────
-if [[ "$OS" == "Linux" ]]; then
+# ── Install Linux (native rpm/deb preferred, AppImage fallback) ───────────────
+install_linux_native_pkg() {
+    local f="$1" kind="$2"
+    case "$kind" in
+        rpm)
+            if command -v dnf &>/dev/null; then
+                $SUDO dnf install -y "$f"
+            elif command -v zypper &>/dev/null; then
+                $SUDO zypper --non-interactive install --allow-unsigned-rpm "$f"
+            else
+                # Last resort: rpm can't resolve deps, but the package declares
+                # them so the user gets a clear missing-dependency error.
+                $SUDO rpm -Uvh --replacepkgs "$f"
+            fi ;;
+        deb)
+            if command -v apt-get &>/dev/null; then
+                # apt-get install on a local .deb resolves declared deps.
+                $SUDO apt-get install -y "$f" \
+                    || { $SUDO dpkg -i "$f" || true; $SUDO apt-get -f install -y; }
+            else
+                $SUDO dpkg -i "$f" || true
+            fi ;;
+    esac
+}
+
+if [[ "$OS" == "Linux" && ( "$LINUX_PKG_KIND" == "rpm" || "$LINUX_PKG_KIND" == "deb" ) ]]; then
+    section "Installing LMForge ($LINUX_PKG_KIND)..."
+    install_linux_native_pkg "$TMP_FILE" "$LINUX_PKG_KIND"
+    [[ -x "$LINUX_NATIVE_BIN" ]] || error "Install reported success but $LINUX_NATIVE_BIN is missing."
+    info "Installed: $LINUX_NATIVE_BIN"
+    # Native packages ship the .desktop + icons under /usr/share already.
+    command -v update-desktop-database &>/dev/null && $SUDO update-desktop-database &>/dev/null || true
+    echo ""
+    echo    "  Launch: $LINUX_NATIVE_BIN"
+    echo    "  Or find 'LMForge' in your app launcher"
+
+elif [[ "$OS" == "Linux" ]]; then
     section "Installing LMForge AppImage..."
 
     APPIMAGE_DIR="${HOME}/.local/bin"
@@ -384,10 +505,26 @@ if [[ "$OS" == "Linux" ]]; then
     cp "$TMP_FILE" "$APPIMAGE_PATH"
     info "Installed: $APPIMAGE_PATH"
 
+    # AppImage type-2 self-mounts via libfuse2. Modern distros (e.g. Fedora)
+    # ship only fuse3, so when libfuse.so.2 is absent we launch in
+    # extract-and-run mode (no FUSE needed) — slightly slower startup, but it
+    # actually runs. This is the documented FUSE-less fallback.
+    if ldconfig -p 2>/dev/null | grep -q "libfuse.so.2"; then
+        APPIMAGE_FUSE_OK=1
+    else
+        APPIMAGE_FUSE_OK=0
+        warn "libfuse2 not found — launching the AppImage in extract-and-run mode."
+        warn "For native desktop integration, prefer the .rpm/.deb package for your distro."
+    fi
+
     install_linux_ui_launcher "$APPIMAGE_PATH"
 
     echo ""
-    echo    "  Launch: $APPIMAGE_PATH"
+    if [[ "$APPIMAGE_FUSE_OK" -eq 1 ]]; then
+        echo    "  Launch: $APPIMAGE_PATH"
+    else
+        echo    "  Launch: APPIMAGE_EXTRACT_AND_RUN=1 $APPIMAGE_PATH"
+    fi
     echo    "  Or find 'LMForge' in your app launcher"
 fi
 

@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
@@ -149,6 +150,24 @@ impl LoadErrorSeverity {
     }
 }
 
+/// Pick the least-recently-used model id among *idle* slots (`inflight == 0`).
+///
+/// Slots that are actively serving a request (`inflight > 0`) are filtered out
+/// entirely — they are never eviction victims, because stopping the engine would
+/// abort the in-flight request. Returns `None` when every candidate is busy (the
+/// caller then enforces admission control: reject rather than over-commit). Pure
+/// so the policy is unit-testable without spawning engines. Items are
+/// `(id, last_accessed, inflight)`.
+fn lru_idle_model_id<'a>(
+    slots: impl IntoIterator<Item = (&'a String, u64, u32)>,
+) -> Option<String> {
+    slots
+        .into_iter()
+        .filter(|(_, _, inflight)| *inflight == 0)
+        .min_by_key(|(_, last_accessed, _)| *last_accessed)
+        .map(|(id, _, _)| id.clone())
+}
+
 const MAX_LAST_ERRORS: usize = 8;
 
 /// How long a `last_errors` entry is retained before the heartbeat sweep
@@ -236,8 +255,10 @@ impl EngineState {
     /// success then a new failure) will resurface on its own.
     pub fn dismiss_error(&mut self, model_id: &str) {
         if let Some(e) = self.last_errors.remove(model_id) {
-            self.dismissed_errors
-                .insert(model_id.to_string(), error_signature(e.severity, &e.message));
+            self.dismissed_errors.insert(
+                model_id.to_string(),
+                error_signature(e.severity, &e.message),
+            );
         } else {
             self.dismissed_errors.remove(model_id);
         }
@@ -253,6 +274,20 @@ pub struct ActiveSlot {
     pub status: EngineStatus,
     /// The role this engine process was started with. Used to detect role-mismatch conflicts.
     pub role: ModelRole,
+    /// Number of requests currently being served by this slot. Incremented by
+    /// the orchestrator when a request is admitted (`for_request`), decremented
+    /// by the request path's [`InflightGuard`](crate::server::InflightGuard) on
+    /// completion. A slot with `inflight > 0` is **never** an eviction victim —
+    /// tearing down an engine mid-request drops the user's in-flight work.
+    pub inflight: Arc<AtomicU32>,
+}
+
+/// Returned by an `EnsureModel` command: the engine port plus the slot's shared
+/// in-flight counter, so the request path can hold the model "busy" for the
+/// duration of a request and the orchestrator can refuse to evict it.
+pub struct ModelHandle {
+    pub port: u16,
+    pub inflight: Arc<AtomicU32>,
 }
 
 /// The engine manager — spawns, supervises, health-checks, and restarts the engine via Adapters
@@ -279,7 +314,13 @@ pub enum ManagerCommand {
     EnsureModel {
         model_id: String,
         keep_alive_override: Option<String>,
-        reply: tokio::sync::oneshot::Sender<Result<u16>>,
+        /// `true` when the caller is about to serve a request through this model
+        /// (inference endpoints): the orchestrator bumps the slot's in-flight
+        /// count before replying so the model is protected from eviction in the
+        /// window before the request path installs its guard. `false` for warm
+        /// preloads (e.g. `/lf/model/switch`) which must not leak a count.
+        for_request: bool,
+        reply: tokio::sync::oneshot::Sender<Result<ModelHandle>>,
     },
     UnloadModel(String),
     UnloadAll,
@@ -409,31 +450,70 @@ impl EngineManager {
         Ok(())
     }
 
-    /// Evict least recently used models until needed VRAM is free
-    async fn evict_for_vram(&mut self, needed_vram_gb: f32) -> Result<()> {
+    /// Memory (GB) currently free to admit *another* model. Accelerator-aware:
+    /// - **Discrete GPU / unified memory**: live free VRAM from
+    ///   [`crate::hardware::vram::get_free_vram`], which already nets out our own
+    ///   resident models and other GPU consumers.
+    /// - **CPU-only** (`GpuVendor::None`): safety-first admission control
+    ///   ([`crate::hardware::vram::cpu_residency_free`]) — the tighter of live
+    ///   `available` RAM minus an OS reserve and a hard total-RAM footprint cap.
+    ///   On a no-GPU box VRAM is 0, so budgeting on it would unload every
+    ///   co-resident model on each cold load; budgeting on *total* RAM instead
+    ///   over-committed and pushed the host into OOM.
+    fn memory_free_gb(&self, profile: &crate::hardware::probe::HardwareProfile) -> f32 {
+        use crate::hardware::probe::GpuVendor;
+        use crate::hardware::vram;
+        if matches!(profile.gpu_vendor, GpuVendor::None) {
+            let resident_sum_gb: f32 = self
+                .active_slots
+                .values()
+                .map(|s| vram::estimate_model_vram(s.size_bytes))
+                .sum();
+            vram::cpu_residency_free(
+                vram::free_system_ram_gb(),
+                resident_sum_gb,
+                profile.total_ram_gb,
+            )
+        } else {
+            vram::get_free_vram(profile)
+        }
+    }
+
+    /// Evict least-recently-used **idle** models until the new load's memory need
+    /// fits, or until only actively-serving models remain.
+    ///
+    /// Eviction never targets a slot with `inflight > 0` — stopping a busy engine
+    /// would abort an in-flight request. If freeing the budget would require
+    /// evicting an active model, the loop stops and leaves the shortfall for the
+    /// caller's admission check to reject. This co-loads when there's room and
+    /// falls back to sequential (evict-idle-then-load) under pressure, without
+    /// ever killing live work or over-committing memory.
+    async fn evict_for_memory(&mut self, needed_gb: f32) -> Result<()> {
         let profile = crate::hardware::probe::detect_platform().unwrap_or_default();
 
         loop {
-            let free_vram = crate::hardware::vram::get_free_vram(&profile);
-            if free_vram >= needed_vram_gb || self.active_slots.is_empty() {
+            let free_gb = self.memory_free_gb(&profile);
+            if free_gb >= needed_gb || self.active_slots.is_empty() {
                 break;
             }
 
-            // Find oldest accessed
-            if let Some((oldest_id, _)) = self
-                .active_slots
-                .iter()
-                .min_by_key(|(_, slot)| slot.last_accessed)
-                .map(|(k, v)| (k.clone(), v.last_accessed))
-            {
-                info!(
-                    "VRAM starved (free: {:.2}GB, need: {:.2}GB). Evicting LRU model: {}",
-                    free_vram, needed_vram_gb, oldest_id
-                );
-                if let Some(mut slot) = self.active_slots.remove(&oldest_id) {
-                    let _ = self.stop_slot(&mut slot).await;
-                    self.state.write().await.running_models.remove(&oldest_id);
-                }
+            // Only idle slots are eligible victims. `None` ⇒ everything resident
+            // is serving a request; we can't free more without aborting it.
+            let Some(victim) = lru_idle_model_id(
+                self.active_slots
+                    .iter()
+                    .map(|(k, s)| (k, s.last_accessed, s.inflight.load(Ordering::Relaxed))),
+            ) else {
+                break;
+            };
+
+            info!(
+                "Memory budget low (free: {:.2}GB, need: {:.2}GB). Evicting idle LRU model: {}",
+                free_gb, needed_gb, victim
+            );
+            if let Some(mut slot) = self.active_slots.remove(&victim) {
+                let _ = self.stop_slot(&mut slot).await;
+                self.state.write().await.running_models.remove(&victim);
             }
         }
         Ok(())
@@ -584,7 +664,8 @@ impl EngineManager {
         &mut self,
         model_id: &str,
         keep_alive_override: &Option<String>,
-    ) -> Result<u16> {
+        for_request: bool,
+    ) -> Result<ModelHandle> {
         let now = keepalive::now_secs();
 
         let keep_alive_secs = if let Some(ov) = keep_alive_override {
@@ -638,14 +719,22 @@ impl EngineManager {
             }
             slot.last_accessed = now;
             slot.keep_alive_secs = keep_alive_secs;
-            return Ok(slot.port);
+            // Mark busy before replying so a concurrent cold load can't pick this
+            // warm slot as an eviction victim before the request guard is installed.
+            if for_request {
+                slot.inflight.fetch_add(1, Ordering::Relaxed);
+            }
+            return Ok(ModelHandle {
+                port: slot.port,
+                inflight: slot.inflight.clone(),
+            });
         }
 
         info!(model_id, "Cold load request for model");
         let load_started = std::time::Instant::now();
 
         let size_bytes = index.get(model_id).map(|m| m.size_bytes).unwrap_or(0);
-        let needed_vram_gb = crate::hardware::vram::estimate_model_vram(size_bytes);
+        let needed_mem_gb = crate::hardware::vram::estimate_model_vram(size_bytes);
 
         let entry_path = match index.get(model_id).map(|m| m.path.clone()) {
             Some(p) => p,
@@ -664,19 +753,66 @@ impl EngineManager {
         };
         let model_dir = PathBuf::from(entry_path);
 
-        self.evict_for_vram(needed_vram_gb).await?;
+        self.evict_for_memory(needed_mem_gb).await?;
 
-        if self.max_loaded_models > 0
-            && self.active_slots.len() >= self.max_loaded_models as usize
-            && let Some((oldest_id, _)) = self
-                .active_slots
-                .iter()
-                .min_by_key(|(_, slot)| slot.last_accessed)
-                .map(|(k, v)| (k.clone(), v.last_accessed))
-            && let Some(mut slot) = self.active_slots.remove(&oldest_id)
+        // Honour the optional hard count cap (max_loaded_models). Only idle slots
+        // may be evicted to make room; if every loaded model is busy, refuse the
+        // new load rather than abort an in-flight request.
+        if self.max_loaded_models > 0 && self.active_slots.len() >= self.max_loaded_models as usize
         {
-            let _ = self.stop_slot(&mut slot).await;
-            self.state.write().await.running_models.remove(&oldest_id);
+            match lru_idle_model_id(
+                self.active_slots
+                    .iter()
+                    .map(|(k, s)| (k, s.last_accessed, s.inflight.load(Ordering::Relaxed))),
+            ) {
+                Some(victim) => {
+                    if let Some(mut slot) = self.active_slots.remove(&victim) {
+                        let _ = self.stop_slot(&mut slot).await;
+                        self.state.write().await.running_models.remove(&victim);
+                    }
+                }
+                None => bail!(
+                    "Cannot load '{}': model slot limit ({}) reached and all loaded \
+                     models are serving requests. Retry once one becomes idle.",
+                    model_id,
+                    self.max_loaded_models
+                ),
+            }
+        }
+
+        // Admission control: after evicting every *idle* model, if the budget
+        // still can't fit this model, refuse rather than over-commit. Loading
+        // anyway would either OOM the host (CPU) or require killing an in-flight
+        // model (which `evict_for_memory` deliberately won't do).
+        {
+            let profile = crate::hardware::probe::detect_platform().unwrap_or_default();
+            let free_gb = self.memory_free_gb(&profile);
+            if free_gb < needed_mem_gb {
+                let busy = self
+                    .active_slots
+                    .values()
+                    .filter(|s| s.inflight.load(Ordering::Relaxed) > 0)
+                    .count();
+                if busy > 0 {
+                    bail!(
+                        "Insufficient memory to load '{}': needs ~{:.1} GB but only \
+                         {:.1} GB free; {} loaded model(s) are serving requests and \
+                         won't be evicted. Retry once they're idle.",
+                        model_id,
+                        needed_mem_gb,
+                        free_gb,
+                        busy
+                    );
+                } else {
+                    bail!(
+                        "Insufficient memory to load '{}': needs ~{:.1} GB but only \
+                         {:.1} GB available on this host.",
+                        model_id,
+                        needed_mem_gb,
+                        free_gb
+                    );
+                }
+            }
         }
 
         let port = self.allocate_port();
@@ -690,7 +826,7 @@ impl EngineManager {
                     port,
                     status: EngineStatus::Starting,
                     idle_secs: 0,
-                    vram_est_gb: needed_vram_gb,
+                    vram_est_gb: needed_mem_gb,
                     // spec mode + stats are filled in after the engine
                     // becomes Ready (we don't know spec.mode until the
                     // adapter resolves it inside `start()`).
@@ -805,8 +941,12 @@ impl EngineManager {
                             );
                             // Engine spawned but never went healthy on either
                             // attempt — a runtime crash/timeout, not a config error.
-                            self.record_load_failure(model_id, &combined, LoadErrorSeverity::Transient)
-                                .await;
+                            self.record_load_failure(
+                                model_id,
+                                &combined,
+                                LoadErrorSeverity::Transient,
+                            )
+                            .await;
                             self.state.write().await.running_models.remove(model_id);
                             crate::server::metrics::observe_model_load(
                                 model_id,
@@ -866,6 +1006,7 @@ impl EngineManager {
                 size_bytes,
                 status: EngineStatus::Ready,
                 role,
+                inflight: Arc::new(AtomicU32::new(0)),
             },
         );
 
@@ -888,7 +1029,18 @@ impl EngineManager {
         );
         crate::server::metrics::set_active_models(self.active_slots.len() as u64);
 
-        Ok(port)
+        // Hand back a handle. Mark busy before replying (same race guard as the
+        // warm path) so this freshly-loaded slot can't be evicted out from under
+        // the request that triggered the load.
+        let inflight = self
+            .active_slots
+            .get(model_id)
+            .map(|s| s.inflight.clone())
+            .unwrap_or_else(|| Arc::new(AtomicU32::new(0)));
+        if for_request {
+            inflight.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(ModelHandle { port, inflight })
     }
 
     pub async fn supervise(mut self, mut cmd_rx: tokio::sync::mpsc::Receiver<ManagerCommand>) {
@@ -896,8 +1048,8 @@ impl EngineManager {
             tokio::select! {
                 cmd = cmd_rx.recv() => {
                     match cmd {
-                        Some(ManagerCommand::EnsureModel { model_id, keep_alive_override, reply }) => {
-                            let res = self.handle_ensure_model(&model_id, &keep_alive_override).await;
+                        Some(ManagerCommand::EnsureModel { model_id, keep_alive_override, for_request, reply }) => {
+                            let res = self.handle_ensure_model(&model_id, &keep_alive_override, for_request).await;
                             let _ = reply.send(res);
                         }
                         Some(ManagerCommand::UnloadModel(model_id)) => {
@@ -927,8 +1079,12 @@ impl EngineManager {
                     let now = keepalive::now_secs();
                     let mut to_evict = Vec::new();
                     for (id, slot) in self.active_slots.iter() {
+                        // Never TTL-evict a model that is mid-request: a long
+                        // stream can outlive its keep-alive window, and stamping
+                        // last_accessed only happens at request start.
                         if slot.keep_alive_secs > 0 && (now.saturating_sub(slot.last_accessed) > slot.keep_alive_secs)
-                            && self.config.id != "omlx" {
+                            && self.config.id != "omlx"
+                            && slot.inflight.load(Ordering::Relaxed) == 0 {
                                 to_evict.push(id.clone());
                             }
                     }
@@ -1071,7 +1227,10 @@ mod last_error_tests {
 
         s.dismiss_error("m");
         assert!(!s.last_errors.contains_key("m"), "current error cleared");
-        assert!(s.dismissed_errors.contains_key("m"), "model marked dismissed");
+        assert!(
+            s.dismissed_errors.contains_key("m"),
+            "model marked dismissed"
+        );
 
         // Same failure keeps firing (fresh timestamp, same message) — stays quiet.
         let stored = s.record_error("m", err("t1", LoadErrorSeverity::Transient));
@@ -1085,12 +1244,20 @@ mod last_error_tests {
         let mut s = blank_state();
         s.record_error(
             "m",
-            msg_err("t0", LoadErrorSeverity::Transient, "exited port=11432 in 4563ms"),
+            msg_err(
+                "t0",
+                LoadErrorSeverity::Transient,
+                "exited port=11432 in 4563ms",
+            ),
         );
         s.dismiss_error("m");
         let stored = s.record_error(
             "m",
-            msg_err("t1", LoadErrorSeverity::Transient, "exited port=11888 in 9012ms"),
+            msg_err(
+                "t1",
+                LoadErrorSeverity::Transient,
+                "exited port=11888 in 9012ms",
+            ),
         );
         assert!(!stored, "digit-only differences must not defeat dismissal");
     }
@@ -1098,13 +1265,22 @@ mod last_error_tests {
     #[test]
     fn different_signature_resurfaces_without_a_successful_load() {
         let mut s = blank_state();
-        s.record_error("m", msg_err("t0", LoadErrorSeverity::UserError, "no .gguf found"));
+        s.record_error(
+            "m",
+            msg_err("t0", LoadErrorSeverity::UserError, "no .gguf found"),
+        );
         s.dismiss_error("m");
 
         // A genuinely different failure mode should surface immediately.
-        assert!(s.record_error("m", msg_err("t1", LoadErrorSeverity::Transient, "out of VRAM")));
+        assert!(s.record_error(
+            "m",
+            msg_err("t1", LoadErrorSeverity::Transient, "out of VRAM")
+        ));
         assert!(s.last_errors.contains_key("m"));
-        assert!(!s.dismissed_errors.contains_key("m"), "stale dismissal lifted");
+        assert!(
+            !s.dismissed_errors.contains_key("m"),
+            "stale dismissal lifted"
+        );
     }
 
     #[test]
@@ -1115,7 +1291,10 @@ mod last_error_tests {
 
         // Model finally loads OK → clears error and the suppression.
         s.clear_error("m");
-        assert!(!s.dismissed_errors.contains_key("m"), "dismissal lifted on success");
+        assert!(
+            !s.dismissed_errors.contains_key("m"),
+            "dismissal lifted on success"
+        );
 
         // The same failure after a good load should surface again.
         assert!(s.record_error("m", err("t2", LoadErrorSeverity::Transient)));
@@ -1138,7 +1317,10 @@ mod last_error_tests {
         s.record_error("m", msg_err("t0", LoadErrorSeverity::Transient, "kind A"));
         s.record_error("m", msg_err("t1", LoadErrorSeverity::Transient, "kind A"));
         s.record_error("m", msg_err("t2", LoadErrorSeverity::Transient, "kind B"));
-        assert_eq!(s.last_errors["m"].count, 1, "new signature starts a fresh count");
+        assert_eq!(
+            s.last_errors["m"].count, 1,
+            "new signature starts a fresh count"
+        );
     }
 
     #[test]
@@ -1156,18 +1338,90 @@ mod last_error_tests {
     }
 
     #[test]
+    fn lru_idle_picks_oldest_idle() {
+        // (id, last_accessed, inflight). All idle → smallest last_accessed wins.
+        let slots = [
+            ("chat".to_string(), 300u64, 0u32),
+            ("embed".to_string(), 100u64, 0u32),
+            ("vlm".to_string(), 200u64, 0u32),
+        ];
+        let id = lru_idle_model_id(slots.iter().map(|(k, ts, n)| (k, *ts, *n)));
+        assert_eq!(
+            id.as_deref(),
+            Some("embed"),
+            "smallest idle last_accessed wins"
+        );
+    }
+
+    #[test]
+    fn lru_idle_skips_active_models() {
+        // The true LRU ("embed") is actively serving → it must be skipped, and
+        // the oldest *idle* model ("vlm") chosen instead. This is the core of the
+        // "never evict a model that's mid-request" guarantee.
+        let slots = [
+            ("chat".to_string(), 300u64, 0u32),
+            ("embed".to_string(), 100u64, 2u32),
+            ("vlm".to_string(), 200u64, 0u32),
+        ];
+        let id = lru_idle_model_id(slots.iter().map(|(k, ts, n)| (k, *ts, *n)));
+        assert_eq!(
+            id.as_deref(),
+            Some("vlm"),
+            "active LRU skipped for oldest idle"
+        );
+    }
+
+    #[test]
+    fn lru_idle_none_when_all_active() {
+        // Every slot busy → no eviction victim → caller must reject the load
+        // rather than abort in-flight work.
+        let slots = [
+            ("chat".to_string(), 300u64, 1u32),
+            ("embed".to_string(), 100u64, 3u32),
+        ];
+        assert_eq!(
+            lru_idle_model_id(slots.iter().map(|(k, ts, n)| (k, *ts, *n))),
+            None
+        );
+    }
+
+    #[test]
+    fn lru_idle_empty_is_none() {
+        let slots: Vec<(String, u64, u32)> = Vec::new();
+        assert_eq!(
+            lru_idle_model_id(slots.iter().map(|(k, ts, n)| (k, *ts, *n))),
+            None
+        );
+    }
+
+    #[test]
+    fn lru_idle_single_idle() {
+        let slots = [("only".to_string(), 42u64, 0u32)];
+        assert_eq!(
+            lru_idle_model_id(slots.iter().map(|(k, ts, n)| (k, *ts, *n))).as_deref(),
+            Some("only")
+        );
+    }
+
+    #[test]
     fn record_error_caps_at_max() {
         let mut s = blank_state();
         for i in 0..(MAX_LAST_ERRORS + 4) {
             // Lexicographically sortable timestamps so the oldest evicts first.
             s.record_error(
                 &format!("m{i:02}"),
-                err(&format!("2026-01-01T00:00:{i:02}Z"), LoadErrorSeverity::Transient),
+                err(
+                    &format!("2026-01-01T00:00:{i:02}Z"),
+                    LoadErrorSeverity::Transient,
+                ),
             );
         }
         assert_eq!(s.last_errors.len(), MAX_LAST_ERRORS);
         // Oldest (m00) evicted, newest retained.
         assert!(!s.last_errors.contains_key("m00"));
-        assert!(s.last_errors.contains_key(&format!("m{:02}", MAX_LAST_ERRORS + 3)));
+        assert!(
+            s.last_errors
+                .contains_key(&format!("m{:02}", MAX_LAST_ERRORS + 3))
+        );
     }
 }

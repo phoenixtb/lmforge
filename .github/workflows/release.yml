@@ -91,7 +91,7 @@ jobs:
           retention-days: 1
 
   # ─────────────────────────────────────────────────────────────────────────────
-  #  Tauri UI — macOS DMG + Linux AppImage
+  #  Tauri UI — macOS DMG + Linux (deb/rpm native + AppImage fallback) + Windows NSIS
   # ─────────────────────────────────────────────────────────────────────────────
   build-ui:
     name: UI — ${{ matrix.platform }}
@@ -159,6 +159,11 @@ jobs:
         # Must run from ui/ so tauri.conf.json and frontendDist paths resolve correctly.
         # With --target, Tauri places output in the repo-root target/<target>/release/bundle/
         working-directory: ui
+        env:
+          # linuxdeploy/appimagetool are AppImages needing libfuse2 to mount;
+          # extract-and-run avoids host FUSE so the AppImage bundle step works
+          # on FUSE-less runners. No-op on macOS/Windows.
+          APPIMAGE_EXTRACT_AND_RUN: 1
         run: npm run tauri build -- --target ${{ matrix.target }}
 
       - name: Rename macOS DMG
@@ -188,6 +193,32 @@ jobs:
         with:
           name: LMForge-UI-${{ matrix.platform }}.AppImage
           path: LMForge-UI-${{ matrix.platform }}.AppImage
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Rename Linux native packages (deb + rpm)
+        if: runner.os == 'Linux'
+        run: |
+          deb=$(find target/${{ matrix.target }}/release/bundle/deb -name "*.deb" | head -1)
+          rpm=$(find target/${{ matrix.target }}/release/bundle/rpm -name "*.rpm" | head -1)
+          cp "$deb" "LMForge-UI-${{ matrix.platform }}.deb"
+          cp "$rpm" "LMForge-UI-${{ matrix.platform }}.rpm"
+
+      - name: Upload Linux deb
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v6
+        with:
+          name: LMForge-UI-${{ matrix.platform }}.deb
+          path: LMForge-UI-${{ matrix.platform }}.deb
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload Linux rpm
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v6
+        with:
+          name: LMForge-UI-${{ matrix.platform }}.rpm
+          path: LMForge-UI-${{ matrix.platform }}.rpm
           if-no-files-found: error
           retention-days: 1
 

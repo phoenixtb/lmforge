@@ -156,10 +156,11 @@ pub async fn rerank(State(state): State<AppState>, body: Bytes) -> impl IntoResp
     }
 
     // --- Ensure model is loaded ---
-    let engine_port = match state.ensure_model(&model_id, keep_alive).await {
-        Ok(port) => port,
+    let guard = match state.ensure_model_request(&model_id, keep_alive).await {
+        Ok(g) => g,
         Err(resp) => return resp.into_response(),
     };
+    let engine_port = guard.port();
 
     // Resolve physical directory name for the model field
     let model_dir_name = index
@@ -220,12 +221,13 @@ pub async fn rerank(State(state): State<AppState>, body: Bytes) -> impl IntoResp
         }
     };
 
-    Response::builder()
+    let response = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(normalized))
         .unwrap()
-        .into_response()
+        .into_response();
+    super::attach_inflight_guard(response, guard)
 }
 
 /// Normalize the llama.cpp /v1/rerank response into the Cohere-compatible format.

@@ -218,8 +218,27 @@ stateDiagram-v2
 
 ### Lifecycle notes
 
-- **VRAM budget** comes from `hardware::vram::estimate_vram`. The manager
-  evicts the LRU slot when a new load would exceed `max_gpu_memory_fraction`.
+- **Memory budget** is accelerator-aware (`engine::manager::evict_for_memory`):
+  discrete GPU / unified memory use live free VRAM (`hardware::vram::get_free_vram`);
+  CPU-only hosts use safety-first admission control
+  (`hardware::vram::cpu_residency_free`) — the **tighter** of (a) live `available`
+  RAM minus an OS reserve, and (b) a hard total-RAM footprint cap minus the
+  summed estimate of resident models. The manager evicts the LRU slot when a new
+  load wouldn't fit. CPU-only must not budget on VRAM (0 there); and budgeting on
+  *total* RAM alone over-committed and OOM'd the host. On memory-tight machines
+  (8 GB-class) this returns less than a model's need, so models run **sequentially**
+  (evict-then-load) rather than co-resident — `tests/multi_model_e2e.sh --no-burst`
+  exercises that path (all capabilities checked, no parallel/co-resident probes).
+- **Active-aware eviction + admission control** (uniform across GPU and CPU). Each
+  slot carries an in-flight counter (`ActiveSlot.inflight`): the orchestrator bumps
+  it when a model is ensured `for_request`, and the request path's
+  `server::InflightGuard` decrements it on completion (including streaming-body
+  drop / client disconnect, via `attach_inflight_guard`). Eviction (`lru_idle_model_id`),
+  the `max_loaded_models` cap, and the keep-alive TTL sweep **only ever drop idle
+  slots** (`inflight == 0`) — a model serving a request is never torn down. If a
+  cold load can't fit after evicting every idle slot, it is **rejected** (`503`,
+  `Insufficient memory…`) instead of OOM'ing the host or killing live work; the
+  caller retries once a model goes idle.
 - **oMLX is special.** It manages its own model residency (Apple's MLX runtime
   handles eviction). The Rust keepalive timer is skipped for that engine.
 - **`max_loaded_models = 0`** in config means unlimited — VRAM is the only

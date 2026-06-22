@@ -74,10 +74,11 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
         return resp.into_response();
     }
 
-    let engine_port = match state.ensure_model(&model_id, keep_alive).await {
-        Ok(p) => p,
+    let guard = match state.ensure_model_request(&model_id, keep_alive).await {
+        Ok(g) => g,
         Err(resp) => return resp.into_response(),
     };
+    let engine_port = guard.port();
 
     // Engine-aware think translation (Ollama path was previously missing this entirely)
     let model_caps = index.get(&model_id).map(|e| &e.capabilities);
@@ -101,7 +102,7 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
         .unwrap_or(true);
     let client = proxy::build_proxy_client();
 
-    if is_stream {
+    let response = if is_stream {
         // For oMLX+think, rewrite <think> tags in delta.content into delta.reasoning_content.
         // All other streaming combinations use plain passthrough.
         let openai_stream = if has_think && state.engine_config.id == "omlx" {
@@ -196,7 +197,8 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
                 .body(Body::from(text))
                 .unwrap(),
         }
-    }
+    };
+    super::attach_inflight_guard(response, guard)
 }
 
 /// `POST /api/generate` — Ollama-compatible generate endpoint
@@ -220,10 +222,11 @@ pub async fn generate(State(state): State<AppState>, body: Bytes) -> impl IntoRe
         obj.remove("keep_alive");
     }
 
-    let engine_port = match state.ensure_model(&model_id, keep_alive).await {
-        Ok(p) => p,
+    let guard = match state.ensure_model_request(&model_id, keep_alive).await {
+        Ok(g) => g,
         Err(resp) => return resp.into_response(),
     };
+    let engine_port = guard.port();
 
     let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
         .unwrap_or_else(|_| crate::model::index::ModelIndex {
@@ -243,18 +246,20 @@ pub async fn generate(State(state): State<AppState>, body: Bytes) -> impl IntoRe
     let forwarded_body = Bytes::from(serde_json::to_vec(&body_value).unwrap_or_default());
 
     let client = proxy::build_proxy_client();
-    match proxy::proxy_request(&client, engine_port, "/v1/completions", forwarded_body).await {
-        Ok((status, text)) => Response::builder()
-            .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(text))
-            .unwrap(),
-        Err((status, text)) => Response::builder()
-            .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(text))
-            .unwrap(),
-    }
+    let response =
+        match proxy::proxy_request(&client, engine_port, "/v1/completions", forwarded_body).await {
+            Ok((status, text)) => Response::builder()
+                .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(text))
+                .unwrap(),
+            Err((status, text)) => Response::builder()
+                .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(text))
+                .unwrap(),
+        };
+    super::attach_inflight_guard(response, guard)
 }
 
 /// `GET /api/tags` — Ollama-compatible model list

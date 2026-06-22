@@ -19,6 +19,11 @@
 #  Flags:
 #    --source local|release[:TAG]   Install source (default: infer from env, else release:latest)
 #    --inference | --no-inference   Run tests/multi_model_e2e.sh (default: on)
+#    --no-burst | --burst           Low-memory inference mode: skip parallel /
+#                                   co-resident probes, check all capabilities
+#                                   sequentially. Default: auto — burst when total
+#                                   RAM >= LMFORGE_E2E_BURST_MIN_GB (default 12),
+#                                   else no-burst. An explicit flag disables auto.
 #    --with-ui | --no-ui            Install + verify the desktop UI (default: on)
 #    --verify-assets                Release only: check published assets + scripts match this checkout
 #    --no-build                     Local only: reuse target/release binary (skip cargo build)
@@ -38,6 +43,9 @@ WITH_UI=""          # empty = auto (on)
 VERIFY_ASSETS=0
 KEEP_INSTALL=0
 DO_BUILD=1
+NO_BURST="${NO_BURST:-0}"
+BURST_EXPLICIT=0     # set when the user passes --burst/--no-burst (disables RAM auto-detect)
+[[ -n "${NO_BURST_SET:-}" ]] && BURST_EXPLICIT=1
 
 while (($#)); do
     case "$1" in
@@ -45,6 +53,8 @@ while (($#)); do
         --source=*)      SOURCE="${1#*=}" ;;
         --inference)     INFERENCE=1 ;;
         --no-inference)  INFERENCE=0 ;;
+        --no-burst)      NO_BURST=1; BURST_EXPLICIT=1 ;;
+        --burst)         NO_BURST=0; BURST_EXPLICIT=1 ;;
         --with-ui)       WITH_UI=1 ;;
         --no-ui)         WITH_UI=0 ;;
         --verify-assets) VERIFY_ASSETS=1 ;;
@@ -94,10 +104,52 @@ esac
 # and installs it; --source release installs the published UI artifact.
 [[ -z "$WITH_UI" ]] && WITH_UI=1
 
+# ── Auto-select burst vs sequential from host RAM ────────────────────────────
+# Co-residency (chat + embed loaded at once) needs enough free RAM for both
+# models plus their KV/prefix caches AND the OS. On memory-tight hosts the
+# orchestrator correctly evicts-then-loads (sequential), which would fail the
+# burst-mode co-residency assertions — so default to --no-burst there unless the
+# user forced a mode. Threshold (total GB) is overridable via env.
+BURST_MIN_GB="${LMFORGE_E2E_BURST_MIN_GB:-12}"
+detect_total_ram_gb() {
+    if [[ -r /proc/meminfo ]]; then
+        awk '/^MemTotal:/ { printf "%.1f", $2/1024/1024; exit }' /proc/meminfo
+    elif command -v sysctl >/dev/null 2>&1 && sysctl -n hw.memsize >/dev/null 2>&1; then
+        awk -v b="$(sysctl -n hw.memsize)" 'BEGIN { printf "%.1f", b/1024/1024/1024 }'
+    else
+        echo "0"
+    fi
+}
+RAM_AUTO=""
+if (( ! BURST_EXPLICIT )); then
+    TOTAL_RAM_GB="$(detect_total_ram_gb)"
+    if awk -v r="$TOTAL_RAM_GB" -v t="$BURST_MIN_GB" 'BEGIN { exit !(r > 0 && r < t) }'; then
+        NO_BURST=1
+        RAM_AUTO=" (auto: ${TOTAL_RAM_GB}GB < ${BURST_MIN_GB}GB; pass --burst to override)"
+    fi
+fi
+
 # shellcheck source=../lib/e2e-lifecycle.sh
 source "$REPO_ROOT/scripts/lib/e2e-lifecycle.sh"
 
-echo "LMForge E2E — source=$SOURCE ui=$WITH_UI inference=$INFERENCE verify=$VERIFY_ASSETS keep=$KEEP_INSTALL on $E2E_OS/$E2E_ARCH"
+echo "LMForge E2E — source=$SOURCE ui=$WITH_UI inference=$INFERENCE burst=$(( ! NO_BURST ))${RAM_AUTO} verify=$VERIFY_ASSETS keep=$KEEP_INSTALL on $E2E_OS/$E2E_ARCH"
+
+# ── Prime sudo for unattended native UI install (Linux) ──────────────────────
+# The Linux UI ships as a native package (.rpm/.deb); installing it needs root,
+# exactly like `dnf install`. Without priming, sudo would prompt mid-run — after
+# the multi-minute build — and time out when nobody is at the keyboard. Cache the
+# credential once upfront and keep it warm for the rest of the run.
+if (( WITH_UI )) && [[ "$E2E_OS" == "Linux" && "$(id -u)" -ne 0 ]] \
+    && command -v sudo >/dev/null 2>&1 && ! sudo -n true 2>/dev/null; then
+    echo "  Native UI install needs root — priming sudo (cached for this run)…"
+    if sudo -v; then
+        ( while kill -0 "$$" 2>/dev/null; do sudo -n true 2>/dev/null; sleep 50; done ) &
+        E2E_SUDO_KEEPALIVE=$!
+        trap '[[ -n "${E2E_SUDO_KEEPALIVE:-}" ]] && kill "$E2E_SUDO_KEEPALIVE" 2>/dev/null || true' EXIT
+    else
+        echo "  sudo unavailable — native UI install will be skipped/fail." >&2
+    fi
+fi
 
 # ── Asset verification (release only) ────────────────────────────────────────
 if (( VERIFY_ASSETS )); then
@@ -153,7 +205,9 @@ fi
 # ── Inference ────────────────────────────────────────────────────────────────
 if (( INFERENCE )); then
     e2e_step "engine preflight"      e2e_engine_preflight
-    e2e_step "multi-model inference" e2e_inference
+    inf_args=()
+    (( NO_BURST )) && inf_args+=(--no-burst)
+    e2e_step "multi-model inference" e2e_inference ${inf_args[@]+"${inf_args[@]}"}
 fi
 
 # ── Teardown (full purge incl. models, unless --keep-install) ────────────────

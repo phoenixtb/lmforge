@@ -78,7 +78,8 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 | Platform | Architecture | Engine | Core | Desktop UI |
 |---|---|---|---|---|
 | macOS 13+ | Apple Silicon (arm64) | oMLX (Metal/MLX) | ✅ | ✅ DMG |
-| Ubuntu 22.04 / 24.04 / 26.04 | x86_64 | SGLang (NVIDIA, 8 GB+) / llama.cpp | ✅ | ✅ AppImage |
+| Ubuntu / Debian | x86_64 | SGLang (NVIDIA, 8 GB+) / llama.cpp | ✅ | ✅ .deb (AppImage fallback) |
+| Fedora / RHEL / SUSE | x86_64 | SGLang (NVIDIA, 8 GB+) / llama.cpp | ✅ | ✅ .rpm (AppImage fallback) |
 | Ubuntu 22.04 / 24.04 / 26.04 | arm64 | llama.cpp | ✅ | 🔜 Planned |
 | Windows 10/11 | x86_64 | llama.cpp (CPU + NVIDIA CUDA) | ✅ | ✅ NSIS installer |
 | Windows 10/11 + WSL2 | x86_64 | SGLang (NVIDIA via CUDA-on-WSL) | ✅ (inside WSL) | run via Linux build |

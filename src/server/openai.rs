@@ -255,10 +255,11 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
         return resp.into_response();
     }
 
-    let engine_port = match state.ensure_model(&model_id, keep_alive).await {
-        Ok(port) => port,
+    let guard = match state.ensure_model_request(&model_id, keep_alive).await {
+        Ok(g) => g,
         Err(resp) => return resp.into_response(),
     };
+    let engine_port = guard.port();
 
     // Rewrite model_id to the exact filesystem directory name so engines
     // that key on the path basename (SGLang / llama.cpp / oMLX / TabbyAPI)
@@ -282,7 +283,7 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
 
     let client = proxy::build_proxy_client();
 
-    if is_stream {
+    let response = if is_stream {
         // Streaming routing:
         //   1. oMLX + think + budget → two-call stitching (thinking_budget enforcement)
         //   2. oMLX + think, no budget → existing rewriter (tag splitting)
@@ -438,7 +439,8 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
                 .body(Body::from(text))
                 .unwrap(),
         }
-    }
+    };
+    super::attach_inflight_guard(response, guard)
 }
 
 /// `POST /v1/completions` — OpenAI-compatible text completions
@@ -459,10 +461,11 @@ pub async fn completions(State(state): State<AppState>, body: Bytes) -> impl Int
             None
         }
     });
-    let engine_port = match state.ensure_model(&model_id, keep_alive).await {
-        Ok(port) => port,
+    let guard = match state.ensure_model_request(&model_id, keep_alive).await {
+        Ok(g) => g,
         Err(resp) => return resp.into_response(),
     };
+    let engine_port = guard.port();
 
     let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
         .unwrap_or_else(|_| crate::model::index::ModelIndex {
@@ -486,18 +489,20 @@ pub async fn completions(State(state): State<AppState>, body: Bytes) -> impl Int
     let forwarded_body = Bytes::from(serde_json::to_vec(&body_value).unwrap_or_default());
 
     let client = proxy::build_proxy_client();
-    match proxy::proxy_request(&client, engine_port, "/v1/completions", forwarded_body).await {
-        Ok((status, text)) => Response::builder()
-            .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(text))
-            .unwrap(),
-        Err((status, text)) => Response::builder()
-            .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(text))
-            .unwrap(),
-    }
+    let response =
+        match proxy::proxy_request(&client, engine_port, "/v1/completions", forwarded_body).await {
+            Ok((status, text)) => Response::builder()
+                .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(text))
+                .unwrap(),
+            Err((status, text)) => Response::builder()
+                .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(text))
+                .unwrap(),
+        };
+    super::attach_inflight_guard(response, guard)
 }
 
 /// `POST /v1/embeddings` — OpenAI-compatible embeddings with batch chunking and dim auto-detection
@@ -538,10 +543,11 @@ pub async fn embeddings(State(state): State<AppState>, body: Bytes) -> impl Into
         return resp.into_response();
     }
 
-    let engine_port = match state.ensure_model(&model_id, keep_alive).await {
-        Ok(port) => port,
+    let guard = match state.ensure_model_request(&model_id, keep_alive).await {
+        Ok(g) => g,
         Err(resp) => return resp.into_response(),
     };
+    let engine_port = guard.port();
 
     // Resolve the engine-facing model directory name (needed by oMLX)
     let dir_name = index.get(&model_id).and_then(|e| {
@@ -581,7 +587,7 @@ pub async fn embeddings(State(state): State<AppState>, body: Bytes) -> impl Into
         }
     };
 
-    match result {
+    let response = match result {
         Ok((status, text)) => {
             // --- Dim auto-detection (fire-and-forget background task) ---
             let data_dir = state.data_dir.clone();
@@ -603,7 +609,8 @@ pub async fn embeddings(State(state): State<AppState>, body: Bytes) -> impl Into
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(text))
             .unwrap(),
-    }
+    };
+    super::attach_inflight_guard(response, guard)
 }
 
 /// Split a large input array across multiple engine calls of at most `batch_size` items,

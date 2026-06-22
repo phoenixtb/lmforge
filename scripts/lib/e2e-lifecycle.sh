@@ -21,6 +21,29 @@ E2E_BIN="${E2E_BIN:-$HOME/.local/bin/lmforge}"
 E2E_OS="$(uname -s)"
 E2E_ARCH="$(uname -m)"
 
+# Which Linux UI format this host installs (must match install-ui.sh's logic):
+# native rpm/deb where the package manager resolves webkit deps, AppImage
+# fallback otherwise. Drives the UI asset name + installed-artifact path below.
+e2e_linux_pkg_kind() {
+    local id="" like=""
+    if [[ -f /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        id="${ID:-}"; like="${ID_LIKE:-}"
+    fi
+    case "$id" in
+        fedora|rhel|centos|rocky|almalinux|ol|amzn|opensuse*|suse|sles) echo rpm; return ;;
+        ubuntu|debian|pop|linuxmint|elementary|zorin|kali|raspbian|neon) echo deb; return ;;
+    esac
+    case " $like " in
+        *rhel*|*fedora*|*suse*) echo rpm; return ;;
+        *debian*|*ubuntu*)      echo deb; return ;;
+    esac
+    echo appimage
+}
+
+E2E_LINUX_PKG_KIND=""
+
 # Per-platform UI artifact path + release asset names (empty asset = none ships).
 case "$E2E_OS" in
     Darwin)
@@ -30,11 +53,17 @@ case "$E2E_OS" in
             *)     E2E_CORE_ASSET=""; E2E_UI_ASSET="" ;;
         esac ;;
     Linux)
-        E2E_UI_ARTIFACT="$HOME/.local/bin/LMForge"
+        E2E_LINUX_PKG_KIND="$(e2e_linux_pkg_kind)"
         case "$E2E_ARCH" in
-            x86_64)  E2E_CORE_ASSET="lmforge-linux-x86_64"; E2E_UI_ASSET="LMForge-UI-linux-x86_64.AppImage" ;;
-            aarch64) E2E_CORE_ASSET="lmforge-linux-arm64";  E2E_UI_ASSET="" ;;
-            *)       E2E_CORE_ASSET=""; E2E_UI_ASSET="" ;;
+            x86_64)
+                E2E_CORE_ASSET="lmforge-linux-x86_64"
+                case "$E2E_LINUX_PKG_KIND" in
+                    rpm) E2E_UI_ASSET="LMForge-UI-linux-x86_64.rpm"; E2E_UI_ARTIFACT="/usr/bin/lmforge-ui" ;;
+                    deb) E2E_UI_ASSET="LMForge-UI-linux-x86_64.deb"; E2E_UI_ARTIFACT="/usr/bin/lmforge-ui" ;;
+                    *)   E2E_UI_ASSET="LMForge-UI-linux-x86_64.AppImage"; E2E_UI_ARTIFACT="$HOME/.local/bin/LMForge" ;;
+                esac ;;
+            aarch64) E2E_CORE_ASSET="lmforge-linux-arm64"; E2E_UI_ASSET=""; E2E_UI_ARTIFACT="" ;;
+            *)       E2E_CORE_ASSET=""; E2E_UI_ASSET=""; E2E_UI_ARTIFACT="" ;;
         esac ;;
 esac
 
@@ -105,16 +134,24 @@ e2e_release_ui_asset() {
 e2e_ui_runtime_deps() {
     [[ "$E2E_OS" == "Linux" ]] || { echo "n/a on macOS"; return 0; }
     local ok=0
+    echo "linux UI package kind: ${E2E_LINUX_PKG_KIND:-appimage}"
     if ldconfig -p 2>/dev/null | grep -qE "libwebkit2gtk-4\.1|libwebkitgtk-6\.0"; then
         echo "webkit2gtk 4.1+ / webkitgtk 6.0 present"
-    else
+    elif [[ "${E2E_LINUX_PKG_KIND:-appimage}" == "appimage" ]]; then
+        # AppImage can't pull deps — webkit must already be present.
         echo "webkit2gtk-4.1 / webkitgtk-6.0 NOT found — install-ui.sh will offer to install it"
         ok=1
-    fi
-    if ldconfig -p 2>/dev/null | grep -q "libfuse.so.2"; then
-        echo "libfuse2 present (AppImage can mount)"
     else
-        echo "libfuse2 NOT found — AppImage falls back to --appimage-extract"
+        # Native rpm/deb declares webkit as a dependency; the package manager
+        # installs it during install-ui, so absence here is not a failure.
+        echo "webkit2gtk not present yet — native $E2E_LINUX_PKG_KIND package will pull it in at install"
+    fi
+    if [[ "${E2E_LINUX_PKG_KIND:-appimage}" == "appimage" ]]; then
+        if ldconfig -p 2>/dev/null | grep -q "libfuse.so.2"; then
+            echo "libfuse2 present (AppImage can mount)"
+        else
+            echo "libfuse2 NOT found — AppImage launches in extract-and-run mode"
+        fi
     fi
     return $ok
 }
@@ -264,9 +301,16 @@ e2e_ui_installed() {
             echo "app bundle present" ;;
         Linux)
             [[ -x "$E2E_UI_ARTIFACT" ]] || { echo "missing/not executable: $E2E_UI_ARTIFACT"; return 1; }
-            [[ -f "$HOME/.local/share/applications/lmforge.desktop" ]] \
-                || { echo "missing .desktop entry"; return 1; }
-            echo "AppImage + .desktop entry present" ;;
+            case "$E2E_LINUX_PKG_KIND" in
+                rpm|deb)
+                    [[ -f /usr/share/applications/LMForge.desktop ]] \
+                        || { echo "missing /usr/share/applications/LMForge.desktop"; return 1; }
+                    echo "native $E2E_LINUX_PKG_KIND package ($E2E_UI_ARTIFACT) + .desktop present" ;;
+                *)
+                    [[ -f "$HOME/.local/share/applications/lmforge.desktop" ]] \
+                        || { echo "missing .desktop entry"; return 1; }
+                    echo "AppImage + .desktop entry present" ;;
+            esac ;;
     esac
 }
 
@@ -288,7 +332,9 @@ e2e_ui_launches() {
             if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
                 echo "no display — launch check skipped (headless)"; return 0
             fi
-            "$E2E_UI_ARTIFACT" >/dev/null 2>&1 &
+            # APPIMAGE_EXTRACT_AND_RUN lets the AppImage fallback launch without
+            # libfuse2; it's ignored by the native /usr/bin/lmforge-ui binary.
+            APPIMAGE_EXTRACT_AND_RUN=1 "$E2E_UI_ARTIFACT" >/dev/null 2>&1 &
             local pid=$!; sleep 5
             kill -0 "$pid" 2>/dev/null || { echo "UI exited within 5s"; return 1; }
             echo "UI process running"

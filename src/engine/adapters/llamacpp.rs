@@ -170,6 +170,7 @@ impl EngineAdapter for LlamacppAdapter {
             }
         }
 
+        let is_vlm = mmproj_path.is_some();
         if let Some(mmproj_path) = mmproj_path {
             info!(
                 mmproj = %mmproj_path.display(),
@@ -180,6 +181,30 @@ impl EngineAdapter for LlamacppAdapter {
             args.push(mmproj_path.to_string_lossy().to_string());
             args.push("--ctx-size".to_string());
             args.push(plan.ctx_size.to_string());
+        }
+
+        // ── CPU-only memory containment ───────────────────────────────────────
+        // Without an explicit context/parallelism cap, llama.cpp falls back to
+        // the GGUF's full training context (up to 262144 tokens) across
+        // n_parallel=4 auto slots, and `-fit` balloons the KV cache to several
+        // GB — the dominant reason a small model can't co-reside with a second
+        // one on a memory-tight box. Bound both on CPU so chat + embed fit
+        // together; GPU / Apple paths keep the large default (VRAM headroom and
+        // Metal paging make it safe and desirable there). Both are
+        // env-overridable: LMFORGE_LLAMACPP_CTX and LMFORGE_LLAMACPP_PARALLEL.
+        if matches!(profile.gpu_vendor, GpuVendor::None) {
+            // VLM already emitted --ctx-size in the mmproj block above.
+            if !is_vlm {
+                args.push("--ctx-size".to_string());
+                args.push(plan.ctx_size.to_string());
+            }
+            let parallel = resolve_cpu_parallel();
+            args.push("--parallel".to_string());
+            args.push(parallel.to_string());
+            info!(
+                ctx_size = plan.ctx_size,
+                parallel, "CPU-only: bounding context + parallel slots to contain KV cache"
+            );
         }
 
         // ── Speculative decoding (S-2) ────────────────────────────────────────
@@ -507,10 +532,10 @@ struct RuntimePlan {
 ///
 /// Operator escape hatches (always win when set):
 ///   * `LMFORGE_LLAMACPP_NGL` — integer 0..=99 layers to offload.
-///   * `LMFORGE_LLAMACPP_CTX` — integer context size (used only for VLM mode).
+///   * `LMFORGE_LLAMACPP_CTX` — integer context size (CPU `--ctx-size` and VLM).
 ///
 /// Fallback heuristic (in order):
-///   * No GPU — ngl = 0, ctx = 2048 (CPU baseline).
+///   * No GPU — ngl = 0, ctx = RAM-tiered (see `cpu_ctx_size`).
 ///   * Apple unified memory — ngl = 99 (Metal handles paging transparently);
 ///     ctx scaled by total RAM.
 ///   * Discrete GPU, model fits in `free - 1.0 GB` — ngl = 99 (full offload);
@@ -568,10 +593,11 @@ fn plan_runtime(
     let ctx_size = if let Some(n) = ctx_override {
         n
     } else if !is_vlm {
-        // Non-VLM: llama.cpp uses the GGUF metadata default; this value
-        // is not actually emitted as --ctx-size. Pick 4096 as a stable
-        // value for telemetry/tests.
-        4096
+        // Non-VLM context. On CPU this *is* emitted as `--ctx-size` (see
+        // `start()`) to bound the KV cache so a second model can co-reside; on
+        // GPU it is telemetry only (llama.cpp uses the GGUF default, sized to
+        // VRAM by `-fit`). Scaled by total RAM (2048/4096/8192 tiers).
+        cpu_ctx_size(total_ram_gb)
     } else {
         // Estimate VRAM left after the model is loaded. Image tiles can
         // consume thousands of context tokens, so scale aggressively.
@@ -609,9 +635,24 @@ fn resolve_profile_with_vram() -> HardwareProfile {
 
 /// Compute the `--cache-ram` budget in MiB.
 ///
-/// Default heuristic: `min(0.25 * total_ram_gb * 1024, 4096)`.
-/// On 16 GB RAM systems (the 5060 Ti target) this gives 4 GiB; on 64 GB+
-/// systems it caps at 4 GiB to leave room for the model + OS + workload.
+/// The prefix cache is a *per-chat-model* host-RAM reservation (a speed
+/// optimization for prompt reuse, not correctness). On memory-tight hosts a flat
+/// 25%-of-total budget is the dominant reason a small model balloons to several
+/// GB RSS and a second model (e.g. an embedder) can no longer co-reside. So the
+/// budget is **memory-tier aware** — generous on workstations, modest on the
+/// 8–12 GB boxes we want to run chat + embed simultaneously:
+///
+/// Boundaries are set below the nominal sizes because the kernel reports less
+/// than advertised (a "12 GB" VM shows ~11.6 GiB MemTotal, "16 GB" ~15.x):
+///
+/// | reported RAM | cap   | nominal class | budget                   |
+/// |--------------|-------|---------------|--------------------------|
+/// | >= 30 GiB    | 4 GiB | 32 GB+        | full benefit             |
+/// | >= 15 GiB    | 2 GiB | 16 GB         | 0.20 * total, capped     |
+/// | >= 10 GiB    | 1 GiB | 12 GB         | leaves room for 2 models |
+/// | <  10 GiB    | 512 M | 8 GB          | minimal, co-load first   |
+///
+/// Budget = `min(0.20 * total_ram * 1024, tier_cap)`.
 ///
 /// Overrides (always win):
 ///   * `LMFORGE_LLAMACPP_CACHE_RAM_MIB=<n>` — exact MiB budget; `0` disables.
@@ -626,8 +667,50 @@ pub(crate) fn resolve_cache_ram_mib(total_ram_gb: f32) -> u32 {
     if total_ram_gb <= 0.0 || !total_ram_gb.is_finite() {
         return 0;
     }
-    let quarter_mib = (total_ram_gb * 1024.0 * 0.25) as u32;
-    quarter_mib.min(4096)
+    let tier_cap_mib = if total_ram_gb >= 30.0 {
+        4096
+    } else if total_ram_gb >= 15.0 {
+        2048
+    } else if total_ram_gb >= 10.0 {
+        1024
+    } else {
+        512
+    };
+    let budget_mib = (total_ram_gb * 1024.0 * 0.20) as u32;
+    budget_mib.min(tier_cap_mib)
+}
+
+/// Non-VLM context window (`--ctx-size`) scaled to total system RAM.
+///
+/// The KV cache grows with context, so memory-tight hosts get a smaller window
+/// (keeping room for a co-resident model) while roomy hosts get headroom:
+/// `>=30 GiB → 8192`, `>=10 GiB → 4096`, `>0 → 2048`, unknown → 4096. Operator
+/// override `LMFORGE_LLAMACPP_CTX` wins upstream in `plan_runtime`.
+fn cpu_ctx_size(total_ram_gb: f32) -> u32 {
+    if total_ram_gb >= 30.0 {
+        8192
+    } else if total_ram_gb >= 10.0 {
+        4096
+    } else if total_ram_gb > 0.0 {
+        2048
+    } else {
+        4096
+    }
+}
+
+/// Number of parallel decode slots (`--parallel`) for CPU-only hosts.
+///
+/// llama.cpp auto-picks 4, and each slot gets its own full-context KV cache —
+/// on CPU that quadruples the KV footprint for no real throughput gain (CPU
+/// inference is compute-bound, not slot-bound). Default to a single slot so a
+/// chat model leaves room for a co-resident embedder. Operator override:
+/// `LMFORGE_LLAMACPP_PARALLEL=<n>` (clamped to 1..=16).
+pub(crate) fn resolve_cpu_parallel() -> u32 {
+    std::env::var("LMFORGE_LLAMACPP_PARALLEL")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(|n| n.clamp(1, 16))
+        .unwrap_or(1)
 }
 
 /// Look up the model's `capabilities.mtp` flag from the on-disk index.
@@ -1219,24 +1302,36 @@ mod tests {
     fn cache_ram_default_on_16gb_box() {
         let _g = ENV_LOCK.lock().unwrap();
         clear_cache_ram_override();
-        // 16 GB RAM → 25% = 4 GiB, exactly at the cap.
-        assert_eq!(resolve_cache_ram_mib(16.0), 4096);
+        // 16 GB → 0.20*16 = 3.2 GiB, clamped to the 16 GB-tier cap (2 GiB).
+        assert_eq!(resolve_cache_ram_mib(16.0), 2048);
     }
 
     #[test]
     fn cache_ram_default_on_8gb_box() {
         let _g = ENV_LOCK.lock().unwrap();
         clear_cache_ram_override();
-        // 8 GB RAM → 25% = 2 GiB, below cap.
-        assert_eq!(resolve_cache_ram_mib(8.0), 2048);
+        // 8 GB → 0.20*8 = 1.6 GiB, clamped to the <12 GB-tier cap (512 MiB) so a
+        // chat model leaves room for an embedder to co-reside.
+        assert_eq!(resolve_cache_ram_mib(8.0), 512);
+    }
+
+    #[test]
+    fn cache_ram_12gb_box_leaves_room_for_two_models() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_cache_ram_override();
+        // ~12 GB (reported 11.6 on a "12 GB" VM): capped at 1 GiB, not ~2.9 GiB.
+        assert_eq!(resolve_cache_ram_mib(11.6), 1024);
+        assert_eq!(resolve_cache_ram_mib(12.0), 1024);
     }
 
     #[test]
     fn cache_ram_caps_on_large_ram() {
         let _g = ENV_LOCK.lock().unwrap();
         clear_cache_ram_override();
-        // 128 GB RAM → would be 32 GiB unbounded, but cap is 4 GiB.
+        // 128 GB → 0.20*128 = 25.6 GiB unbounded, clamped to the 4 GiB cap.
         assert_eq!(resolve_cache_ram_mib(128.0), 4096);
+        // 32 GB workstation keeps the full 4 GiB benefit.
+        assert_eq!(resolve_cache_ram_mib(32.0), 4096);
     }
 
     #[test]
@@ -1246,6 +1341,47 @@ mod tests {
         assert_eq!(resolve_cache_ram_mib(0.0), 0);
         assert_eq!(resolve_cache_ram_mib(-1.0), 0);
         assert_eq!(resolve_cache_ram_mib(f32::NAN), 0);
+    }
+
+    #[test]
+    fn cpu_ctx_size_scales_with_total_ram() {
+        // 8 GB class → 2048; 12/16 GB → 4096; 32 GB+ → 8192; unknown → 4096.
+        assert_eq!(cpu_ctx_size(7.6), 2048);
+        assert_eq!(cpu_ctx_size(11.6), 4096);
+        assert_eq!(cpu_ctx_size(16.0), 4096);
+        assert_eq!(cpu_ctx_size(32.0), 8192);
+        assert_eq!(cpu_ctx_size(0.0), 4096);
+    }
+
+    #[test]
+    fn plan_cpu_ctx_is_ram_tiered() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_overrides();
+        // CPU, non-VLM: ctx tracks total RAM.
+        let p12 = plan_runtime(GpuVendor::None, 11.6, 0.0, 1.3, 0.0, false);
+        assert_eq!(p12.ctx_size, 4096);
+        let p8 = plan_runtime(GpuVendor::None, 8.0, 0.0, 1.3, 0.0, false);
+        assert_eq!(p8.ctx_size, 2048);
+    }
+
+    #[test]
+    fn cpu_parallel_defaults_to_one() {
+        let _g = ENV_LOCK.lock().unwrap();
+        // SAFETY: process-global env mutation, gated by ENV_LOCK.
+        unsafe { std::env::remove_var("LMFORGE_LLAMACPP_PARALLEL") }
+        assert_eq!(resolve_cpu_parallel(), 1);
+    }
+
+    #[test]
+    fn cpu_parallel_env_override_clamps() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("LMFORGE_LLAMACPP_PARALLEL", "4") }
+        assert_eq!(resolve_cpu_parallel(), 4);
+        unsafe { std::env::set_var("LMFORGE_LLAMACPP_PARALLEL", "0") }
+        assert_eq!(resolve_cpu_parallel(), 1, "clamped up to 1");
+        unsafe { std::env::set_var("LMFORGE_LLAMACPP_PARALLEL", "999") }
+        assert_eq!(resolve_cpu_parallel(), 16, "clamped down to 16");
+        unsafe { std::env::remove_var("LMFORGE_LLAMACPP_PARALLEL") }
     }
 
     #[test]

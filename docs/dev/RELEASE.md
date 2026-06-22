@@ -84,6 +84,14 @@ Notes / overrides:
 - **CUDA vs non-CUDA** on the same OS run the identical command; only the
   llama.cpp build that `install-core` resolves differs (CUDA build for NVIDIA,
   Vulkan build otherwise). Verify which engine bound with `lmforge status`.
+- **Linux UI packaging** is native-first: Fedora/RHEL/SUSE install the `.rpm`,
+  Debian/Ubuntu install the `.deb` (the package manager resolves webkit2gtk /
+  appindicator deps), and the `.AppImage` is the portable fallback for other
+  distros. The harness picks the format from `/etc/os-release`. Native installs
+  land at `/usr/bin/lmforge-ui`; the AppImage at `~/.local/bin/LMForge`. AppImage
+  needs libfuse2 at runtime — absent that (e.g. Fedora ships only fuse3) it
+  launches in `APPIMAGE_EXTRACT_AND_RUN` mode. The build itself never needs host
+  FUSE (`APPIMAGE_EXTRACT_AND_RUN=1` is set for the bundle step).
 - **Headless Linux** (no `DISPLAY`/`WAYLAND_DISPLAY`): the UI-launch check
   auto-skips; add `--no-ui` to skip building the UI entirely.
 - A failed local `cargo`/UI build now **aborts** the run — it will no longer
@@ -108,7 +116,7 @@ git push origin vX.Y.Z
 `release.yml` then runs automatically:
 
 1. Builds core binaries (macos-arm64, linux-x86_64, linux-arm64, windows-x86_64)
-   and UI bundles (DMG, AppImage, NSIS exe).
+   and UI bundles (macOS DMG; Linux `.deb` + `.rpm` + `.AppImage`; Windows NSIS exe).
 2. **e2e-gate**: runs the full install lifecycle on ubuntu/macos/windows using
    the artifacts that will ship. If any platform fails, **no release is
    created** — fix, delete the tag (`git push origin :refs/tags/vX.Y.Z`,
@@ -121,9 +129,12 @@ git push origin vX.Y.Z
 
 On the draft release page, check:
 
-- [ ] All assets present: 4 core binaries, 3 UI bundles, 8 scripts
-  (`install-core.{sh,ps1}`, `install-ui.{sh,ps1}`, `uninstall-core.{sh,ps1}`,
-  `uninstall-ui.{sh,ps1}`).
+- [ ] All assets present: 4 core binaries, 5 UI bundles, 8 scripts.
+  - UI bundles: `LMForge-UI-macos-arm64.dmg`, `LMForge-UI-linux-x86_64.deb`,
+    `LMForge-UI-linux-x86_64.rpm`, `LMForge-UI-linux-x86_64.AppImage`,
+    `LMForge-UI-windows-x86_64.exe`.
+  - Scripts: `install-core.{sh,ps1}`, `install-ui.{sh,ps1}`,
+    `uninstall-core.{sh,ps1}`, `uninstall-ui.{sh,ps1}`.
 - [ ] Asset scripts match the tagged commit (they are taken from the tag's
   checkout — a mismatch means the tag was moved; abort).
 - [ ] Auto-generated release notes look sane; trim noise.

@@ -75,6 +75,48 @@ pub fn estimate_model_vram(size_bytes: u64) -> f32 {
     size_gb * 1.2 // 1.2x heuristic for KV cache and context overhead
 }
 
+/// RAM kept free for the OS, page cache, and per-model KV-cache growth on a
+/// CPU-only host. The larger of a 1.5 GB floor and 20% of total RAM. This is the
+/// safety margin that keeps model residency from invading what the OS needs.
+fn cpu_os_reserve_gb(total_ram_gb: f32) -> f32 {
+    (total_ram_gb * 0.20).max(1.5)
+}
+
+/// Hard cap on the *summed* footprint of co-resident model weights, as a
+/// fraction of total RAM. Bounds residency even when the live `available` figure
+/// is optimistic — llama.cpp mmaps the GGUF, so clean weight pages count as
+/// reclaimable cache and inflate `available` until inference makes them hot.
+fn cpu_model_cap_gb(total_ram_gb: f32) -> f32 {
+    (total_ram_gb * 0.60).max(0.0)
+}
+
+/// Memory (GB) available to admit *another* model on a CPU-only host.
+///
+/// Safety-first admission control taking the tighter of two bounds:
+/// - **Live**: current `available` RAM minus an OS reserve — never eat into what
+///   the OS needs right now. This is the bound that prevents OOM; budgeting on
+///   total RAM alone over-committed and destabilised the host.
+/// - **Cap**: a fraction of total RAM minus the summed estimate of resident
+///   models — bounds footprint when `available` is optimistic about mmap'd pages.
+///
+/// On memory-tight hosts (8 GB-class) this returns less than a model's need, so
+/// the LRU evictor runs models *sequentially* rather than co-resident — the
+/// correct trade-off when there isn't room for parallelism.
+pub fn cpu_residency_free(available_gb: f32, resident_sum_gb: f32, total_ram_gb: f32) -> f32 {
+    let by_live = available_gb - cpu_os_reserve_gb(total_ram_gb);
+    let by_cap = cpu_model_cap_gb(total_ram_gb) - resident_sum_gb;
+    by_live.min(by_cap).max(0.0)
+}
+
+/// Live free system RAM in GB. Memory-only refresh (not `new_all`, which also
+/// enumerates every process) since this runs in the cold-load eviction loop.
+pub fn free_system_ram_gb() -> f32 {
+    use sysinfo::System;
+    let mut sys = System::new();
+    sys.refresh_memory();
+    sys.available_memory() as f32 / (1024.0 * 1024.0 * 1024.0)
+}
+
 /// Apple Silicon: unified memory architecture.
 /// Use 75% of total RAM as usable for GPU inference.
 fn estimate_apple_vram(profile: &HardwareProfile) -> f32 {
@@ -314,6 +356,60 @@ mod tests {
         let profile = make_profile(GpuVendor::None, 32.0);
         let vram = estimate_vram(&profile);
         assert_eq!(vram, 0.0);
+    }
+
+    // --- CPU-only residency admission control (multi-model co-load) ---
+
+    #[test]
+    fn cpu_residency_live_bound_binds_when_tight() {
+        // 9.6 GB box, only 3 GB available, 1 GB resident.
+        // live: 3 - max(1.5, 1.92) = 1.08 ; cap: 5.76 - 1 = 4.76 ; min = 1.08.
+        // The live bound (OOM guard) wins on a memory-tight host.
+        assert!((cpu_residency_free(3.0, 1.0, 9.6) - 1.08).abs() < 1e-2);
+    }
+
+    #[test]
+    fn cpu_residency_cap_bound_binds_when_available_optimistic() {
+        // 12 GB box, 11 GB "available" (mmap pages look reclaimable), 6 GB resident.
+        // live: 11 - 2.4 = 8.6 ; cap: 7.2 - 6 = 1.2 ; min = 1.2.
+        // The footprint cap wins, bounding residency despite a rosy `available`.
+        assert!((cpu_residency_free(11.0, 6.0, 12.0) - 1.2).abs() < 1e-2);
+    }
+
+    #[test]
+    fn cpu_residency_free_never_negative() {
+        // Starved box: both bounds go negative → clamps to 0, never OOMs.
+        assert_eq!(cpu_residency_free(1.0, 10.0, 8.0), 0.0);
+    }
+
+    #[test]
+    fn cpu_residency_allows_small_coload_with_headroom() {
+        // 12 GB box, 8 GB available, embed (~0.72 GB) resident → chat (~1.8 GB)
+        // must co-load. Regression for the no-GPU co-load bug.
+        let free = cpu_residency_free(8.0, estimate_model_vram(640_000_000), 12.0);
+        assert!(free >= 1.8, "expected chat to co-load, got {free}");
+    }
+
+    #[test]
+    fn cpu_residency_forces_sequential_on_8gb_box() {
+        // 8 GB target machine under real pressure (~3 GB available), chat
+        // (~1.8 GB) resident → a second ~1.8 GB model must NOT co-load.
+        // live: 3 - 1.6 = 1.4 < 1.8 → evictor falls back to sequential.
+        let free = cpu_residency_free(3.0, estimate_model_vram(1_600_000_000), 8.0);
+        assert!(free < 1.8, "8 GB box must run sequentially, got {free}");
+    }
+
+    #[test]
+    fn no_gpu_free_vram_stays_zero_for_offload_planner() {
+        // The offload planner still sees 0 VRAM on a CPU box; only the residency
+        // admission control diverges (RAM-based).
+        let p = make_profile(GpuVendor::None, 32.0);
+        assert_eq!(
+            get_free_vram(&p),
+            0.0,
+            "CPU VRAM must stay 0 for the offload planner"
+        );
+        assert!(cpu_residency_free(20.0, 0.0, p.total_ram_gb) > 0.0);
     }
 
     // --- quant_tier tests (GPU path: vram > 0) ---

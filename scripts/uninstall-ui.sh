@@ -17,6 +17,11 @@ done
 
 OS=$(uname -s)
 APP_NAME="LMForge"
+LINUX_PKG_NAME="lm-forge"               # rpm/deb package name (Tauri bundle)
+LINUX_NATIVE_BIN="/usr/bin/lmforge-ui"  # binary installed by deb/rpm
+
+# Root vs sudo — native package removal needs root; user AppImage does not.
+if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then SUDO=""; else SUDO="sudo"; fi
 
 # All locations install-ui.sh might have placed the app (ordered: user-local first)
 MACOS_APP_LOCATIONS=(
@@ -96,11 +101,35 @@ if [[ "$OS" == "Linux" ]]; then
     sleep 1
     info "App process stopped"
 
-    # 2. Remove AppImage
+    # 2a. Remove native package if installed (rpm/deb). Handles all install
+    #     methods regardless of how the host was originally detected.
+    NATIVE_REMOVED=false
+    if command -v rpm &>/dev/null && rpm -q "$LINUX_PKG_NAME" &>/dev/null; then
+        section "Removing LMForge (rpm)..."
+        if command -v dnf &>/dev/null; then
+            $SUDO dnf remove -y "$LINUX_PKG_NAME" && NATIVE_REMOVED=true
+        elif command -v zypper &>/dev/null; then
+            $SUDO zypper --non-interactive remove "$LINUX_PKG_NAME" && NATIVE_REMOVED=true
+        else
+            $SUDO rpm -e "$LINUX_PKG_NAME" && NATIVE_REMOVED=true
+        fi
+    elif command -v dpkg &>/dev/null && dpkg -s "$LINUX_PKG_NAME" &>/dev/null; then
+        section "Removing LMForge (deb)..."
+        if command -v apt-get &>/dev/null; then
+            $SUDO apt-get remove -y "$LINUX_PKG_NAME" && NATIVE_REMOVED=true
+        else
+            $SUDO dpkg -r "$LINUX_PKG_NAME" && NATIVE_REMOVED=true
+        fi
+    fi
+    $NATIVE_REMOVED && info "Removed native package $LINUX_PKG_NAME ($LINUX_NATIVE_BIN)"
+
+    # 2b. Remove AppImage (portable/fallback install)
     section "Removing AppImage..."
     if [[ -f "$LINUX_APPIMAGE" ]]; then
         rm -f "$LINUX_APPIMAGE"
         info "Removed $LINUX_APPIMAGE"
+    elif $NATIVE_REMOVED; then
+        info "No AppImage install present (native package was used)"
     else
         warn "AppImage not found at $LINUX_APPIMAGE"
     fi

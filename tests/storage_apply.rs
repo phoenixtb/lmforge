@@ -91,6 +91,7 @@ fn make_state(
         running_models: std::collections::HashMap::new(),
         metrics: EngineMetrics::default(),
         last_errors: std::collections::HashMap::new(),
+        dismissed_errors: std::collections::HashMap::new(),
     };
 
     let mut config = LmForgeConfig::default();
