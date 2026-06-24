@@ -638,8 +638,17 @@ if [[ "$DO_VLM" -eq 1 ]]; then
         fi
     else
         timer_end "vlm_text" >/dev/null
-        warn "TC-E08 skipped: $resp"
-        record_skip "TC-E08" "VLM text-only" "${resp:0:120}"
+        # Re-issue without curl -f to see the real status/body. A 5xx means the
+        # engine took the request and crashed (a defect — FAIL, don't hide it as
+        # a missing capability); 4xx/timeout = genuine capability gap (SKIP).
+        diag=$(e2e_chat_diag "$VLM_MODEL" "$E2E_VLM_TEXT")
+        if [[ "$(e2e_diag_class "$diag")" == fail ]]; then
+            warn "TC-E08: engine error — $diag"
+            record_fail "TC-E08" "VLM text-only" "$diag"
+        else
+            warn "TC-E08 skipped: $diag"
+            record_skip "TC-E08" "VLM text-only" "$diag"
+        fi
     fi
 
     sep
@@ -656,8 +665,14 @@ if [[ "$DO_VLM" -eq 1 ]]; then
         fi
     else
         timer_end "vlm_remote" >/dev/null
-        warn "TC-E09 skipped: $resp"
-        record_skip "TC-E09" "VLM image_url (remote)" "${resp:0:120}"
+        diag=$(e2e_vlm_remote_diag "$VLM_MODEL")
+        if [[ "$(e2e_diag_class "$diag")" == fail ]]; then
+            warn "TC-E09: engine error — $diag"
+            record_fail "TC-E09" "VLM image_url (remote)" "$diag"
+        else
+            warn "TC-E09 skipped: $diag"
+            record_skip "TC-E09" "VLM image_url (remote)" "$diag"
+        fi
     fi
 
     sep
@@ -674,8 +689,14 @@ if [[ "$DO_VLM" -eq 1 ]]; then
         fi
     else
         timer_end "vlm_image" >/dev/null
-        warn "TC-E10 skipped: $resp"
-        record_skip "TC-E10" "VLM image_url (base64)" "${resp:0:120}"
+        diag=$(e2e_vlm_base64_diag "$VLM_MODEL")
+        if [[ "$(e2e_diag_class "$diag")" == fail ]]; then
+            warn "TC-E10: engine error — $diag"
+            record_fail "TC-E10" "VLM image_url (base64)" "$diag"
+        else
+            warn "TC-E10 skipped: $diag"
+            record_skip "TC-E10" "VLM image_url (base64)" "$diag"
+        fi
     fi
 fi
 
@@ -700,8 +721,14 @@ if [[ "$DO_RERANK" -eq 1 ]]; then
             fi
         else
             timer_end "rerank" >/dev/null
-            warn "TC-E11 skipped: $resp"
-            record_skip "TC-E11" "Rerank endpoint" "${resp:0:120}"
+            diag=$(e2e_rerank_diag "$RERANK_MODEL")
+            if [[ "$(e2e_diag_class "$diag")" == fail ]]; then
+                warn "TC-E11: engine error — $diag"
+                record_fail "TC-E11" "Rerank endpoint" "$diag"
+            else
+                warn "TC-E11 skipped: $diag"
+                record_skip "TC-E11" "Rerank endpoint" "$diag"
+            fi
         fi
     fi
 fi

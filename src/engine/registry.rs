@@ -32,6 +32,21 @@ pub struct EngineConfig {
     pub name: String,
     pub version: String,
 
+    /// Minimum validated installed version (inclusive), dotted-numeric.
+    /// `None` means no lower bound. Used by the install-time / preflight
+    /// version gate to refuse known-incompatible engine builds.
+    #[serde(default)]
+    pub min_version: Option<String>,
+    /// Maximum validated installed version (inclusive), dotted-numeric.
+    /// `None` means no upper bound.
+    #[serde(default)]
+    pub max_version: Option<String>,
+    /// The last version we verified end-to-end. Surfaced in the out-of-range
+    /// warning as the concrete build to pin to (e.g. `brew install omlx@<x>`).
+    /// Defaults to `version` when unset.
+    #[serde(default)]
+    pub last_known_good_version: Option<String>,
+
     // ── Matching criteria (v1, retained for back-compat) ───────────────────
     #[serde(default)]
     pub matches_os: Option<String>,
@@ -162,6 +177,50 @@ fn default_priority() -> u32 {
 /// caller can fail loudly.
 pub fn parse_compute_cap_spec(s: &str) -> Option<ComputeCap> {
     crate::hardware::probe::parse_compute_cap(s)
+}
+
+/// Compare two dotted version strings numerically (e.g. `"0.3.6"` vs `"0.4.1"`).
+///
+/// Each segment is split on `.`, `-`, `+` and the leading ASCII digits of the
+/// segment are parsed; non-numeric trailing text (`".post1"`, `"b9351"`) maps
+/// to `0`. Missing trailing segments are treated as `0`, so `"0.4"` == `"0.4.0"`.
+pub fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    fn parts(v: &str) -> Vec<u64> {
+        v.split(['.', '-', '+'])
+            .map(|seg| {
+                let digits: String = seg.chars().take_while(|c| c.is_ascii_digit()).collect();
+                digits.parse::<u64>().unwrap_or(0)
+            })
+            .collect()
+    }
+    let (pa, pb) = (parts(a), parts(b));
+    let n = pa.len().max(pb.len());
+    for i in 0..n {
+        let x = pa.get(i).copied().unwrap_or(0);
+        let y = pb.get(i).copied().unwrap_or(0);
+        match x.cmp(&y) {
+            std::cmp::Ordering::Equal => continue,
+            ord => return ord,
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+/// `true` if `installed` lies within `[min, max]` (inclusive). `None` bounds are
+/// open-ended. Comparison is numeric/dotted (see [`compare_versions`]).
+pub fn version_in_range(installed: &str, min: Option<&str>, max: Option<&str>) -> bool {
+    use std::cmp::Ordering::{Greater, Less};
+    if let Some(mn) = min
+        && compare_versions(installed, mn) == Less
+    {
+        return false;
+    }
+    if let Some(mx) = max
+        && compare_versions(installed, mx) == Greater
+    {
+        return false;
+    }
+    true
 }
 
 /// The engine registry — parsed from engines.toml
@@ -860,7 +919,10 @@ mod tests {
         let registry = EngineRegistry::load(None).unwrap();
         let selected = registry.select(&apple_silicon()).unwrap();
         assert_eq!(selected.id, "omlx");
-        assert_eq!(selected.version, "0.3.6");
+        assert_eq!(selected.version, "0.4.4");
+        // Version gate: floor at the build that fixed the Qwen3-VL stream crash.
+        assert_eq!(selected.min_version.as_deref(), Some("0.4.4"));
+        assert_eq!(selected.last_known_good_version.as_deref(), Some("0.4.4"));
     }
 
     #[test]
@@ -991,7 +1053,7 @@ mod tests {
     #[test]
     fn test_pinned_versions() {
         let registry = EngineRegistry::load(None).unwrap();
-        assert_eq!(registry.get("omlx").unwrap().version, "0.3.6");
+        assert_eq!(registry.get("omlx").unwrap().version, "0.4.4");
         assert_eq!(registry.get("llamacpp").unwrap().version, "b9351");
         assert_eq!(registry.get("sglang").unwrap().version, "0.5.10.post1");
     }
@@ -1274,5 +1336,29 @@ mod tests {
         // verify the bounds tuples are well-formed.
         assert_eq!(parse_compute_cap_spec("9.0"), Some((9, 0)));
         assert_eq!(parse_compute_cap_spec("10.3"), Some((10, 3)));
+    }
+
+    #[test]
+    fn test_compare_versions() {
+        use std::cmp::Ordering::{Equal, Greater, Less};
+        assert_eq!(compare_versions("0.3.6", "0.4.1"), Less);
+        assert_eq!(compare_versions("0.4.1", "0.3.8"), Greater);
+        assert_eq!(compare_versions("0.4", "0.4.0"), Equal);
+        assert_eq!(compare_versions("0.5.10.post1", "0.5.10"), Equal);
+        assert_eq!(compare_versions("1.0.0", "0.9.9"), Greater);
+    }
+
+    #[test]
+    fn test_version_in_range() {
+        let (min, max) = (Some("0.3.6"), Some("0.3.8"));
+        assert!(version_in_range("0.3.6", min, max)); // lower bound inclusive
+        assert!(version_in_range("0.3.8", min, max)); // upper bound inclusive
+        assert!(version_in_range("0.3.7", min, max));
+        assert!(!version_in_range("0.3.5", min, max)); // below
+        assert!(!version_in_range("0.4.0", min, max)); // above — the #1685 regression
+        assert!(!version_in_range("0.4.1", min, max));
+        // Open-ended bounds.
+        assert!(version_in_range("9.9.9", Some("1.0.0"), None));
+        assert!(version_in_range("0.0.1", None, Some("1.0.0")));
     }
 }

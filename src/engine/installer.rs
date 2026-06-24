@@ -208,9 +208,15 @@ fn which_in_path(cmd: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Verify the installed engine version matches what we expect
+/// Verify the installed engine version is within the validated range.
+///
+/// For brew-managed engines we can't pin the installed version (Homebrew tracks
+/// HEAD of the formula), so an out-of-range build is a *loud warning* rather than
+/// a hard failure — but it surfaces the exact compatibility hazard instead of
+/// silently accepting whatever brew shipped. Returns `true` unless a hard,
+/// in-our-control install is provably broken.
 fn verify_engine_version(engine: &EngineConfig, _path: &str) -> bool {
-    // For brew-installed engines, check brew info
+    // For brew-installed engines, check the installed formula version.
     if engine.install_method == "brew"
         && let Some(ref formula) = engine.brew_formula
         && let Ok(output) = std::process::Command::new("brew")
@@ -220,12 +226,118 @@ fn verify_engine_version(engine: &EngineConfig, _path: &str) -> bool {
     {
         let stdout = String::from_utf8_lossy(&output.stdout);
         debug!(formula, output = %stdout.trim(), "Brew version check");
-        // Accept any version — the user may have a different version installed
+        // `brew list --versions <formula>` → "omlx 0.4.1" (latest first).
+        if let Some(installed) = stdout.split_whitespace().nth(1) {
+            warn_if_version_out_of_range(engine, installed);
+        }
         return true;
     }
 
-    // For binary engines, just check existence
+    // For binary engines, just check existence.
     true
+}
+
+/// Emit a loud warning when an installed engine version falls outside the
+/// `[min_version, max_version]` range declared in engines.toml.
+fn warn_if_version_out_of_range(engine: &EngineConfig, installed: &str) {
+    use super::registry::version_in_range;
+    let Some(range) = format_validated_range(engine) else {
+        return;
+    };
+    if version_in_range(
+        installed,
+        engine.min_version.as_deref(),
+        engine.max_version.as_deref(),
+    ) {
+        return;
+    }
+    warn!(
+        engine = %engine.id,
+        installed,
+        validated = %range,
+        "Installed engine version is outside the validated range"
+    );
+    eprintln!(
+        "  ⚠ {} {installed} is outside the validated range ({range}).",
+        engine.name
+    );
+    eprintln!(
+        "    Untested builds may misbehave. {}",
+        version_gate_remediation(engine)
+    );
+}
+
+/// Formatted `[min_version, max_version]` range, or `None` when no gate is
+/// declared for the engine.
+pub fn format_validated_range(engine: &EngineConfig) -> Option<String> {
+    match (engine.min_version.as_deref(), engine.max_version.as_deref()) {
+        (None, None) => None,
+        (Some(lo), Some(hi)) => Some(format!("{lo}–{hi}")),
+        (Some(lo), None) => Some(format!(">= {lo}")),
+        (None, Some(hi)) => Some(format!("<= {hi}")),
+    }
+}
+
+/// One-line remediation hint pointing at the last known-good version. Shared by
+/// the install-time warning and `lmforge doctor`.
+pub fn version_gate_remediation(engine: &EngineConfig) -> String {
+    let lkg = engine
+        .last_known_good_version
+        .as_deref()
+        .unwrap_or(&engine.version);
+    if engine.install_method == "brew" {
+        let formula = engine.brew_formula.as_deref().unwrap_or(&engine.id);
+        format!(
+            "Last known-good: {lkg}. Move to it with `brew upgrade {formula}` \
+             (or `brew install {formula}@{lkg}` if a pinned formula exists)."
+        )
+    } else {
+        format!(
+            "Pin the last known-good version ({lkg}); see the engines.toml note for {}.",
+            engine.id
+        )
+    }
+}
+
+/// Best-effort active version of an engine, parsed from `<start_cmd> --version`.
+/// Runs the actual linked binary so it reflects what would really execute (more
+/// reliable than `brew list` when multiple kegs are installed). Returns the
+/// first dotted-numeric token (oMLX prints `0.4.4`), or `None` if the binary is
+/// missing or prints nothing parseable.
+pub fn engine_installed_version(engine: &EngineConfig) -> Option<String> {
+    let out = std::process::Command::new(&engine.start_cmd)
+        .arg("--version")
+        .output()
+        .ok()?;
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push('\n');
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    first_dotted_version(&text)
+}
+
+/// Extract the first `MAJOR.MINOR[.PATCH…]` run from arbitrary text.
+fn first_dotted_version(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            let mut dots = 0;
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+                if bytes[i] == b'.' {
+                    dots += 1;
+                }
+                i += 1;
+            }
+            let cand = s[start..i].trim_end_matches('.');
+            if dots >= 1 && cand.ends_with(|c: char| c.is_ascii_digit()) {
+                return Some(cand.to_string());
+            }
+        } else {
+            i += 1;
+        }
+    }
+    None
 }
 
 /// Install via Homebrew (primary method for oMLX on macOS).

@@ -26,7 +26,17 @@
 [[engine]]
 id              = "omlx"
 name            = "oMLX"
-version         = "0.3.6"
+version         = "0.4.4"
+# Version gate. oMLX 0.4.0 moved the VLM loader onto a separate executor thread,
+# leaving Qwen3-VL's mRoPE `inv_freq` lazy and pinned to the construction
+# thread's GPU stream — every VLM chat completion died with "There is no
+# Stream(gpu, 1) in current thread" (jundot/omlx#1685; broken 0.4.0–0.4.3). The
+# 0.4.4 mlx-vlm pin bump materializes `inv_freq` and fixes it (verified here:
+# Qwen3-VL text + image both 200, zero stream errors). 0.3.6–0.3.8 also worked
+# but predate current model support, so the floor is 0.4.4. No upper cap —
+# advisory only.
+min_version              = "0.4.4"
+last_known_good_version  = "0.4.4"
 tier            = "default"
 matches_os      = "darwin"
 matches_arch    = "aarch64"

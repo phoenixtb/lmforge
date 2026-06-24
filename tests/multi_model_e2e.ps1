@@ -61,7 +61,7 @@ function Pull-Optional([string]$Model, [ref]$PulledFlag, [ref]$Enabled) {
 }
 
 function Try-OptionalChat {
-    param([string]$Id, [string]$Desc, [scriptblock]$Action, [int]$MinLen = 20)
+    param([string]$Id, [string]$Desc, [scriptblock]$Action, [int]$MinLen = 20, [scriptblock]$Diag)
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     try {
         $r = & $Action
@@ -71,10 +71,17 @@ function Try-OptionalChat {
         Ok "$Id $Desc $($sw.ElapsedMilliseconds)ms"
     } catch {
         $sw.Stop()
-        Warn "$Id skipped: $($_.Exception.Message)"
-        $detail = $_.Exception.Message
-        if ($detail.Length -gt 120) { $detail = $detail.Substring(0, 120) }
-        Record $Id "SKIP" $Desc $detail
+        # Re-issue without -f to see the real status/body. A 5xx = engine crashed
+        # on a valid request (FAIL, don't mask as unsupported); else capability
+        # gap (SKIP). Falls back to the raw exception when no diag block given.
+        $detail = if ($Diag) { & $Diag } else { $_.Exception.Message }
+        if ((Get-E2eDiagClass $detail) -eq "fail") {
+            Warn "$Id engine error - $detail"
+            Record $Id "FAIL" $Desc $detail
+        } else {
+            Warn "$Id skipped: $detail"
+            Record $Id "SKIP" $Desc $detail
+        }
     }
 }
 
@@ -211,9 +218,9 @@ try {
     Record "TC-E07" "PASS" "State consistency" "both ready"
 
     if ($DoVlm) {
-        Try-OptionalChat "TC-E08" "VLM text-only" { Invoke-E2eVlmText -Model $script:VlmModel } 20
-        Try-OptionalChat "TC-E09" "VLM image_url (remote)" { Invoke-E2eVlmImageRemote -Model $script:VlmModel } 30
-        Try-OptionalChat "TC-E10" "VLM image_url (base64)" { Invoke-E2eVlmImageBase64 -Model $script:VlmModel } 15
+        Try-OptionalChat "TC-E08" "VLM text-only" { Invoke-E2eVlmText -Model $script:VlmModel } 20 { Get-E2eChatDiag -Model $script:VlmModel -Text $E2E_VLM_TEXT }
+        Try-OptionalChat "TC-E09" "VLM image_url (remote)" { Invoke-E2eVlmImageRemote -Model $script:VlmModel } 30 { Get-E2eVlmRemoteDiag -Model $script:VlmModel }
+        Try-OptionalChat "TC-E10" "VLM image_url (base64)" { Invoke-E2eVlmImageBase64 -Model $script:VlmModel } 15 { Get-E2eVlmBase64Diag -Model $script:VlmModel }
     }
 
     if ($DoRerank) {
@@ -229,8 +236,14 @@ try {
                 Record "TC-E11" "PASS" "Rerank endpoint" "$($sw.ElapsedMilliseconds)ms"
             } catch {
                 $sw.Stop()
-                Warn "TC-E11 skipped: $($_.Exception.Message)"
-                Record "TC-E11" "SKIP" "Rerank endpoint" $_.Exception.Message
+                $detail = Get-E2eRerankDiag -Model $script:RerankModel
+                if ((Get-E2eDiagClass $detail) -eq "fail") {
+                    Warn "TC-E11 engine error - $detail"
+                    Record "TC-E11" "FAIL" "Rerank endpoint" $detail
+                } else {
+                    Warn "TC-E11 skipped: $detail"
+                    Record "TC-E11" "SKIP" "Rerank endpoint" $detail
+                }
             }
         }
     }

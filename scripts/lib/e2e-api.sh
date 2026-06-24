@@ -236,6 +236,34 @@ e2e_chat_diag() {
             '{model:$m,messages:[{role:"user",content:$t}],stream:false,max_tokens:16}')"
 }
 
+e2e_vlm_remote_diag() {
+    e2e_api_post_diag "/v1/chat/completions" \
+        "$(jq -nc --arg m "${1:-$VLM_MODEL}" --arg u "${2:-$E2E_VLM_IMAGE_URL}" --arg t "$E2E_VLM_REMOTE_PROMPT" \
+            '{model:$m,messages:[{role:"user",content:[{type:"text",text:$t},{type:"image_url",image_url:{url:$u}}]}],max_tokens:16,temperature:0}')"
+}
+
+e2e_vlm_base64_diag() {
+    e2e_api_post_diag "/v1/chat/completions" \
+        "$(jq -nc --arg m "${1:-$VLM_MODEL}" --arg b "${2:-$E2E_RED_PNG_B64}" --arg t "$E2E_VLM_BASE64_PROMPT" \
+            '{model:$m,messages:[{role:"user",content:[{type:"text",text:$t},{type:"image_url",image_url:{url:("data:image/png;base64," + $b)}}]}],max_tokens:16,temperature:0}')"
+}
+
+e2e_rerank_diag() {
+    e2e_api_post_diag "/v1/rerank" \
+        "$(jq -nc --arg m "${1:-$RERANK_MODEL}" --arg q "$E2E_RERANK_QUERY" \
+            --argjson docs "$(e2e_rerank_documents_json)" \
+            '{model:$m,query:$q,documents:$docs,top_n:3}')"
+}
+
+# Classify a diag string ("HTTP <code> — …"): a 5xx means the engine accepted the
+# request and crashed (a real defect — must FAIL, not hide as an unsupported
+# capability); anything else (4xx/000/timeout) is treated as a genuine
+# capability gap and SKIPs. Echoes "fail" or "skip".
+e2e_diag_class() {
+    local code="${1#HTTP }"; code="${code%% *}"
+    [[ "$code" =~ ^5[0-9][0-9]$ ]] && echo fail || echo skip
+}
+
 # ── assertions (return 0 ok / 1 fail; set E2E_ASSERT_MSG) ───────────────────
 
 e2e_assert_embed_response() {

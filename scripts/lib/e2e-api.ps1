@@ -262,6 +262,40 @@ function Get-E2eChatDiag {
     Get-E2ePostDiag "/v1/chat/completions" $b
 }
 
+function Get-E2eVlmRemoteDiag {
+    param([string]$Model = $script:VlmModel, [string]$ImageUrl = $E2E_VLM_IMAGE_URL)
+    $b = @{ model = $Model; max_tokens = 16; temperature = 0; messages = @(@{ role = "user"; content = @(
+        @{ type = "text"; text = $E2E_VLM_REMOTE_PROMPT }
+        @{ type = "image_url"; image_url = @{ url = $ImageUrl } }
+    ) }) } | ConvertTo-Json -Depth 8 -Compress
+    Get-E2ePostDiag "/v1/chat/completions" $b
+}
+
+function Get-E2eVlmBase64Diag {
+    param([string]$Model = $script:VlmModel)
+    $b = @{ model = $Model; max_tokens = 16; temperature = 0; messages = @(@{ role = "user"; content = @(
+        @{ type = "text"; text = $E2E_VLM_BASE64_PROMPT }
+        @{ type = "image_url"; image_url = @{ url = "data:image/png;base64,$E2E_RED_PNG_B64" } }
+    ) }) } | ConvertTo-Json -Depth 8 -Compress
+    Get-E2ePostDiag "/v1/chat/completions" $b
+}
+
+function Get-E2eRerankDiag {
+    param([string]$Model = $script:RerankModel)
+    $b = @{ model = $Model; query = $E2E_RERANK_QUERY; documents = (Get-E2eRerankDocuments); top_n = 3 } |
+        ConvertTo-Json -Depth 6 -Compress
+    Get-E2ePostDiag "/v1/rerank" $b
+}
+
+# "fail" for a 5xx (engine accepted the request and crashed — a real defect that
+# must not hide as a missing capability); "skip" otherwise (4xx/000 = genuine
+# capability gap). Input is a diag string "HTTP <code> — …".
+function Get-E2eDiagClass {
+    param([string]$Diag)
+    if ($Diag -match 'HTTP\s+(5\d\d)\b') { return "fail" }
+    return "skip"
+}
+
 function Remove-E2ePulledModels {
     param([string]$Bin, [hashtable]$PulledMap)
     $prevEap = $ErrorActionPreference

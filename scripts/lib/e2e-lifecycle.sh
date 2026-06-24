@@ -394,6 +394,20 @@ e2e_autostart_removed() {
 # install fails fast with remediation guidance instead of an opaque 503 deep in
 # TC-E01. Catches e.g. a Homebrew oMLX venv whose pinned python was upgraded out
 # from under it ("bad interpreter"), or a half-extracted llama-server.
+# Return 0 if dotted version $1 < $2 (numeric, up to 3 components). Non-numeric
+# trailing text is ignored (10# strips leading zeros / forces base-10).
+_e2e_ver_lt() {
+    local IFS=. a b i x y
+    read -r -a a <<< "$1"; read -r -a b <<< "$2"
+    for i in 0 1 2; do
+        x=${a[i]:-0}; x=${x//[!0-9]/}; x=${x:-0}
+        y=${b[i]:-0}; y=${y//[!0-9]/}; y=${y:-0}
+        (( 10#$x < 10#$y )) && return 0
+        (( 10#$x > 10#$y )) && return 1
+    done
+    return 1
+}
+
 e2e_engine_preflight() {
     local engine
     engine=$(curl -sf --max-time 5 "$E2E_API/lf/engines" 2>/dev/null \
@@ -423,6 +437,19 @@ e2e_engine_preflight() {
     if out=$("$bin" --version 2>&1); then
         echo "engine binary OK: $bin"
         echo "$out" | head -1
+        # Version-gate the engine. oMLX 0.4.0–0.4.3 regressed the Qwen3-VL prefill
+        # path (jundot/omlx#1685); 0.4.4 fixes it. Warn below the floor so VLM
+        # SKIP/FAILs aren't mistaken for a missing capability. Keep the floor in
+        # sync with engines.toml min_version.
+        if [[ "$engine" == "omlx" ]]; then
+            local ver; ver=$(printf '%s\n' "$out" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
+            if [[ -n "$ver" ]] && _e2e_ver_lt "$ver" "0.4.4"; then
+                echo "  ⚠ oMLX $ver is below the validated floor (0.4.4)."
+                echo "    VLM (Qwen3-VL) chat completions crash with 'There is no Stream(gpu, 1)'"
+                echo "    on 0.4.0–0.4.3 (jundot/omlx#1685). Upgrade:"
+                echo "      brew upgrade omlx   # or: brew install jundot/omlx/omlx@0.4.4"
+            fi
+        fi
         return 0
     fi
     echo "engine binary BROKEN: $bin"

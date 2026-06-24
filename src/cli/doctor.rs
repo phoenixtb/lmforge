@@ -23,9 +23,67 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     print_hardware(&profile);
     println!();
     print_engine_state(&profile, &data_dir, active, &variant_state);
+    print_active_engine_gate(&profile, &data_dir);
     println!();
     print_runtime_hints(&profile, active);
     Ok(())
+}
+
+/// Report the version gate for the registry-selected active engine. Only prints
+/// when the engine declares a validated range (today: oMLX on Apple Silicon),
+/// so existing llama.cpp output is unchanged. Catches Homebrew drift onto a
+/// broken build (e.g. the oMLX 0.4.0–0.4.3 Qwen3-VL crash, jundot/omlx#1685).
+fn print_active_engine_gate(profile: &HardwareProfile, data_dir: &std::path::Path) {
+    use crate::engine::installer;
+    use crate::engine::registry::{EngineRegistry, version_in_range};
+
+    // Honour the user's engines.toml override, like every other call site.
+    let user_engines = data_dir.join("engines.toml");
+    let override_path = user_engines.exists().then_some(user_engines.as_path());
+    let Ok(registry) = EngineRegistry::load(override_path) else {
+        return;
+    };
+    let Ok(engine) = registry.select(profile) else {
+        return;
+    };
+    let Some(range) = installer::format_validated_range(engine) else {
+        return;
+    };
+
+    println!();
+    println!("Engine — {} (active, version-gated)", engine.name);
+    println!("  pinned/tested     : {}", engine.version);
+    println!("  validated_range   : {range}");
+
+    match installer::engine_installed_version(engine) {
+        Some(installed) => {
+            let ok = version_in_range(
+                &installed,
+                engine.min_version.as_deref(),
+                engine.max_version.as_deref(),
+            );
+            println!("  installed         : {installed}");
+            println!(
+                "  version_gate      : {}",
+                if ok { "ok" } else { "OUT OF RANGE" }
+            );
+            if !ok {
+                println!();
+                println!(
+                    "  ⚠ {} {installed} is outside the validated range ({range}).",
+                    engine.name
+                );
+                println!("    {}", installer::version_gate_remediation(engine));
+            }
+        }
+        None => {
+            println!(
+                "  installed         : (not detected — `{}` not runnable)",
+                engine.start_cmd
+            );
+            println!("    {}", installer::version_gate_remediation(engine));
+        }
+    }
 }
 
 fn print_hardware(profile: &HardwareProfile) {
