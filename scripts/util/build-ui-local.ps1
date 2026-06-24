@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 #  LMForge - build the desktop UI from this checkout and install it locally (Windows)
 #
 #  Runs `npm run tauri build` in ui\, then installs the produced NSIS installer

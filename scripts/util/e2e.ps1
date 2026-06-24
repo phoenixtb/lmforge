@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 #  LMForge - unified E2E runner (Windows)
 #
 #  One runner for every install source. Composes the shared lifecycle

@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # LMForge — Windows PowerShell Installer
 # Usage (run in PowerShell as your user):
 #   irm https://github.com/phoenixtb/lmforge/releases/latest/download/install-core.ps1 | iex

@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # LMForge - Windows dev reinstall (build from this repo, install locally)
 #
 # Windows counterpart of dev-reinstall-core.sh + dev-clean-reinstall-ui.sh.

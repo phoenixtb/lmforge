@@ -1,4 +1,4 @@
-# Shared LMForge live-API helpers for E2E scripts (Windows) — dot-source only.
+﻿# Shared LMForge live-API helpers for E2E scripts (Windows) — dot-source only.
 if ($script:LMForgeE2eApiLoaded) { return }
 $script:LMForgeE2eApiLoaded = $true
 

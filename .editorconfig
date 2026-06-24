@@ -1,0 +1,5 @@
+# PowerShell scripts must carry a UTF-8 BOM so Windows PowerShell 5.1 (ANSI
+# default) doesn't mis-decode non-ASCII chars (e.g. em dash) and fail to parse.
+# Scoped to *.ps1 only; no effect on bash/other files or on macOS/Linux runs.
+[*.ps1]
+charset = utf-8-bom

@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 #  LMForge - shared install/lifecycle primitives for E2E harnesses (dot-source)
 #
 #  Single source of truth for the install -> health -> service -> uninstall

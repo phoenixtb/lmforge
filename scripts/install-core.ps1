@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # LMForge Core - Windows PowerShell Installer
 # Downloads the pre-built binary from GitHub Releases, installs it to the
 # current user's local bin directory, adds it to PATH, runs init, and

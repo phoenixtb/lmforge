@@ -39,6 +39,26 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      # PowerShell scripts with non-ASCII bytes must carry a UTF-8 BOM, else
+      # Windows PowerShell 5.1 (ANSI default) mis-decodes them and the parser
+      # dies (e.g. em dash -> "â€”"). Only flags files that actually contain
+      # non-ASCII without a BOM; pure-ASCII .ps1 files are left alone.
+      - name: PowerShell scripts UTF-8 BOM check
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if LC_ALL=C grep -qP '[\x80-\xFF]' "$f"; then
+              bom=$(head -c3 "$f" | od -An -tx1 | tr -d ' \n')
+              if [ "$bom" != "efbbbf" ]; then
+                echo "::error file=$f::non-ASCII without UTF-8 BOM; re-save as UTF-8 with BOM (breaks Windows PowerShell 5.1)"
+                fail=1
+              fi
+            fi
+          done < <(git ls-files '*.ps1')
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+          echo "All .ps1 files OK."
+
   # ── Core unit + integration tests (macOS + Linux + Windows) ───────────────
   test:
     name: Tests — ${{ matrix.os }}

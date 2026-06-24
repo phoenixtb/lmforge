@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # LMForge Core - Windows PowerShell Uninstaller
 # Stops the daemon, removes autostart (Run key + legacy Scheduled Task),
 # removes the binary and PATH.

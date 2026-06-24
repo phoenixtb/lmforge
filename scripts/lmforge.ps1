@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 # LMForge CLI — dev / test / release menu (Windows)
 #
 # Module model (install SOURCE is a parameter, not a separate script):
