@@ -53,19 +53,38 @@ function Resolve-E2eBin {
 # (for the "already installed" probe); leave STDERR attached to the console with
 # -NoNewWindow so the real bar renders live instead of being swallowed.
 function Pull-E2eModelIfNeeded {
-    param([string]$Bin, [string]$Model, [ref]$PulledFlag)
-    $outFile = New-TemporaryFile
-    try {
-        $p = Start-Process -FilePath $Bin -ArgumentList @("pull", $Model) -NoNewWindow -PassThru `
-            -RedirectStandardOutput $outFile.FullName
-        $p.WaitForExit()
-        $out = (Get-Content $outFile.FullName -Raw -EA SilentlyContinue)
-        if ($p.ExitCode -ne 0) { throw "pull $Model failed (exit $($p.ExitCode)): $out" }
-        if ($out -match 'already installed') { return "already present" }
-        $PulledFlag.Value = $true
-        return "downloaded"
-    } finally {
-        Remove-Item $outFile.FullName -EA SilentlyContinue
+    param([string]$Bin, [string]$Model, [ref]$PulledFlag, [int]$Retries = 3)
+    # Retry transient HF download failures (connection reset, body decode errors)
+    # with backoff so a flaky network doesn't fail the whole gate. A non-network
+    # failure (e.g. bad model id) still surfaces after the attempts are exhausted.
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        $outFile = New-TemporaryFile
+        try {
+            $p = Start-Process -FilePath $Bin -ArgumentList @("pull", $Model) -NoNewWindow -PassThru `
+                -RedirectStandardOutput $outFile.FullName
+            # Cache the OS handle BEFORE waiting; without this the .NET Process object
+            # releases the handle on exit and $p.ExitCode reads back $null, so a
+            # successful pull (exit 0) is misreported as a failure.
+            $null = $p.Handle
+            $p.WaitForExit()
+            $out = (Get-Content $outFile.FullName -Raw -EA SilentlyContinue)
+            if ($p.ExitCode -eq 0) {
+                if ($out -match 'already installed') { return "already present" }
+                $PulledFlag.Value = $true
+                return "downloaded"
+            }
+            if ($attempt -le $Retries) {
+                $wait = [Math]::Min(30, [Math]::Pow(2, $attempt))
+                Write-Host "  [!] pull $Model failed (exit $($p.ExitCode)), retry $attempt/$Retries in ${wait}s..." -ForegroundColor Yellow
+                Start-Sleep -Seconds $wait
+                continue
+            }
+            throw "pull $Model failed (exit $($p.ExitCode)) after $Retries retries: $out"
+        } finally {
+            Remove-Item $outFile.FullName -EA SilentlyContinue
+        }
     }
 }
 
