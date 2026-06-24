@@ -54,16 +54,31 @@ e2e_model_installed() {
         | jq -e --arg id "$id" '.models[] | select(.id == $id)' >/dev/null 2>&1
 }
 
-# e2e_pull_if_needed MODEL REF_VAR_NAME  → sets ref to 1 if newly downloaded
+# e2e_pull_if_needed MODEL REF_VAR_NAME  → sets ref to 1 if newly downloaded.
+#
+# `lmforge pull` prints a native indicatif progress bar to STDERR and the status
+# lines ("already installed", …) to STDOUT. We capture stdout (for the
+# "already installed" probe + caller's message) but route stderr to the
+# controlling terminal so the real bar renders live — instead of being swallowed
+# by command substitution. No tty (CI) → fold stderr into the captured temp.
 e2e_pull_if_needed() {
-    local model="$1" ref_name="$2" out
-    out=$("${LF_BIN:?}" pull "$model" 2>&1) || { echo "$out"; return 1; }
-    if echo "$out" | grep -q "already installed"; then
+    local model="$1" ref_name="$2" tmp rc
+    tmp="$(mktemp)"
+    if { true >/dev/tty; } 2>/dev/null; then
+        if "${LF_BIN:?}" pull "$model" >"$tmp" 2>/dev/tty; then rc=0; else rc=$?; fi
+    else
+        if "${LF_BIN:?}" pull "$model" >"$tmp" 2>&1; then rc=0; else rc=$?; fi
+    fi
+    if [[ $rc -ne 0 ]]; then
+        cat "$tmp"; rm -f "$tmp"; return 1
+    fi
+    if grep -q "already installed" "$tmp"; then
         echo "$model already present"
     else
         printf -v "$ref_name" '%s' "1"
         echo "$model downloaded"
     fi
+    rm -f "$tmp"
 }
 
 e2e_wait_model_ready() {

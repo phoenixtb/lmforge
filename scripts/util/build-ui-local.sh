@@ -88,7 +88,7 @@ fi
 # host FUSE (Fedora 40+ ships only fuse3). Harmless on macOS/Windows.
 export APPIMAGE_EXTRACT_AND_RUN=1
 
-echo "==> npm run tauri build ${BUNDLE_FLAG[*]}"
+echo "==> npm run tauri build ${BUNDLE_FLAG[*]+"${BUNDLE_FLAG[*]}"}"
 npm run tauri build -- ${BUNDLE_FLAG[@]+"${BUNDLE_FLAG[@]}"}
 
 # Cargo workspace places bundles under the workspace-root target/; older/standalone

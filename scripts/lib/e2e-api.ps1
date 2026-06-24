@@ -48,19 +48,24 @@ function Resolve-E2eBin {
     return $null
 }
 
+# `lmforge pull` prints a native indicatif progress bar to STDERR and status
+# lines ("already installed", …) to STDOUT. Redirect only STDOUT to a temp file
+# (for the "already installed" probe); leave STDERR attached to the console with
+# -NoNewWindow so the real bar renders live instead of being swallowed.
 function Pull-E2eModelIfNeeded {
     param([string]$Bin, [string]$Model, [ref]$PulledFlag)
-    $prevEap = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
+    $outFile = New-TemporaryFile
     try {
-        # lmforge logs to stderr; must not treat INFO lines as terminating errors.
-        $out = & $Bin pull $Model 2>&1 | ForEach-Object { "$_" } | Out-String
-        if ($LASTEXITCODE -ne 0) { throw "pull $Model failed: $out" }
+        $p = Start-Process -FilePath $Bin -ArgumentList @("pull", $Model) -NoNewWindow -PassThru `
+            -RedirectStandardOutput $outFile.FullName
+        $p.WaitForExit()
+        $out = (Get-Content $outFile.FullName -Raw -EA SilentlyContinue)
+        if ($p.ExitCode -ne 0) { throw "pull $Model failed (exit $($p.ExitCode)): $out" }
         if ($out -match 'already installed') { return "already present" }
         $PulledFlag.Value = $true
         return "downloaded"
     } finally {
-        $ErrorActionPreference = $prevEap
+        Remove-Item $outFile.FullName -EA SilentlyContinue
     }
 }
 
