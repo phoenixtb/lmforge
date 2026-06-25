@@ -33,13 +33,20 @@ Write-Host "  Version: $Version"
 Write-Host ""
 
 # --- Idempotency: already installed ---
-if (Test-Path $AppExe) {
+# A local build ($env:LMFORGE_UI_LOCAL) is an explicit "update from this checkout"
+# request, so let the installer overwrite. The early-exit only guards the
+# published-release path, where re-downloading is wasteful.
+if ((Test-Path $AppExe) -and (-not $env:LMFORGE_UI_LOCAL)) {
     Warn "LMForge UI already installed at $AppExe"
     Warn "To update, uninstall first:"
     Warn "  irm https://github.com/$Repo/releases/latest/download/uninstall-ui.ps1 | iex"
     Info "Launching existing app..."
     Start-Process $AppExe
     exit 0
+}
+if ((Test-Path $AppExe) -and $env:LMFORGE_UI_LOCAL) {
+    Info "Updating existing LMForge UI from local build (overwriting $AppExe)"
+    Get-Process -Name "lmforge-ui" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
 # --- Prerequisite: Core must be installed ---

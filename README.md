@@ -623,6 +623,32 @@ this to show a "Generating answer…" indicator. Standard OpenAI clients ignore 
 > and SGLang, `think: true` translates to `enable_thinking: true` in the chat template
 > and the model generates reasoning natively in a single call.
 
+#### Sampling (avoid reasoning loops)
+
+LMForge is **client-owns-sampling**: it never overrides what you send. With only
+`temperature` + `max_tokens`, Qwen3-class models loop on reasoning (`… Wait. Wait.
+Wait. …`), burn the whole `thinking_budget`, and the answer ends up echoing the
+thinking. Send the thinking profile to keep reasoning bounded:
+
+| Param | Chat | Thinking |
+|---|:---:|:---:|
+| `temperature` | `0.7` | `0.6` (≥ 0.6 required) |
+| `top_p` | `0.95` | `0.95` |
+| `top_k` | `20` | `20` |
+| `repetition_penalty` | `1.1` | `1.2` (loop breaker) |
+| `presence_penalty` | `0.0` | `0.3` |
+
+```bash
+curl -sN http://127.0.0.1:11430/v1/chat/completions -H "Content-Type: application/json" -d '{
+  "model": "qwen3.5:4b:4bit", "stream": true, "think": true, "thinking_budget": 2048,
+  "messages": [{"role":"user","content":"A bat and ball cost $1.10; the bat is $1 more than the ball. Cost of the ball?"}],
+  "temperature": 0.6, "top_p": 0.95, "top_k": 20, "repetition_penalty": 1.2, "presence_penalty": 0.3
+}'
+```
+
+The bundled Playground UI and Postman collection ship these profiles by default.
+Full rationale and tuning notes: [docs/dev/DEV_GUIDE.md → Sampling & thinking](docs/dev/DEV_GUIDE.md#sampling--thinking).
+
 ---
 
 ## Model Catalog

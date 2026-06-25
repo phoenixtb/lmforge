@@ -381,6 +381,24 @@ fn translate_ollama_to_openai(ollama: &serde_json::Value) -> serde_json::Value {
         if let Some(top_p) = options.get("top_p") {
             openai["top_p"] = top_p.clone();
         }
+        if let Some(top_k) = options.get("top_k") {
+            openai["top_k"] = top_k.clone();
+        }
+        if let Some(min_p) = options.get("min_p") {
+            openai["min_p"] = min_p.clone();
+        }
+        // Ollama spells the repetition penalty `repeat_penalty`; map it to the
+        // OpenAI-side `repetition_penalty` the engines understand. This is the
+        // loop-breaker for thinking models, so it must survive translation.
+        if let Some(repeat_penalty) = options.get("repeat_penalty") {
+            openai["repetition_penalty"] = repeat_penalty.clone();
+        }
+        if let Some(presence_penalty) = options.get("presence_penalty") {
+            openai["presence_penalty"] = presence_penalty.clone();
+        }
+        if let Some(frequency_penalty) = options.get("frequency_penalty") {
+            openai["frequency_penalty"] = frequency_penalty.clone();
+        }
     }
 
     openai

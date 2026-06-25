@@ -1,0 +1,286 @@
+{
+  "info": {
+    "name": "LMForge",
+    "description": "LMForge daemon API — OpenAI-compatible, Ollama-compatible, and native /lf endpoints.\n\nSet the `baseUrl` and model variables in the linked environment (or collection variables below). Defaults assume a local daemon on 127.0.0.1:11430.\n\nThinking notes:\n- Reasoning streams as `delta.reasoning_content` (OpenAI) / `message.thinking` (Ollama).\n- On oMLX, a separate thinking block requires the two-call budget orchestrator. Send `think:true`; the daemon defaults `thinking_budget` to 2048 if omitted. `qwen3.5:4b:6bit` emits reasoning natively; `qwen3.5:2b:4bit` works via the orchestrator (enable_thinking is set in call-1, capped by the budget).\n\nSampling (loop-breaker): LMForge is client-owns-sampling. The thinking requests carry the Qwen3 thinking profile — temperature 0.6, top_p 0.95, top_k 20, repetition_penalty 1.2 (`repeat_penalty` under Ollama `options`), presence_penalty 0.3. Without it the model loops on 'Wait. Wait. …' and burns the budget. See docs/dev/DEV_GUIDE.md → Sampling & thinking.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:11430" },
+    { "key": "chatModel", "value": "qwen3.5:4b:6bit" },
+    { "key": "thinkingModel", "value": "qwen3.5:4b:6bit" },
+    { "key": "visionModel", "value": "qwen3-vl:2b:4bit" },
+    { "key": "embedModel", "value": "qwen3-embed:0.6b:8bit" },
+    { "key": "rerankModel", "value": "qwen3-reranker:0.6b:8bit" },
+    { "key": "imageUrl", "value": "https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg" }
+  ],
+  "item": [
+    {
+      "name": "Health & Status",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] } }
+        },
+        {
+          "name": "GET /lf/status",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/lf/status", "host": ["{{baseUrl}}"], "path": ["lf", "status"] } }
+        },
+        {
+          "name": "GET /lf/engines",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/lf/engines", "host": ["{{baseUrl}}"], "path": ["lf", "engines"] } }
+        },
+        {
+          "name": "GET /lf/hardware",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/lf/hardware", "host": ["{{baseUrl}}"], "path": ["lf", "hardware"] } }
+        },
+        {
+          "name": "GET /lf/sysinfo",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/lf/sysinfo", "host": ["{{baseUrl}}"], "path": ["lf", "sysinfo"] } }
+        },
+        {
+          "name": "GET /lf/metrics (JSON digest)",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/lf/metrics", "host": ["{{baseUrl}}"], "path": ["lf", "metrics"] } }
+        },
+        {
+          "name": "GET /metrics (Prometheus)",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/metrics", "host": ["{{baseUrl}}"], "path": ["metrics"] } }
+        }
+      ]
+    },
+    {
+      "name": "Models",
+      "item": [
+        {
+          "name": "GET /v1/models (OpenAI)",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/v1/models", "host": ["{{baseUrl}}"], "path": ["v1", "models"] } }
+        },
+        {
+          "name": "GET /v1/models/{id}",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/v1/models/{{chatModel}}", "host": ["{{baseUrl}}"], "path": ["v1", "models", "{{chatModel}}"] } }
+        },
+        {
+          "name": "GET /lf/model/list (native + capabilities)",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/lf/model/list", "host": ["{{baseUrl}}"], "path": ["lf", "model", "list"] } }
+        },
+        {
+          "name": "GET /api/tags (Ollama)",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/tags", "host": ["{{baseUrl}}"], "path": ["api", "tags"] } }
+        }
+      ]
+    },
+    {
+      "name": "OpenAI - Chat",
+      "item": [
+        {
+          "name": "Chat (non-stream)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{chatModel}}\",\n  \"messages\": [\n    { \"role\": \"user\", \"content\": \"In one sentence, what is a vector database?\" }\n  ],\n  \"max_tokens\": 256,\n  \"temperature\": 0.7\n}" },
+            "url": { "raw": "{{baseUrl}}/v1/chat/completions", "host": ["{{baseUrl}}"], "path": ["v1", "chat", "completions"] }
+          }
+        },
+        {
+          "name": "Chat (stream)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{chatModel}}\",\n  \"messages\": [\n    { \"role\": \"user\", \"content\": \"List 3 uses for embeddings.\" }\n  ],\n  \"stream\": true,\n  \"max_tokens\": 300,\n  \"temperature\": 0.7\n}" },
+            "url": { "raw": "{{baseUrl}}/v1/chat/completions", "host": ["{{baseUrl}}"], "path": ["v1", "chat", "completions"] }
+          }
+        },
+        {
+          "name": "Chat - Thinking (stream, budget orchestrator)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{thinkingModel}}\",\n  \"messages\": [\n    { \"role\": \"user\", \"content\": \"A bat and ball cost $1.10. The bat costs $1 more than the ball. How much is the ball? Reason step by step.\" }\n  ],\n  \"stream\": true,\n  \"think\": true,\n  \"thinking_budget\": 2048,\n  \"stream_reasoning_deltas\": true,\n  \"temperature\": 0.6,\n  \"top_p\": 0.95,\n  \"top_k\": 20,\n  \"repetition_penalty\": 1.2,\n  \"presence_penalty\": 0.3,\n  \"max_tokens\": 2600\n}" },
+            "url": { "raw": "{{baseUrl}}/v1/chat/completions", "host": ["{{baseUrl}}"], "path": ["v1", "chat", "completions"] }
+          },
+          "description": "Thinking sampling profile (temp 0.6 / top_p 0.95 / top_k 20 / repetition_penalty 1.2 / presence_penalty 0.3) keeps reasoning bounded — without it Qwen3 loops on 'Wait. Wait. …' and burns the whole budget.",
+          "response": [],
+          "event": []
+        },
+        {
+          "name": "Chat - Thinking (stream, default budget)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{thinkingModel}}\",\n  \"messages\": [\n    { \"role\": \"user\", \"content\": \"Compare optimistic vs pessimistic locking. Think carefully.\" }\n  ],\n  \"stream\": true,\n  \"think\": true,\n  \"temperature\": 0.6,\n  \"top_p\": 0.95,\n  \"top_k\": 20,\n  \"repetition_penalty\": 1.2,\n  \"presence_penalty\": 0.3,\n  \"max_tokens\": 2600\n}" },
+            "url": { "raw": "{{baseUrl}}/v1/chat/completions", "host": ["{{baseUrl}}"], "path": ["v1", "chat", "completions"] }
+          },
+          "description": "No thinking_budget sent — the daemon defaults it to 2048 and engages the orchestrator."
+        },
+        {
+          "name": "Chat - Thinking (non-stream)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{thinkingModel}}\",\n  \"messages\": [\n    { \"role\": \"user\", \"content\": \"What is 17 * 23? Reason step by step.\" }\n  ],\n  \"think\": true,\n  \"thinking_budget\": 1024,\n  \"temperature\": 0.6,\n  \"top_p\": 0.95,\n  \"top_k\": 20,\n  \"repetition_penalty\": 1.2,\n  \"presence_penalty\": 0.3,\n  \"max_tokens\": 1500\n}" },
+            "url": { "raw": "{{baseUrl}}/v1/chat/completions", "host": ["{{baseUrl}}"], "path": ["v1", "chat", "completions"] }
+          },
+          "description": "Returns message.reasoning_content + message.content separately."
+        },
+        {
+          "name": "Chat - Thinking via chat_template_kwargs",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{thinkingModel}}\",\n  \"messages\": [\n    { \"role\": \"user\", \"content\": \"Explain why the sky is blue. Reason briefly.\" }\n  ],\n  \"stream\": true,\n  \"chat_template_kwargs\": { \"enable_thinking\": true },\n  \"thinking_budget\": 1024,\n  \"stream_reasoning_deltas\": true,\n  \"temperature\": 0.6,\n  \"top_p\": 0.95,\n  \"top_k\": 20,\n  \"repetition_penalty\": 1.2,\n  \"presence_penalty\": 0.3,\n  \"max_tokens\": 1500\n}" },
+            "url": { "raw": "{{baseUrl}}/v1/chat/completions", "host": ["{{baseUrl}}"], "path": ["v1", "chat", "completions"] }
+          },
+          "description": "OpenAI-style thinking flag. request_has_think honours chat_template_kwargs.enable_thinking (takes precedence over top-level think)."
+        },
+        {
+          "name": "Chat - Thinking OFF (think:false)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{thinkingModel}}\",\n  \"messages\": [\n    { \"role\": \"user\", \"content\": \"What is 17 * 23? Answer only.\" }\n  ],\n  \"think\": false,\n  \"max_tokens\": 64\n}" },
+            "url": { "raw": "{{baseUrl}}/v1/chat/completions", "host": ["{{baseUrl}}"], "path": ["v1", "chat", "completions"] }
+          },
+          "description": "Suppresses reasoning — daemon sends enable_thinking:false to oMLX for thinking models."
+        },
+        {
+          "name": "Chat - VLM (remote image URL)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{visionModel}}\",\n  \"messages\": [\n    { \"role\": \"user\", \"content\": [\n      { \"type\": \"text\", \"text\": \"Describe this image in one sentence.\" },\n      { \"type\": \"image_url\", \"image_url\": { \"url\": \"{{imageUrl}}\" } }\n    ] }\n  ],\n  \"max_tokens\": 256\n}" },
+            "url": { "raw": "{{baseUrl}}/v1/chat/completions", "host": ["{{baseUrl}}"], "path": ["v1", "chat", "completions"] }
+          },
+          "description": "Daemon preflights remote http(s) image URLs server-side and rewrites to data: URLs before forwarding."
+        },
+        {
+          "name": "Chat - VLM (base64 data URL)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{visionModel}}\",\n  \"messages\": [\n    { \"role\": \"user\", \"content\": [\n      { \"type\": \"text\", \"text\": \"What is in this image?\" },\n      { \"type\": \"image_url\", \"image_url\": { \"url\": \"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/g7CAAAAAElFTkSuQmCC\" } }\n    ] }\n  ],\n  \"max_tokens\": 128\n}" },
+            "url": { "raw": "{{baseUrl}}/v1/chat/completions", "host": ["{{baseUrl}}"], "path": ["v1", "chat", "completions"] }
+          },
+          "description": "1x1 px placeholder data URL — replace with a real base64 image."
+        }
+      ]
+    },
+    {
+      "name": "OpenAI - Completions / Embeddings / Rerank",
+      "item": [
+        {
+          "name": "POST /v1/completions",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{chatModel}}\",\n  \"prompt\": \"The capital of France is\",\n  \"max_tokens\": 16\n}" },
+            "url": { "raw": "{{baseUrl}}/v1/completions", "host": ["{{baseUrl}}"], "path": ["v1", "completions"] }
+          }
+        },
+        {
+          "name": "POST /v1/embeddings",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{embedModel}}\",\n  \"input\": [\"hello world\", \"vector databases store embeddings\"]\n}" },
+            "url": { "raw": "{{baseUrl}}/v1/embeddings", "host": ["{{baseUrl}}"], "path": ["v1", "embeddings"] }
+          }
+        },
+        {
+          "name": "POST /v1/rerank (Cohere/Jina schema)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{rerankModel}}\",\n  \"query\": \"What is quantum computing?\",\n  \"documents\": [\n    \"Quantum computers use qubits to perform computation.\",\n    \"The mitochondria is the powerhouse of the cell.\",\n    \"Superposition and entanglement enable quantum speedups.\"\n  ],\n  \"top_n\": 3,\n  \"return_documents\": true\n}" },
+            "url": { "raw": "{{baseUrl}}/v1/rerank", "host": ["{{baseUrl}}"], "path": ["v1", "rerank"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Ollama-compatible",
+      "item": [
+        {
+          "name": "POST /api/chat (non-stream)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{chatModel}}\",\n  \"messages\": [\n    { \"role\": \"user\", \"content\": \"Say hello in 3 languages.\" }\n  ],\n  \"stream\": false\n}" },
+            "url": { "raw": "{{baseUrl}}/api/chat", "host": ["{{baseUrl}}"], "path": ["api", "chat"] }
+          }
+        },
+        {
+          "name": "POST /api/chat (stream NDJSON)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{chatModel}}\",\n  \"messages\": [\n    { \"role\": \"user\", \"content\": \"Count from 1 to 5.\" }\n  ],\n  \"stream\": true\n}" },
+            "url": { "raw": "{{baseUrl}}/api/chat", "host": ["{{baseUrl}}"], "path": ["api", "chat"] }
+          }
+        },
+        {
+          "name": "POST /api/chat (think → message.thinking)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{thinkingModel}}\",\n  \"messages\": [\n    { \"role\": \"user\", \"content\": \"What is 12 * 12? Reason briefly.\" }\n  ],\n  \"think\": true,\n  \"stream\": false,\n  \"options\": { \"temperature\": 0.6, \"top_p\": 0.95, \"top_k\": 20, \"repeat_penalty\": 1.2, \"presence_penalty\": 0.3, \"num_predict\": 1024 }\n}" },
+            "url": { "raw": "{{baseUrl}}/api/chat", "host": ["{{baseUrl}}"], "path": ["api", "chat"] }
+          },
+          "description": "Reasoning is surfaced under message.thinking (Ollama convention). Sampling lives under `options` (Ollama spells the loop-breaker `repeat_penalty` → mapped to repetition_penalty). Note: the Ollama path uses the <think>-tag rewriter, not the budget orchestrator — reasoning appears only for quants that emit it natively (e.g. qwen3.5:4b:6bit)."
+        },
+        {
+          "name": "POST /api/generate",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{chatModel}}\",\n  \"prompt\": \"Write a haiku about databases.\",\n  \"stream\": false\n}" },
+            "url": { "raw": "{{baseUrl}}/api/generate", "host": ["{{baseUrl}}"], "path": ["api", "generate"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "LMForge Native (/lf)",
+      "item": [
+        {
+          "name": "GET /lf/catalog",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/lf/catalog?format=mlx", "host": ["{{baseUrl}}"], "path": ["lf", "catalog"], "query": [{ "key": "format", "value": "mlx" }] } }
+        },
+        {
+          "name": "GET /lf/logs/list",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/lf/logs/list", "host": ["{{baseUrl}}"], "path": ["lf", "logs", "list"] } }
+        },
+        {
+          "name": "GET /lf/logs/tail",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/lf/logs/tail?stream=daemon.err&lines=100", "host": ["{{baseUrl}}"], "path": ["lf", "logs", "tail"], "query": [{ "key": "stream", "value": "daemon.err" }, { "key": "lines", "value": "100" }] } }
+        },
+        {
+          "name": "POST /lf/model/switch",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{chatModel}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/lf/model/switch", "host": ["{{baseUrl}}"], "path": ["lf", "model", "switch"] }
+          }
+        },
+        {
+          "name": "POST /lf/model/pull",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{chatModel}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/lf/model/pull", "host": ["{{baseUrl}}"], "path": ["lf", "model", "pull"] }
+          },
+          "description": "Streams pull progress. Triggers a download if the model isn't present."
+        },
+        {
+          "name": "POST /lf/model/unload",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{chatModel}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/lf/model/unload", "host": ["{{baseUrl}}"], "path": ["lf", "model", "unload"] }
+          }
+        }
+      ]
+    }
+  ]
+}

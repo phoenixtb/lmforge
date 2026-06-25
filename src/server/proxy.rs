@@ -472,6 +472,26 @@ pub async fn proxy_get(
 // Two-call thinking budget proxy — Call 1 accumulate + Call 2 stream
 // =============================================================================
 
+/// Set `chat_template_kwargs.enable_thinking` on a request body object,
+/// creating the `chat_template_kwargs` map if absent.
+///
+/// Call-1 of the budget orchestrator sets `true` to force oMLX to emit
+/// `delta.reasoning_content` (quants like `qwen3.5:2b:4bit` produce no
+/// reasoning otherwise). This is only safe because call-1 is hard-capped at
+/// the thinking budget — `enable_thinking:true` is unbounded and loops without
+/// a cap (see `thinking::apply_think_for_engine`). Call-2 sets `false`.
+fn set_enable_thinking(obj: &mut serde_json::Map<String, serde_json::Value>, value: bool) {
+    let kwargs = obj
+        .entry("chat_template_kwargs")
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(map) = kwargs.as_object_mut() {
+        map.insert(
+            "enable_thinking".to_string(),
+            serde_json::Value::Bool(value),
+        );
+    }
+}
+
 /// Build the body for Call 2 of the thinking-budget workflow.
 ///
 /// Appends the accumulated reasoning as a closed `<think>…</think>` assistant
@@ -496,15 +516,7 @@ fn build_call2_body(
     }
 
     // Suppress further thinking — CRITICAL: without this the model re-enters <think>
-    let kwargs = obj
-        .entry("chat_template_kwargs")
-        .or_insert_with(|| serde_json::json!({}));
-    if let Some(map) = kwargs.as_object_mut() {
-        map.insert(
-            "enable_thinking".to_string(),
-            serde_json::Value::Bool(false),
-        );
-    }
+    set_enable_thinking(obj, false);
 
     // Remaining token budget for the answer
     obj.insert(
@@ -673,6 +685,7 @@ pub async fn proxy_stream_with_thinking_budget(
         );
         obj.insert("stream".to_string(), serde_json::Value::Bool(true));
         obj.remove("thinking_budget");
+        set_enable_thinking(obj, true);
     }
 
     let resp1 = client
@@ -914,6 +927,7 @@ pub async fn proxy_nonstream_with_thinking_budget(
         );
         obj.insert("stream".to_string(), serde_json::Value::Bool(true));
         obj.remove("thinking_budget");
+        set_enable_thinking(obj, true);
     }
 
     let resp1 = client
@@ -1543,5 +1557,52 @@ mod tests {
             result["stream"], true,
             "Call 2 must always be stream:true internally"
         );
+    }
+
+    // ── set_enable_thinking unit tests ────────────────────────────────────────
+
+    #[test]
+    fn test_set_enable_thinking_creates_kwargs() {
+        let mut body = serde_json::json!({"model": "m", "messages": []});
+        let obj = body.as_object_mut().unwrap();
+        set_enable_thinking(obj, true);
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], true);
+    }
+
+    #[test]
+    fn test_set_enable_thinking_overwrites_existing() {
+        let mut body = serde_json::json!({
+            "model": "m",
+            "chat_template_kwargs": {"enable_thinking": false, "other": "keep"}
+        });
+        let obj = body.as_object_mut().unwrap();
+        set_enable_thinking(obj, true);
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], true);
+        assert_eq!(
+            body["chat_template_kwargs"]["other"], "keep",
+            "sibling kwargs must be preserved"
+        );
+    }
+
+    /// Call-1 must request enable_thinking:true so oMLX emits delta.reasoning_content
+    /// (quants like 2b:4bit produce no reasoning otherwise). This mirrors the body1
+    /// patch inside the budget orchestrators.
+    #[test]
+    fn test_call1_body_patch_sets_enable_thinking_true() {
+        let original = serde_json::json!({
+            "model": "qwen3.5-2b-4bit",
+            "messages": [{"role": "user", "content": "hi"}],
+            "thinking_budget": 2048
+        });
+        let mut body1 = original.clone();
+        let obj = body1.as_object_mut().unwrap();
+        obj.insert("max_tokens".to_string(), serde_json::Value::from(2048u32));
+        obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+        obj.remove("thinking_budget");
+        set_enable_thinking(obj, true);
+
+        assert_eq!(body1["chat_template_kwargs"]["enable_thinking"], true);
+        assert_eq!(body1["max_tokens"], 2048);
+        assert!(body1.get("thinking_budget").is_none());
     }
 }

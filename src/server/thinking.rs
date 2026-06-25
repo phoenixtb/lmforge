@@ -2,6 +2,18 @@ use tracing::{debug, warn};
 
 use crate::model::index::ModelCapabilities;
 
+/// Default reasoning-phase token cap applied when a client requests thinking
+/// (`think:true`) on an oMLX thinking model but omits `thinking_budget`.
+///
+/// The two-call orchestrator is the only path that reliably separates
+/// `reasoning_content` on oMLX, and call-1 must be bounded (it sends
+/// `enable_thinking:true`, which is only safe under a hard token cap). Without
+/// a budget the request would fall back to the `<think>`-tag rewriter, which
+/// produces no reasoning on quants that don't emit native `<think>` tags
+/// (e.g. `qwen3.5:2b:4bit`). Defaulting here gives every client a working,
+/// bounded thinking flow. Matches docintel's configured default.
+pub const DEFAULT_THINKING_BUDGET: u32 = 2048;
+
 /// Extract `<think>...</think>` content from inline text.
 /// Returns (reasoning_content, clean_content).
 ///

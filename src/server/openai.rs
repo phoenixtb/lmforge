@@ -225,6 +225,18 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     let is_thinking_model = model_caps.map(|c| c.thinking).unwrap_or(false);
     let can_use_budget = has_think && is_omlx && is_thinking_model;
 
+    // Default the thinking budget when a client requests thinking on an oMLX
+    // thinking model but doesn't pass one. This forces the bounded two-call
+    // orchestrator (which sends enable_thinking:true in call-1, capped by the
+    // budget) instead of the no-budget rewriter — the latter yields no
+    // reasoning on quants that don't emit native <think> tags. See
+    // thinking::DEFAULT_THINKING_BUDGET.
+    let thinking_budget = if can_use_budget && thinking_budget.is_none() {
+        Some(thinking::DEFAULT_THINKING_BUDGET)
+    } else {
+        thinking_budget
+    };
+
     debug!(
         stream = is_stream,
         think = has_think,

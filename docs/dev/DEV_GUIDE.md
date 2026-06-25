@@ -57,6 +57,49 @@ powershell -File scripts\lmforge.ps1 install -Source release:v0.1.5
 powershell -File scripts\lmforge.ps1 clean -Dev -Purge
 ```
 
+### Fast local build + install (keeps models)
+
+For the day-to-day inner loop: rebuild from this checkout and swap the installed
+artifact **without touching `~/.lmforge/models`**. None of these wipe data — only
+`clean --purge`, `dev-up --wipe-models`, and `e2e` (full clean+purge) do.
+
+| Goal | Command | What it does |
+|------|---------|--------------|
+| **Core only** (fastest) | `./scripts/lmforge.sh install --source local` | incremental `cargo build --release` → copy binary → restart service. Models/UI untouched. |
+| **UI only** (fastest) | `./scripts/util/build-ui-local.sh --no-deps` | reuse `node_modules` (skip `npm ci`) → Tauri build → install via `install-ui`. Models/core untouched. |
+| **Both** | `./scripts/lmforge.sh install --source local && ./scripts/util/build-ui-local.sh --no-deps` | core then UI, both incremental. |
+
+```bash
+# Core only — fastest path, models preserved
+./scripts/lmforge.sh install --source local
+
+# UI only — reuse node_modules (drop --no-deps after a package.json change)
+./scripts/util/build-ui-local.sh --no-deps
+
+# Both
+./scripts/lmforge.sh install --source local && ./scripts/util/build-ui-local.sh --no-deps
+```
+
+```powershell
+# Core only
+powershell -File scripts\lmforge.ps1 install -Source local
+# UI only (reuse node_modules)
+powershell -File scripts\util\build-ui-local.ps1 -NoDeps
+# Both
+powershell -File scripts\lmforge.ps1 install -Source local; powershell -File scripts\util\build-ui-local.ps1 -NoDeps
+```
+
+Notes for max speed:
+- `install --source local` builds **core only** and uses an **incremental** cargo
+  build (no `cargo clean`). First build is cold; subsequent ones are seconds.
+- Avoid `dev-up` for a quick loop — it runs `cargo clean` and wipes `~/.lmforge/engines`
+  by default. If you do use it, `dev-up --no-cargo-clean --keep-engines` keeps it fast
+  (Linux/llama.cpp only).
+- Avoid `e2e --source local` for iterating — it does a **full clean + purge** (wipes
+  models). Use it only for the pre-release gate.
+- Even tighter core loop (no service reinstall): `cargo build --release --bin lmforge`
+  then restart the daemon pointing at `target/release/lmforge`.
+
 ---
 
 ## Test tiers
@@ -204,3 +247,106 @@ See [RELEASE.md](./RELEASE.md) for tag → draft → publish workflow.
 | `dev-clean-reinstall-ui.sh` | UI node_modules reset + dev launch |
 | `dev_ui_*.sh` | Distro-specific WebKit deps for Tauri dev |
 | `release_binary_test.sh` | CUDA12/13 release binary matrix |
+
+---
+
+## Sampling & thinking
+
+### The problem: reasoning loops eat the budget
+
+LMForge follows a **client-owns-sampling** contract — the daemon advises (e.g. it
+warns when `temperature` is too low for thinking) but never overrides what the
+client sends. That keeps the OpenAI/Ollama surfaces predictable, but it means a
+thin client that sends only `temperature` + `max_tokens` inherits the engine's
+default sampling, and Qwen3-class reasoning models degenerate badly under it.
+
+Symptom: ask a reasoning model a "hard" question with `think:true` and a low
+temperature, and the reasoning stream collapses into a repeating tail —
+
+```
+… so the ball is 0.05. Wait. Wait. Wait. Wait. Wait. Wait. …
+```
+
+The loop never terminates on its own, so it **fills the entire `thinking_budget`**
+(default 2048 tokens). The two-call thinking orchestrator then hits the
+budget-exhausted branch, feeds that looping `<think>…</think>` block into call-2
+as a prefill, and call-2 dutifully echoes it — which is why the *thinking* and the
+*answer* come back looking identical. Both symptoms (the loop **and** the
+duplicated answer) have one root cause: **missing repetition/nucleus controls**,
+not a bug in the orchestrator.
+
+### The fix: send the thinking sampling profile
+
+The cure is the standard Qwen3 thinking profile — nucleus + top-k + a repetition
+penalty to break the loop. These are the knobs and what they do:
+
+| Param | Role | Chat default | Thinking default |
+|-------|------|:------------:|:----------------:|
+| `temperature` | Randomness. ≥ 0.6 is required for Qwen3 thinking (lower → deterministic loops). | `0.7` | `0.6` |
+| `top_p` | Nucleus cutoff (cumulative prob). | `0.95` | `0.95` |
+| `top_k` | Keep only the top-k tokens (`0` = off). | `20` | `20` |
+| `repetition_penalty` | **Primary loop-breaker** — `>1` penalizes already-seen tokens. | `1.1` | `1.2` |
+| `presence_penalty` | Secondary anti-repeat; discourages re-using any present token. | `0.0` | `0.3` |
+| `thinking_budget` | Reasoning-phase token cap for the two-call orchestrator. Only sent when `think:true`. | — | `2048` |
+
+These mirror docintel's `LLM_THINKING_*` defaults (`config/defaults.env`), which is
+the reference implementation that streams clean reasoning on the same oMLX engine.
+
+> oMLX note: the daemon derives a `repetition_penalty` from `presence`/`frequency`
+> penalties when the engine doesn't accept them directly, but a client-supplied
+> `repetition_penalty` always wins. Sending `1.2` explicitly is the reliable path.
+
+### curl — thinking (loop-free)
+
+```bash
+curl -sN http://127.0.0.1:11430/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "qwen3.5:4b:6bit",
+    "messages": [{"role":"user","content":"A bat and ball cost $1.10. The bat costs $1 more than the ball. How much is the ball? Reason step by step."}],
+    "stream": true,
+    "think": true,
+    "stream_reasoning_deltas": true,
+    "thinking_budget": 2048,
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "top_k": 20,
+    "repetition_penalty": 1.2,
+    "presence_penalty": 0.3,
+    "max_tokens": 1024
+  }'
+```
+
+Reasoning arrives as `delta.reasoning_content`, the answer as `delta.content`.
+With the profile above the reasoning terminates in a few hundred tokens, so the
+budget isn't exhausted, call-2 never runs, and thinking ≠ answer.
+
+### curl — non-thinking
+
+Omit `think` (or send `think:false`) and the chat profile is enough. No
+`thinking_budget`, no orchestrator — a single pass-through call.
+
+```bash
+curl -sN http://127.0.0.1:11430/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "qwen3.5:4b:6bit",
+    "messages": [{"role":"user","content":"Give me one fun fact about octopuses."}],
+    "stream": true,
+    "temperature": 0.7,
+    "top_p": 0.95,
+    "top_k": 20,
+    "repetition_penalty": 1.1,
+    "max_tokens": 256
+  }'
+```
+
+### Playground & Postman
+
+- **Playground** (`ui` → *Interact → Playground*) bakes both profiles in. The
+  **think** toggle snaps every value to the thinking profile (and back); the
+  **sampling** button opens an Advanced row to override `top_p` / `top_k` /
+  `rep_pen` / `pres_pen` and a *reset* back to the active profile.
+- **Postman** — see [`docs/postman/`](../postman/). The thinking requests carry
+  the profile above so they run loop-free out of the box; tune via the collection
+  variables.

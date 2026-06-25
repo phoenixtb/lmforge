@@ -207,9 +207,9 @@ export interface ModelCapabilities {
   chat: boolean;
   embeddings: boolean;
   thinking: boolean;
-  rerank: boolean;
+  reranking: boolean;
   vision: boolean;
-  code: boolean;
+  code?: boolean;
 }
 
 export interface ModelEntry {
@@ -574,6 +574,156 @@ export function pullModel(
     cancelled = true;
     controller.abort();
   };
+}
+
+// ─── Inference (OpenAI-compatible /v1) — used by the Playground ───────────────
+
+export interface ChatTextPart {
+  type: 'text';
+  text: string;
+}
+export interface ChatImagePart {
+  type: 'image_url';
+  image_url: { url: string };
+}
+/** OpenAI message content: a plain string, or multimodal parts (text + images). */
+export type ChatContent = string | (ChatTextPart | ChatImagePart)[];
+
+export interface ChatMsg {
+  role: 'system' | 'user' | 'assistant';
+  content: ChatContent;
+}
+
+export interface ChatStreamOpts {
+  temperature?: number;
+  max_tokens?: number;
+  /**
+   * Reasoning toggle. `true`/`false` map to the daemon's top-level `think`
+   * field (engine-aware translation happens server-side). Leave undefined for
+   * non-thinking models so no flag is sent.
+   */
+  think?: boolean;
+  /**
+   * Reasoning-phase token cap. Only sent when `think` is true. Engages the
+   * daemon's two-call thinking-budget orchestrator (call-1 = bounded reasoning,
+   * call-2 = answer), which is the only path that reliably separates
+   * `reasoning_content` from `content` on oMLX. Defaults to 2048.
+   */
+  thinking_budget?: number;
+  /**
+   * Nucleus / top-k / min-p sampling and repetition controls. Only sent when
+   * defined. In thinking mode these are the loop-breakers: Qwen3 degenerates
+   * into "Wait. Wait. …" at low temp with default top_p and no penalty, which
+   * burns the whole reasoning budget. Pass the recommended thinking profile
+   * (top_p 0.95, top_k 20, repetition_penalty 1.2) to keep reasoning bounded.
+   */
+  top_p?: number;
+  top_k?: number;
+  min_p?: number;
+  presence_penalty?: number;
+  frequency_penalty?: number;
+  repetition_penalty?: number;
+  /** Abort in-flight generation (Stop button). */
+  signal?: AbortSignal;
+}
+
+/** Which channel a streamed delta belongs to. */
+export type DeltaKind = 'content' | 'reasoning';
+
+/**
+ * POST /v1/chat/completions with `stream:true`, parsing the OpenAI SSE frames.
+ * Calls `onDelta(text, kind)` for each `delta.content` ('content') and
+ * `delta.reasoning_content` ('reasoning') chunk. Resolves on `[DONE]` / stream
+ * end; throws with the server error body on non-2xx.
+ *
+ * VLM: pass `image_url` parts (data: or http(s) URLs) in a user message.
+ * Thinking: pass `think:true` — reasoning is requested to stream live via
+ * `stream_reasoning_deltas` and surfaced on the 'reasoning' channel.
+ */
+export async function streamChat(
+  model: string,
+  messages: ChatMsg[],
+  opts: ChatStreamOpts,
+  onDelta: (text: string, kind: DeltaKind) => void,
+): Promise<void> {
+  const body: Record<string, unknown> = {
+    model,
+    messages,
+    stream: true,
+    temperature: opts.temperature ?? 0.7,
+    max_tokens: opts.max_tokens ?? 512,
+  };
+  if (typeof opts.think === 'boolean') {
+    body.think = opts.think;
+    if (opts.think) {
+      // Ask the daemon to stream reasoning incrementally instead of buffering it.
+      body.stream_reasoning_deltas = true;
+      // Engage the two-call thinking-budget orchestrator (matches docintel).
+      // Without this the daemon falls back to <think>-tag rewriting, which
+      // never fires on oMLX quants that emit reasoning_content natively.
+      body.thinking_budget = opts.thinking_budget ?? 2048;
+    }
+  }
+  // Sampling controls — forwarded only when set (client owns sampling).
+  if (typeof opts.top_p === 'number') body.top_p = opts.top_p;
+  if (typeof opts.top_k === 'number') body.top_k = opts.top_k;
+  if (typeof opts.min_p === 'number') body.min_p = opts.min_p;
+  if (typeof opts.presence_penalty === 'number') body.presence_penalty = opts.presence_penalty;
+  if (typeof opts.frequency_penalty === 'number') body.frequency_penalty = opts.frequency_penalty;
+  if (typeof opts.repetition_penalty === 'number') body.repetition_penalty = opts.repetition_penalty;
+
+  const res = await fetch(`${BASE}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: opts.signal,
+  });
+
+  if (!res.ok || !res.body) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const j = await res.json();
+      detail = (j?.error?.message as string) ?? detail;
+    } catch {
+      /* keep HTTP status */
+    }
+    throw new Error(detail);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop() ?? '';
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t.startsWith('data:')) continue;
+      const payload = t.slice(5).trim();
+      if (payload === '[DONE]') return;
+      try {
+        const delta = JSON.parse(payload)?.choices?.[0]?.delta;
+        if (typeof delta?.content === 'string' && delta.content) onDelta(delta.content, 'content');
+        if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content)
+          onDelta(delta.reasoning_content, 'reasoning');
+      } catch {
+        /* keepalive / partial frame — ignore */
+      }
+    }
+  }
+}
+
+/** Read a File/Blob as a base64 `data:` URL (for VLM image_url parts). */
+export function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result as string);
+    fr.onerror = () => reject(fr.error ?? new Error('read failed'));
+    fr.readAsDataURL(file);
+  });
 }
 
 /** Format bytes → human-readable string */

@@ -58,6 +58,25 @@ clippy/rustfmt.
    --no-ui` (`-NoInference -NoUi`). Use `--no-build` (`-NoBuild`) to reuse an
    existing `target/release` binary.
 
+   **Keep models at cleanup** (`--keep-install` / `-KeepInstall`): skips the
+   end-of-run teardown so the core, UI, **and pulled models stay installed** —
+   handy when iterating so you don't re-download on the next run.
+
+   ```bash
+   ./scripts/lmforge.sh e2e --source local --keep-install
+   ```
+
+   ```powershell
+   powershell -File scripts\lmforge.ps1 e2e -Source local -KeepInstall
+   ```
+
+   Caveat: the run still does a **full clean at the start** (`rm -rf ~/.lmforge`),
+   so any *pre-existing* models are removed first; the suite re-pulls the default
+   E2E models and `--keep-install` leaves *those* in place. To exercise inference
+   against models you already have **without** any clean/pull, run the multi-model
+   tier against a live daemon instead: `SKIP_PULL=1 SKIP_BUILD=1 scripts/lmforge.sh
+   test-multi` (see [DEV_GUIDE.md](./DEV_GUIDE.md)).
+
 ### E2E platform matrix
 
 The default engine and which inference suites run depend on the platform. The

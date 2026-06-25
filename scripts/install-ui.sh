@@ -181,12 +181,19 @@ echo    "  OS/Arch: $OS/$ARCH"
 echo ""
 
 # ── Idempotency check ─────────────────────────────────────────────────────────
-if [[ "$OS" == "Darwin" && -d "$APP_BUNDLE" ]]; then
+# A local build (LMFORGE_UI_LOCAL) is an explicit "update from this checkout"
+# request, so we overwrite the installed bundle (handled below). The early-exit
+# only guards the published-release path, where re-downloading is wasteful.
+if [[ "$OS" == "Darwin" && -d "$APP_BUNDLE" && -z "${LMFORGE_UI_LOCAL:-}" ]]; then
     warn "LMForge.app already installed at $APP_BUNDLE"
     warn "To update, uninstall first: curl -fsSL https://github.com/$REPO/releases/latest/download/uninstall-ui.sh | bash"
     warn "Opening existing app..."
     open "$APP_BUNDLE" 2>/dev/null || true
     exit 0
+fi
+if [[ "$OS" == "Darwin" && -d "$APP_BUNDLE" && -n "${LMFORGE_UI_LOCAL:-}" ]]; then
+    info "Updating existing LMForge.app from local build (replacing $APP_BUNDLE)"
+    osascript -e 'quit app "LMForge"' >/dev/null 2>&1 || true
 fi
 
 # ── Prerequisite: Core must be installed ─────────────────────────────────────
