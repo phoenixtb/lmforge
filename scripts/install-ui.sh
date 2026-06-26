@@ -181,18 +181,19 @@ echo    "  OS/Arch: $OS/$ARCH"
 echo ""
 
 # ── Idempotency check ─────────────────────────────────────────────────────────
-# A local build (LMFORGE_UI_LOCAL) is an explicit "update from this checkout"
+# A local build (LMFORGE_UI_LOCAL) or LMFORGE_UPGRADE=1 is an explicit "update"
 # request, so we overwrite the installed bundle (handled below). The early-exit
-# only guards the published-release path, where re-downloading is wasteful.
-if [[ "$OS" == "Darwin" && -d "$APP_BUNDLE" && -z "${LMFORGE_UI_LOCAL:-}" ]]; then
+# only guards the plain published-release path, where re-downloading is wasteful.
+if [[ "$OS" == "Darwin" && -d "$APP_BUNDLE" && -z "${LMFORGE_UI_LOCAL:-}" && "${LMFORGE_UPGRADE:-0}" != "1" ]]; then
     warn "LMForge.app already installed at $APP_BUNDLE"
-    warn "To update, uninstall first: curl -fsSL https://github.com/$REPO/releases/latest/download/uninstall-ui.sh | bash"
+    warn "To update in place: LMFORGE_UPGRADE=1 curl -fsSL https://github.com/$REPO/releases/latest/download/install-ui.sh | bash"
+    warn "To reinstall clean: curl -fsSL https://github.com/$REPO/releases/latest/download/uninstall-ui.sh | bash"
     warn "Opening existing app..."
     open "$APP_BUNDLE" 2>/dev/null || true
     exit 0
 fi
-if [[ "$OS" == "Darwin" && -d "$APP_BUNDLE" && -n "${LMFORGE_UI_LOCAL:-}" ]]; then
-    info "Updating existing LMForge.app from local build (replacing $APP_BUNDLE)"
+if [[ "$OS" == "Darwin" && -d "$APP_BUNDLE" ]] && { [[ -n "${LMFORGE_UI_LOCAL:-}" ]] || [[ "${LMFORGE_UPGRADE:-0}" == "1" ]]; }; then
+    info "Updating existing LMForge.app ($([[ -n "${LMFORGE_UI_LOCAL:-}" ]] && echo "local build" || echo "upgrade"); replacing $APP_BUNDLE)"
     osascript -e 'quit app "LMForge"' >/dev/null 2>&1 || true
 fi
 

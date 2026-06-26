@@ -61,6 +61,19 @@ function Ensure-LmforgeDaemon {
     }
 }
 
+# Stop the daemon/service so the (locked) .exe can be overwritten on reinstall.
+function Stop-LmforgeForInstall {
+    param([string]$Binary)
+    try { if (Test-Path $Binary) { & $Binary service stop 2>$null; & $Binary stop 2>$null } } catch {}
+    try {
+        Invoke-WebRequest -Uri "http://127.0.0.1:11430/lf/shutdown" -Method Post -TimeoutSec 3 -UseBasicParsing | Out-Null
+    } catch {}
+    Start-Sleep -Seconds 1
+    # Only the daemon process ("lmforge"), not the UI ("lmforge-ui").
+    Get-Process -Name "lmforge" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+}
+
 Write-Host ""
 Write-Host "  LMForge Core - Installer" -ForegroundColor Cyan
 Write-Host ""
@@ -77,9 +90,14 @@ Write-Host "  Install: $InstallDir\$Binary"
 Write-Host ""
 
 # --- Idempotency check ---
+# A local build (LMFORGE_LOCAL_BIN) or LMFORGE_UPGRADE=1 always overwrites — an
+# explicit dev/upgrade action. The early-exit only guards plain release installs.
 $env:PATH = "$InstallDir;$env:PATH"
 $LmforgeCmd = Get-Command "lmforge" -ErrorAction SilentlyContinue
-if ($LmforgeCmd -or (Test-Path "$InstallDir\$Binary")) {
+$AlreadyInstalled = ($LmforgeCmd -or (Test-Path "$InstallDir\$Binary"))
+$IsLocal   = [bool]$env:LMFORGE_LOCAL_BIN
+$IsUpgrade = ($env:LMFORGE_UPGRADE -eq "1")
+if ($AlreadyInstalled -and -not $IsLocal -and -not $IsUpgrade) {
     $CoreBin = if ($LmforgeCmd) { $LmforgeCmd.Source } else { "$InstallDir\$Binary" }
     $CoreVerRaw = & $CoreBin --version 2>$null
     $CoreVerMatch = [regex]::Match($CoreVerRaw, '(\d+\.\d+\.\d+)')
@@ -93,9 +111,16 @@ if ($LmforgeCmd -or (Test-Path "$InstallDir\$Binary")) {
         Info "Daemon is running at http://127.0.0.1:11430"
     }
     Warn "Use 'lmforge service status' to check the daemon."
+    Warn "To upgrade in place: `$env:LMFORGE_UPGRADE = '1'; irm https://github.com/$Repo/releases/latest/download/install-core.ps1 | iex"
     Warn "To reinstall:"
     Warn "  irm https://github.com/$Repo/releases/latest/download/uninstall-core.ps1 | iex"
     exit 0
+}
+if ($AlreadyInstalled -and ($IsLocal -or $IsUpgrade)) {
+    $CoreBin = if ($LmforgeCmd) { $LmforgeCmd.Source } else { "$InstallDir\$Binary" }
+    if ($IsLocal) { Info "Local build - reinstalling over existing install..." }
+    else          { Info "Upgrading existing install..." }
+    Stop-LmforgeForInstall $CoreBin
 }
 
 # --- Resolve download URL ---

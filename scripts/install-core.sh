@@ -105,8 +105,10 @@ echo    "  Install: $INSTALL_DIR/$BINARY_NAME"
 echo ""
 
 # ── Idempotency check ─────────────────────────────────────────────────────────
+# A local build (LMFORGE_LOCAL_BIN set) always overwrites — it's an explicit dev
+# action, equivalent to an upgrade. The early-exit only guards release installs.
 export PATH="$INSTALL_DIR:$HOME/.local/bin:$PATH"
-if [[ -x "$TARGET_BIN" ]] && [[ "${LMFORGE_UPGRADE:-0}" != "1" ]]; then
+if [[ -x "$TARGET_BIN" ]] && [[ "${LMFORGE_UPGRADE:-0}" != "1" ]] && [[ -z "${LMFORGE_LOCAL_BIN:-}" ]]; then
     INSTALLED_VER=$("$TARGET_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
     warn "lmforge $INSTALLED_VER is already installed at $TARGET_BIN"
     warn "Use 'lmforge service status' to check the daemon."
@@ -114,8 +116,8 @@ if [[ -x "$TARGET_BIN" ]] && [[ "${LMFORGE_UPGRADE:-0}" != "1" ]]; then
     warn "To reinstall clean: bash <(curl -fsSL https://github.com/$REPO/releases/latest/download/uninstall-core.sh)"
     exit 0
 fi
-if [[ -x "$TARGET_BIN" ]] && [[ "${LMFORGE_UPGRADE:-0}" == "1" ]]; then
-    section "Upgrading lmforge..."
+if [[ -x "$TARGET_BIN" ]] && { [[ "${LMFORGE_UPGRADE:-0}" == "1" ]] || [[ -n "${LMFORGE_LOCAL_BIN:-}" ]]; }; then
+    section "$([[ -n "${LMFORGE_LOCAL_BIN:-}" ]] && echo "Reinstalling lmforge (local build)..." || echo "Upgrading lmforge...")"
     stop_running_lmforge_for_install
 fi
 
@@ -170,7 +172,17 @@ chmod +x "$TMP_BIN"
 if [[ -e "$TARGET_BIN" ]] || pgrep -x "$BINARY_NAME" &>/dev/null; then
     stop_running_lmforge_for_install
 fi
+# Remove first so the copy lands on a fresh inode. Overwriting in place keeps the
+# old inode and, on macOS, the stale code-signature → the kernel SIGKILLs the
+# binary on exec ("Killed: 9"). Also sidesteps ETXTBSY if a process lingers.
+rm -f "$TARGET_BIN"
 cp "$TMP_BIN" "$TARGET_BIN"
+# Local builds aren't notarised/signed; macOS refuses to run a binary whose
+# signature doesn't match. Ad-hoc re-sign so the dev build runs. (Release
+# installs keep their official signature — only re-sign for local builds.)
+if [[ -n "${LMFORGE_LOCAL_BIN:-}" ]] && [[ "$(uname -s)" == "Darwin" ]] && command -v codesign &>/dev/null; then
+    codesign --force --sign - "$TARGET_BIN" 2>/dev/null || true
+fi
 info "Installed $TARGET_BIN"
 
 # ── PATH injection ────────────────────────────────────────────────────────────

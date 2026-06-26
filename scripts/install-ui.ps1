@@ -33,19 +33,23 @@ Write-Host "  Version: $Version"
 Write-Host ""
 
 # --- Idempotency: already installed ---
-# A local build ($env:LMFORGE_UI_LOCAL) is an explicit "update from this checkout"
-# request, so let the installer overwrite. The early-exit only guards the
-# published-release path, where re-downloading is wasteful.
-if ((Test-Path $AppExe) -and (-not $env:LMFORGE_UI_LOCAL)) {
+# A local build ($env:LMFORGE_UI_LOCAL) or LMFORGE_UPGRADE=1 is an explicit
+# "update" request, so let the installer overwrite. The early-exit only guards
+# the plain published-release path, where re-downloading is wasteful.
+$UiIsLocal   = [bool]$env:LMFORGE_UI_LOCAL
+$UiIsUpgrade = ($env:LMFORGE_UPGRADE -eq "1")
+if ((Test-Path $AppExe) -and -not $UiIsLocal -and -not $UiIsUpgrade) {
     Warn "LMForge UI already installed at $AppExe"
-    Warn "To update, uninstall first:"
+    Warn "To update in place: `$env:LMFORGE_UPGRADE = '1'; irm https://github.com/$Repo/releases/latest/download/install-ui.ps1 | iex"
+    Warn "To reinstall clean:"
     Warn "  irm https://github.com/$Repo/releases/latest/download/uninstall-ui.ps1 | iex"
     Info "Launching existing app..."
     Start-Process $AppExe
     exit 0
 }
-if ((Test-Path $AppExe) -and $env:LMFORGE_UI_LOCAL) {
-    Info "Updating existing LMForge UI from local build (overwriting $AppExe)"
+if ((Test-Path $AppExe) -and ($UiIsLocal -or $UiIsUpgrade)) {
+    if ($UiIsLocal) { Info "Updating existing LMForge UI from local build (overwriting $AppExe)" }
+    else            { Info "Upgrading existing LMForge UI (overwriting $AppExe)" }
     Get-Process -Name "lmforge-ui" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 

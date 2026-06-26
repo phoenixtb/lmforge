@@ -197,6 +197,24 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
         }
     }
 
+    // oMLX only stops on the configured eos_token. Models whose chat template
+    // ends the assistant turn with a different token (e.g. Phi-4's `<|end|>` vs
+    // eos `<|endoftext|>`) over-generate: the engine runs past the turn end,
+    // emits the role token, and regenerates a duplicate answer. Inject the
+    // model's detected turn-end tokens as `stop` (client-supplied `stop` wins).
+    if state.engine_config.id == "omlx" {
+        let stops: Vec<String> = model_caps.map(|c| c.stop_tokens.clone()).unwrap_or_default();
+        if !stops.is_empty()
+            && let Some(obj) = body_value.as_object_mut()
+            && !obj.contains_key("stop")
+        {
+            obj.insert(
+                "stop".to_string(),
+                serde_json::Value::Array(stops.into_iter().map(serde_json::Value::String).collect()),
+            );
+        }
+    }
+
     let is_stream = body_value
         .get("stream")
         .and_then(|v| v.as_bool())
@@ -220,10 +238,15 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     //   • engine must be oMLX (only engine with native thinking support we manage)
     //   • model must have thinking capability in the index
     //   • think must be requested (has_think=true)
+    //   • model must NOT be a native-reasoning model — those emit reasoning in a
+    //     single call and break on the orchestrator's synthetic <think> prefill
+    //     (e.g. Phi-4-reasoning hallucinates a new dialogue turn). They stay on
+    //     the single-call path, which already separates reasoning_content/content.
     //   • thinking_budget must be explicitly provided
     let is_omlx = state.engine_config.id == "omlx";
     let is_thinking_model = model_caps.map(|c| c.thinking).unwrap_or(false);
-    let can_use_budget = has_think && is_omlx && is_thinking_model;
+    let is_native_reasoning = model_caps.map(|c| c.native_reasoning).unwrap_or(false);
+    let can_use_budget = has_think && is_omlx && is_thinking_model && !is_native_reasoning;
 
     // Default the thinking budget when a client requests thinking on an oMLX
     // thinking model but doesn't pass one. This forces the bounded two-call

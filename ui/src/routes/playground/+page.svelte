@@ -33,7 +33,8 @@
   let msgs: UiMsg[] = [];
   let input = '';
   let pendingImages: string[] = [];
-  let maxTokens = 512;
+  let maxTokens = 512;     // max ANSWER tokens (final response cap)
+  let thinkBudget = 2048;  // max REASONING tokens before the model must answer
   let thinking = false;
   let busy = false;
   let abort: AbortController | null = null;
@@ -47,12 +48,11 @@
   const CHAT_PROFILE = { temperature: 0.7, topP: 0.95, topK: 20, repPen: 1.1, presPen: 0.0 };
   const THINK_PROFILE = { temperature: 0.6, topP: 0.95, topK: 20, repPen: 1.2, presPen: 0.3 };
 
-  // Reasoning-phase cap for the two-call orchestrator. `max_tokens` is the TOTAL
-  // budget (reasoning + answer), so when thinking we send budget + the answer
-  // headroom — otherwise an exhausted budget starves call-2 (e.g. 512−2048 → 64
-  // tokens of answer). Weak models (qwen3.5:2b) can still loop within the budget;
-  // use a stronger model (qwen3.5:4b:6bit) for multi-step reasoning.
-  const THINK_BUDGET = 2048;
+  // `max_tokens` on the wire is the TOTAL budget (reasoning + answer). When
+  // thinking we send `thinkBudget` (reasoning cap) + `maxTokens` (answer cap) so
+  // an exhausted reasoning budget never starves the answer (e.g. 512−2048 → 64
+  // tokens of answer). Both are user-tunable knobs. Weak models (qwen3.5:2b) can
+  // still loop within the budget; use ≥4B for multi-step reasoning.
 
   let advancedOpen = false;
   let temperature = CHAT_PROFILE.temperature;
@@ -158,9 +158,9 @@
         wire,
         {
           temperature,
-          max_tokens: useThink ? THINK_BUDGET + maxTokens : maxTokens,
+          max_tokens: useThink ? thinkBudget + maxTokens : maxTokens,
           think: useThink,
-          thinking_budget: useThink ? THINK_BUDGET : undefined,
+          thinking_budget: useThink ? thinkBudget : undefined,
           top_p: topP,
           top_k: topK,
           presence_penalty: presPen,
@@ -292,7 +292,16 @@
         temp
         <input type="number" min="0" max="2" step="0.1" bind:value={temperature} disabled={busy} />
       </label>
-      <label class="ctl" title="Max output tokens">
+      {#if thinkingSupported}
+        <label
+          class="ctl"
+          title="Thinking budget — max reasoning tokens the model may spend before it must answer. Applies only when think is on; the answer still gets the full 'max' on top."
+        >
+          budget
+          <input type="number" min="128" max="8192" step="128" bind:value={thinkBudget} disabled={busy || !thinking} />
+        </label>
+      {/if}
+      <label class="ctl" title="Max answer tokens — caps the final response length (added on top of the thinking budget when think is on)">
         max
         <input type="number" min="1" max="8192" step="1" bind:value={maxTokens} disabled={busy} />
       </label>

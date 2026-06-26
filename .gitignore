@@ -74,3 +74,6 @@ logs/
 # inputs.yaml and .gitkeep are tracked; timestamped result files are not.
 tests/integration/reports/*.json
 tests/integration/reports/*.md
+
+# think_bench output
+bench_results/

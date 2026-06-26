@@ -60,6 +60,22 @@ pub struct ModelCapabilities {
     /// path falls back to spec-dec OFF rather than guessing.
     #[serde(default)]
     pub mtp: Option<bool>,
+    /// Turn-delimiter tokens detected from the chat template that mark the end
+    /// of an assistant turn (e.g. Phi-4's `<|end|>`). Some models use a turn-end
+    /// token that differs from their configured `eos_token`; oMLX only stops on
+    /// eos, so without these as explicit `stop` sequences it runs past the turn
+    /// end and regenerates. The server injects them as `stop` for oMLX when the
+    /// client didn't supply its own.
+    #[serde(default)]
+    pub stop_tokens: Vec<String>,
+    /// True for models that emit `reasoning_content` natively in a single engine
+    /// call and do NOT respond to the `enable_thinking` chat-template flag
+    /// (Phi-4-reasoning, DeepSeek-R1 distills). The two-call thinking-budget
+    /// orchestrator — which prefills a synthetic `<think>…</think>` assistant
+    /// turn and toggles `enable_thinking` — breaks these models (they hallucinate
+    /// a new turn). The server keeps them on the single-call path.
+    #[serde(default)]
+    pub native_reasoning: bool,
 }
 
 impl ModelIndex {
@@ -576,6 +592,62 @@ pub fn detect_capabilities(
         && (content.contains("<think>") || content.contains("enable_thinking"))
     {
         caps.thinking = true;
+    }
+
+    // Reasoning models whose tokenizer/template lack the literal markers above
+    // (e.g. Phi-4-mini-reasoning, DeepSeek-R1 distills) still emit reasoning
+    // natively via the engine. Flag them thinking-capable from the id/repo hint
+    // so the UI exposes the toggle.
+    if caps.chat && !caps.thinking {
+        let hint = format!(
+            "{} {}",
+            model_id_hint.unwrap_or(""),
+            hf_repo_hint.unwrap_or("")
+        )
+        .to_lowercase();
+        if hint.contains("reasoning")
+            || hint.contains(":thinking")
+            || hint.contains("deepseek-r1")
+            || hint.contains("-r1-")
+            || hint.contains("qwq")
+        {
+            caps.thinking = true;
+        }
+    }
+
+    // Turn-delimiter stop tokens. Some models terminate the assistant turn with
+    // a token that is NOT their configured eos_token (Phi-4: turn end `<|end|>`
+    // vs eos `<|endoftext|>`). oMLX only stops on eos, so it runs past the turn
+    // end, self-prompts a new `<|assistant|>` turn and regenerates — duplicated
+    // output + leaked special tokens. Detect the turn-end markers present in the
+    // chat template so the server can pass them as `stop`.
+    if caps.chat {
+        let mut template = String::new();
+        if let Ok(c) = std::fs::read_to_string(&tokenizer_config_path) {
+            template.push_str(&c);
+        }
+        if let Ok(c) = std::fs::read_to_string(&jinja_path) {
+            template.push_str(&c);
+        }
+        const TURN_END_MARKERS: &[&str] = &[
+            "<|end|>",         // Phi-4
+            "<|im_end|>",      // ChatML / Qwen
+            "<|eot_id|>",      // Llama 3
+            "<|end_of_turn|>", // some chat templates
+            "<end_of_turn>",   // Gemma
+        ];
+        for m in TURN_END_MARKERS {
+            if template.contains(m) && !caps.stop_tokens.iter().any(|s| s == m) {
+                caps.stop_tokens.push((*m).to_string());
+            }
+        }
+
+        // A thinking model whose template has no `enable_thinking` switch emits
+        // reasoning natively in one call and cannot be toggled off mid-turn — the
+        // budget orchestrator's prefill breaks it. Keep it single-call.
+        if caps.thinking && !template.contains("enable_thinking") {
+            caps.native_reasoning = true;
+        }
     }
 
     // =========================================================================
