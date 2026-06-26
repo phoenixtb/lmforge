@@ -114,6 +114,15 @@
     if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
   }
 
+  // Keep the (independently scrollable) reasoning panel pinned to the latest
+  // token as it streams. `max-height` gives .rtext its own scrollbar, so the
+  // outer transcript scroll alone no longer follows the thinking text.
+  function autoscroll(node: HTMLElement, _dep: unknown) {
+    const pin = () => { node.scrollTop = node.scrollHeight; };
+    pin();
+    return { update: pin };
+  }
+
   /** Map the visible transcript to OpenAI wire messages (multimodal for VLM). */
   function toWireMessages(): ChatMsg[] {
     const out: ChatMsg[] = [];
@@ -397,7 +406,7 @@
                     <path d="m6 9 6 6 6-6"/>
                   </svg>
                 </summary>
-                <div class="rtext">{m.reasoning}</div>
+                <div class="rtext" use:autoscroll={m.reasoning}>{m.reasoning}</div>
               </details>
             {/if}
             {#if m.text}
