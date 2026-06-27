@@ -678,6 +678,33 @@ pub fn detect_capabilities(
     }
 
     // =========================================================================
+    // Signal E-thinking — GGUF embedded chat-template reasoning probe.
+    //
+    // GGUF dirs carry no tokenizer_config.json / chat_template.jinja, so the
+    // file-based thinking detection above never fires. The chat template is
+    // embedded in GGUF metadata (`tokenizer.chat_template`). Probe it so the
+    // Playground exposes the think toggle for GGUF reasoning models — notably
+    // base Qwen3, a hybrid thinking model pulled as `qwen3:4b:4bit` (no
+    // `:thinking` shortcut marker for the id-hint heuristic to catch).
+    // =========================================================================
+    if caps.chat
+        && !caps.thinking
+        && has_gguf_weights(model_dir)
+        && let Some(tmpl) = crate::model::gguf_inspect::read_chat_template_for_model(model_dir)
+        && (tmpl.contains("<think>")
+            || tmpl.contains("enable_thinking")
+            || tmpl.contains("reasoning_content"))
+    {
+        caps.thinking = true;
+        // Same rule as the file-template path: a thinking model whose template
+        // lacks an `enable_thinking` switch emits reasoning natively in one
+        // call and can't be toggled off mid-turn.
+        if !tmpl.contains("enable_thinking") {
+            caps.native_reasoning = true;
+        }
+    }
+
+    // =========================================================================
     // VLM mmproj sidecar lookup (llama.cpp-served VLMs only).
     // Convention: `mmproj-*.gguf` next to the main weights file. If we already
     // know vision=true we look unconditionally; if vision is unset but a

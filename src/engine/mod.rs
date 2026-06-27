@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod adapters;
+pub mod calibration;
 pub mod daemon;
 pub mod draft_pairs;
 pub mod installer;

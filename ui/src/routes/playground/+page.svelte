@@ -515,10 +515,12 @@
 
   .model-sel {
     background: var(--surface-2); color: var(--text);
+    color-scheme: dark;
     border: 1px solid var(--border-2); border-radius: var(--radius-sm);
     font-size: 12px; padding: 4px 8px; max-width: 280px;
     font-family: var(--font-mono);
   }
+  .model-sel option { background: var(--surface-2); color: var(--text); }
   .model-sel:disabled { opacity: 0.6; }
 
   .ctl {

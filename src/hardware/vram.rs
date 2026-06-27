@@ -75,6 +75,59 @@ pub fn estimate_model_vram(size_bytes: u64) -> f32 {
     size_gb * 1.2 // 1.2x heuristic for KV cache and context overhead
 }
 
+/// Structured per-load VRAM footprint estimate.
+///
+/// `base` (weights + KV + compute scratch) is the mandatory cost of serving the
+/// model. `spec` is the *optional* speculative-decoding overhead (MTP rs cache /
+/// draft head) — separable so the admission layer can degrade spec-dec to off
+/// and still serve when only the base fits.
+///
+/// `calibrated_total_gb`, when present, is an empirically-measured total from a
+/// prior successful load; the effective budget takes the larger of it and the
+/// analytic sum so neither signal is ever under-budgeted.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VramFootprint {
+    pub weights_gb: f32,
+    pub kv_gb: f32,
+    pub scratch_gb: f32,
+    pub spec_gb: f32,
+    pub calibrated_total_gb: Option<f32>,
+}
+
+impl VramFootprint {
+    /// Mandatory cost: weights + KV + compute scratch (no spec-dec).
+    pub fn base_gb(&self) -> f32 {
+        (self.weights_gb + self.kv_gb + self.scratch_gb).max(0.0)
+    }
+
+    /// Analytic total including spec-dec overhead.
+    pub fn analytic_total_gb(&self) -> f32 {
+        self.base_gb() + self.spec_gb.max(0.0)
+    }
+
+    /// Total to budget for: the larger of the analytic sum and any measured
+    /// calibration (conservative — never under-budget either signal).
+    pub fn effective_total_gb(&self) -> f32 {
+        match self.calibrated_total_gb {
+            Some(m) => m.max(self.analytic_total_gb()),
+            None => self.analytic_total_gb(),
+        }
+    }
+
+    /// Legacy size-only fallback (weights + 20% for KV), used by engines that
+    /// don't yet provide an analytic estimator and as a last-resort default.
+    pub fn from_size_bytes(size_bytes: u64) -> Self {
+        let w = size_bytes as f32 / (1024.0 * 1024.0 * 1024.0);
+        Self {
+            weights_gb: w,
+            kv_gb: w * 0.2,
+            scratch_gb: 0.0,
+            spec_gb: 0.0,
+            calibrated_total_gb: None,
+        }
+    }
+}
+
 /// RAM kept free for the OS, page cache, and per-model KV-cache growth on a
 /// CPU-only host. The larger of a 1.5 GB floor and 20% of total RAM. This is the
 /// safety margin that keeps model residency from invading what the OS needs.

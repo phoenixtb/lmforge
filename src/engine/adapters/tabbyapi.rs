@@ -204,6 +204,7 @@ impl EngineAdapter for TabbyApiAdapter {
         data_dir: &Path,
         logs_dir: &Path,
         role: ModelRole,
+        _plan: &crate::engine::adapter::LoadPlan,
     ) -> Result<ActiveEngine> {
         if role != ModelRole::Chat {
             anyhow::bail!(
@@ -576,6 +577,7 @@ mod tests {
         let logs = std::env::temp_dir();
         let data = std::env::temp_dir();
         let model_dir = data.join("models").join("nonexistent");
+        let plan = adapter.plan_load("test-model", &model_dir, &data, ModelRole::Embed, 0, 0.0);
         let result = adapter
             .start(
                 "test-model",
@@ -584,6 +586,7 @@ mod tests {
                 &data,
                 &logs,
                 ModelRole::Embed,
+                &plan,
             )
             .await;
         match result {

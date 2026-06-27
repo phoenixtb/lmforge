@@ -209,8 +209,14 @@ pub fn resolve(
         return SpecResolved::off("spec-dec disabled by config");
     }
 
-    let headroom_gb = vram_headroom_gb(&budget);
-    let safety_gb = cfg.vram_safety_mib as f32 / 1024.0;
+    // NOTE: MTP VRAM gating is intentionally NOT done here anymore. The engine
+    // manager owns VRAM admission: it estimates the full load footprint
+    // (weights + KV + spec overhead), evicts idle models to make room, and
+    // degrades spec-dec to off (or denies the load) when it can't fit. This
+    // resolver is now purely about capability/config validity. `vram_fits_mtp`
+    // remains as a reusable last-resort predicate. Draft-model mode keeps its
+    // own VRAM check because the draft is a *separate* model file the manager's
+    // footprint doesn't yet account for.
 
     match requested {
         SpecMode::Mtp => {
@@ -219,15 +225,6 @@ pub fn resolve(
                     "MTP requested but model.capabilities.mtp != true — \
                      re-pull the model or stay on mode=off",
                 );
-            }
-            // MTP draws from the same model's internal head — adds a few
-            // hundred MiB of activation cache. Be conservative: require
-            // safety_gb to be free on GPU.
-            if budget.gpu_vendor != GpuVendor::None && headroom_gb < safety_gb {
-                return SpecResolved::off(format!(
-                    "VRAM headroom {:.2} GB < safety floor {:.2} GB — disabling spec-dec to avoid OOM",
-                    headroom_gb, safety_gb
-                ));
             }
             SpecResolved {
                 mode: SpecMode::Mtp,
@@ -278,12 +275,6 @@ pub fn resolve(
         }
         SpecMode::Auto => {
             if inputs.mtp == Some(true) {
-                if budget.gpu_vendor != GpuVendor::None && headroom_gb < safety_gb {
-                    return SpecResolved::off(format!(
-                        "mode=auto: VRAM headroom {:.2} GB < safety floor {:.2} GB",
-                        headroom_gb, safety_gb
-                    ));
-                }
                 return SpecResolved {
                     mode: SpecMode::Mtp,
                     draft_max: draft_max_effective,
@@ -342,6 +333,30 @@ pub fn vram_fits_draft(budget: &VramBudget, draft_size_gb: f32, vram_safety_mib:
     }
     let safety_gb = vram_safety_mib as f32 / 1024.0;
     vram_headroom_gb(budget) >= draft_size_gb + safety_gb
+}
+
+/// Whether the remaining VRAM can host MTP's draft head on top of the main
+/// model.
+///
+/// MTP doesn't load a second model, but `llama-server` still allocates a
+/// recurrent-state ("rs") cache plus a dedicated MTP context buffer for the
+/// internal draft head. Empirically these are large and scale with the model:
+/// on `Qwen3.5-4B-MTP` (Q4_K_XL ≈ 2.5 GB, ctx 4096 × 4 slots) llama-server
+/// reserved ~1.8 GB of MTP context and then tried to allocate a ~3.4 GB rs
+/// cache — i.e. MTP overhead ran *larger* than the quantized weights, far
+/// beyond the flat 1 GB safety floor. Loading it with only ~4.8 GB free OOM'd
+/// with "failed to allocate buffer for rs cache".
+///
+/// So gate MTP on having a model-sized reserve free *after* the weights:
+/// `headroom >= model_size + safety`. On a tight-VRAM box this falls back to
+/// plain decoding (always correct) instead of crashing mid-load — and avoids
+/// the crash + S-2.8 retry churn that buried the real cause in the logs.
+pub fn vram_fits_mtp(budget: &VramBudget, vram_safety_mib: u32) -> bool {
+    if budget.gpu_vendor == GpuVendor::None {
+        return true;
+    }
+    let safety_gb = vram_safety_mib as f32 / 1024.0;
+    vram_headroom_gb(budget) >= budget.model_size_gb + safety_gb
 }
 
 fn env_override() -> Option<SpecMode> {
@@ -582,26 +597,33 @@ mod tests {
         );
     }
 
-    // ── VRAM safety floor ────────────────────────────────────────────────
+    // ── VRAM gating now lives in the engine manager, not the resolver ────────
 
     #[test]
-    fn resolve_vram_below_safety_floor_disables_mtp() {
-        let cfg = SpeculativeConfig {
-            vram_safety_mib: 1024, // 1.0 GB
-            ..Default::default()
-        };
-        // free 4 GB, model 3.5 GB → 0.5 GB headroom, below 1.0 GB floor.
+    fn resolve_no_longer_vram_gates_mtp() {
+        // The resolver must NOT disable MTP on tight VRAM anymore — the manager
+        // owns admission (it folds spec overhead into the load footprint, evicts
+        // idle models, and degrades to off when it can't fit). Same tight budget
+        // that previously returned Off must now return Mtp.
+        let cfg = SpeculativeConfig::default(); // safety 1 GB
         let r = resolve(
             ModelSpecInputs {
                 mtp: Some(true),
                 ..Default::default()
             },
             &cfg,
-            gpu_budget(4.0, 3.5),
+            gpu_budget(4.8, 2.5), // would have failed the old model-sized reserve
             None,
         );
-        assert_eq!(r.mode, SpecMode::Off);
-        assert!(r.reason.contains("headroom"));
+        assert_eq!(r.mode, SpecMode::Mtp);
+    }
+
+    #[test]
+    fn vram_fits_mtp_requires_model_sized_reserve() {
+        // free 8, model 2.5 → headroom 5.5 >= 2.5 + 1.0 → fits.
+        assert!(vram_fits_mtp(&gpu_budget(8.0, 2.5), 1024));
+        // free 4.8, model 2.5 → headroom 2.3 < 3.5 → does not fit.
+        assert!(!vram_fits_mtp(&gpu_budget(4.8, 2.5), 1024));
     }
 
     #[test]

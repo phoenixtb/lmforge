@@ -40,6 +40,82 @@ impl EngineAdapter for LlamacppAdapter {
         Ok(false)
     }
 
+    fn plan_load(
+        &self,
+        model_id: &str,
+        model_dir: &Path,
+        data_dir: &Path,
+        role: ModelRole,
+        size_bytes: u64,
+        free_vram_gb: f32,
+    ) -> crate::engine::adapter::LoadPlan {
+        use crate::engine::adapter::LoadPlan;
+
+        let profile = crate::hardware::probe::detect_platform().unwrap_or_default();
+
+        let gguf_path = find_gguf_file(model_dir);
+        let mmproj_path = find_mmproj_file(model_dir);
+        let model_size_gb = gguf_path
+            .as_deref()
+            .map(file_size_gb)
+            .filter(|&g| g > 0.0)
+            .unwrap_or_else(|| size_bytes as f32 / (1024.0 * 1024.0 * 1024.0));
+        let mmproj_size_gb = mmproj_path.as_deref().map(file_size_gb).unwrap_or(0.0);
+        let is_vlm = mmproj_path.is_some();
+
+        let runtime = plan_runtime(
+            profile.gpu_vendor,
+            profile.total_ram_gb,
+            free_vram_gb,
+            model_size_gb,
+            mmproj_size_gb,
+            is_vlm,
+        );
+
+        // Spec-dec decision (chat only). The resolver no longer VRAM-gates MTP —
+        // the manager folds spec overhead into the footprint and evicts/degrades.
+        let spec = if matches!(role, ModelRole::Chat) {
+            let models_dir = model_dir.parent().unwrap_or(data_dir);
+            let spec_inputs = ModelSpecInputs {
+                mtp: load_model_mtp(data_dir, models_dir, model_id),
+                is_moe: detect_moe_by_name(model_id),
+            };
+            let budget = VramBudget {
+                gpu_vendor: profile.gpu_vendor,
+                free_vram_gb,
+                model_size_gb,
+                mmproj_size_gb,
+            };
+            let hf_repo = load_model_hf_repo(data_dir, models_dir, model_id);
+            let draft_ctx = crate::engine::draft_pairs::build_draft_context(
+                data_dir,
+                models_dir,
+                model_id,
+                hf_repo.as_deref(),
+            );
+            let spec_cfg = load_speculative_config(data_dir);
+            resolve_spec(spec_inputs, &spec_cfg, budget, draft_ctx.as_ref())
+        } else {
+            SpecResolved::off("spec-dec applies to chat only")
+        };
+
+        let footprint = compute_footprint(
+            model_dir,
+            model_size_gb,
+            mmproj_size_gb,
+            &runtime,
+            is_vlm,
+            profile.gpu_vendor,
+            &spec,
+        );
+
+        LoadPlan {
+            footprint,
+            spec,
+            runtime,
+        }
+    }
+
     async fn start(
         &self,
         model_id: &str,
@@ -48,6 +124,7 @@ impl EngineAdapter for LlamacppAdapter {
         data_dir: &Path,
         logs_dir: &Path,
         role: ModelRole,
+        plan: &crate::engine::adapter::LoadPlan,
     ) -> Result<ActiveEngine> {
         // Resolve the active llama.cpp variant from on-disk state +
         // hardware. `variant::select` picks one of {Cuda12, Cuda13, Vulkan,
@@ -101,30 +178,19 @@ impl EngineAdapter for LlamacppAdapter {
         let port_str = port.to_string();
         let gguf_str = gguf_path.to_string_lossy().to_string();
 
+        // Runtime (ngl/ctx) and spec-dec plan were resolved up-front by
+        // `plan_load` and threaded in via `plan` so the manager's admission
+        // budget and the actual spawn config can never drift. The manager may
+        // have downgraded `plan.spec` to Off when VRAM headroom was tight.
         let mmproj_path = find_mmproj_file(model_dir);
-        let model_size_gb = file_size_gb(&gguf_path);
-        let mmproj_size_gb = mmproj_path.as_deref().map(file_size_gb).unwrap_or(0.0);
-
-        // (`profile` was probed above for variant selection — reuse it
-        // here for the VRAM-aware runtime planner instead of probing
-        // again. Double-probing shelled out to nvidia-smi twice.)
-        let free_vram_gb = crate::hardware::vram::get_free_vram(&profile);
-        let plan = plan_runtime(
-            profile.gpu_vendor,
-            profile.total_ram_gb,
-            free_vram_gb,
-            model_size_gb,
-            mmproj_size_gb,
-            mmproj_path.is_some(),
-        );
 
         info!(
             model_id = %model_id,
-            ngl = plan.ngl,
-            ctx_size = plan.ctx_size,
-            free_vram_gb = plan.free_vram_gb,
-            model_size_gb,
-            mmproj_size_gb,
+            ngl = plan.runtime.ngl,
+            ctx_size = plan.runtime.ctx_size,
+            free_vram_gb = plan.runtime.free_vram_gb,
+            footprint_total_gb = plan.footprint.effective_total_gb(),
+            spec_mode = ?plan.spec.mode,
             "llama.cpp runtime plan"
         );
 
@@ -134,7 +200,7 @@ impl EngineAdapter for LlamacppAdapter {
             "--model".to_string(),
             gguf_str,
             "-ngl".to_string(),
-            plan.ngl.to_string(),
+            plan.runtime.ngl.to_string(),
         ];
 
         // --cache-ram (b4400+): host-memory prefix cache. KV blocks for prefixes
@@ -174,13 +240,13 @@ impl EngineAdapter for LlamacppAdapter {
         if let Some(mmproj_path) = mmproj_path {
             info!(
                 mmproj = %mmproj_path.display(),
-                ctx_size = plan.ctx_size,
+                ctx_size = plan.runtime.ctx_size,
                 "VLM mmproj sidecar detected — enabling multimodal mode"
             );
             args.push("--mmproj".to_string());
             args.push(mmproj_path.to_string_lossy().to_string());
             args.push("--ctx-size".to_string());
-            args.push(plan.ctx_size.to_string());
+            args.push(plan.runtime.ctx_size.to_string());
         }
 
         // ── CPU-only memory containment ───────────────────────────────────────
@@ -196,52 +262,26 @@ impl EngineAdapter for LlamacppAdapter {
             // VLM already emitted --ctx-size in the mmproj block above.
             if !is_vlm {
                 args.push("--ctx-size".to_string());
-                args.push(plan.ctx_size.to_string());
+                args.push(plan.runtime.ctx_size.to_string());
             }
             let parallel = resolve_cpu_parallel();
             args.push("--parallel".to_string());
             args.push(parallel.to_string());
             info!(
-                ctx_size = plan.ctx_size,
+                ctx_size = plan.runtime.ctx_size,
                 parallel, "CPU-only: bounding context + parallel slots to contain KV cache"
             );
         }
 
         // ── Speculative decoding (S-2) ────────────────────────────────────────
-        // Only chat workloads benefit from spec-dec — embed/rerank are
-        // single-pass scoring with no draft head. Reading the spec config
-        // happens here (rather than at adapter construction) so a hot
-        // config reload picks it up on next model load.
-        //
-        // `spec_mode` is captured outside the `if Chat` block so it can be
-        // attached to `ActiveEngine` for downstream consumers — `/lf/status`
-        // surfaces it (S-2.7) and `EngineManager`'s crash-fallback retry
-        // policy keys off it (S-2.8: spec on + early crash → retry off).
-        // The requested model lives directly under models_dir, so the parent of
-        // model_dir is the models root — robust even when it's a relocated /
-        // shared volume. Falls back to data_dir only for malformed inputs.
-        let models_dir = model_dir.parent().unwrap_or(data_dir);
-        let spec_mode = if matches!(role, ModelRole::Chat) {
-            let spec_inputs = ModelSpecInputs {
-                mtp: load_model_mtp(data_dir, models_dir, model_id),
-                is_moe: detect_moe_by_name(model_id),
-            };
-            let budget = VramBudget {
-                gpu_vendor: profile.gpu_vendor,
-                free_vram_gb,
-                model_size_gb,
-                mmproj_size_gb,
-            };
-            let hf_repo = load_model_hf_repo(data_dir, models_dir, model_id);
-            let draft_ctx = crate::engine::draft_pairs::build_draft_context(
-                data_dir,
-                models_dir,
-                model_id,
-                hf_repo.as_deref(),
-            );
-            let spec_cfg = load_speculative_config(data_dir);
-            let spec = resolve_spec(spec_inputs, &spec_cfg, budget, draft_ctx.as_ref());
-            append_spec_args(&mut args, &spec);
+        // The spec-dec plan was resolved by `plan_load` and threaded in via
+        // `plan.spec`. The manager owns VRAM admission and may have downgraded
+        // it to Off (insufficient headroom) before calling start. We just emit
+        // the flags here. `spec_mode` is attached to `ActiveEngine` for
+        // `/lf/status` (S-2.7) and the crash-fallback retry policy (S-2.8).
+        let spec = &plan.spec;
+        append_spec_args(&mut args, spec);
+        if !matches!(spec.mode, SpecMode::Off) {
             info!(
                 model_id = %model_id,
                 spec_mode = ?spec.mode,
@@ -249,13 +289,10 @@ impl EngineAdapter for LlamacppAdapter {
                 draft_min = spec.draft_min,
                 draft_p_min = spec.draft_p_min,
                 reason = %spec.reason,
-                "Speculative-decoding plan"
+                "Speculative-decoding enabled"
             );
-            spec.mode
-        } else {
-            // embed / rerank — spec-dec doesn't apply.
-            SpecMode::Off
-        };
+        }
+        let spec_mode = spec.mode;
 
         info!(
             executable = %executable.display(),
@@ -515,18 +552,99 @@ fn file_size_gb(path: &Path) -> f32 {
         .unwrap_or(0.0)
 }
 
+/// Analytic VRAM footprint: weights (+ mmproj) + KV cache (closed-form from
+/// GGUF geometry) + a compute-scratch constant + speculative-decoding overhead.
+///
+/// This is the cold-start *prior* the manager budgets with; the empirical
+/// calibration cache corrects it after the first successful load.
+fn compute_footprint(
+    model_dir: &Path,
+    model_size_gb: f32,
+    mmproj_size_gb: f32,
+    runtime: &RuntimePlan,
+    is_vlm: bool,
+    gpu_vendor: GpuVendor,
+    spec: &SpecResolved,
+) -> crate::hardware::vram::VramFootprint {
+    use crate::hardware::vram::VramFootprint;
+    const GIB: f32 = 1024.0 * 1024.0 * 1024.0;
+
+    // Effective context the engine will actually use: on GPU chat/embed we don't
+    // pass --ctx-size so llama-server uses its default; VLM/CPU use the plan.
+    let ctx = if is_vlm || gpu_vendor == GpuVendor::None {
+        runtime.ctx_size
+    } else {
+        LLAMACPP_DEFAULT_CTX
+    };
+
+    let kv_gb = crate::model::gguf_inspect::read_kv_geometry_for_model(model_dir)
+        .map(|g| crate::model::gguf_inspect::kv_cache_bytes(&g, ctx as u64) as f32 / GIB)
+        .unwrap_or(model_size_gb * 0.2);
+
+    const SCRATCH_GB: f32 = 0.4;
+
+    let arch = crate::model::gguf_inspect::read_architecture_for_model(model_dir);
+    let spec_gb = spec_overhead_gb(arch.as_deref(), model_size_gb, spec);
+
+    VramFootprint {
+        weights_gb: model_size_gb + mmproj_size_gb,
+        kv_gb,
+        scratch_gb: SCRATCH_GB,
+        spec_gb,
+        calibrated_total_gb: None,
+    }
+}
+
+/// Speculative-decoding VRAM overhead (GB). Zero when spec-dec is off.
+///
+/// MTP / nextn draft heads allocate a recurrent-state ("rs") cache plus a
+/// dedicated draft context that empirically run on the order of the model's own
+/// weights (Qwen3.5-4B-MTP: ~5 GB on top of a 2.5 GB model). This is a
+/// conservative prior; the calibration cache corrects it after first load.
+/// Tunable per-architecture in [`spec_overhead_multiplier`], or globally via
+/// `LMFORGE_SPEC_OVERHEAD_GB` (absolute GB).
+fn spec_overhead_gb(arch: Option<&str>, weights_gb: f32, spec: &SpecResolved) -> f32 {
+    if spec.mode == SpecMode::Off {
+        return 0.0;
+    }
+    if let Ok(s) = std::env::var("LMFORGE_SPEC_OVERHEAD_GB")
+        && let Ok(v) = s.parse::<f32>()
+    {
+        return v.max(0.0);
+    }
+    const MIN_SPEC_GB: f32 = 2.0;
+    let mult = arch.map(spec_overhead_multiplier).unwrap_or(1.5);
+    (weights_gb * mult).max(MIN_SPEC_GB)
+}
+
+/// Pluggable per-architecture spec-dec overhead multiplier (× weights). Add a
+/// branch when a new model family ships a draft/state cache with a different
+/// footprint; everything else falls through to the conservative default.
+fn spec_overhead_multiplier(arch: &str) -> f32 {
+    let a = arch.to_ascii_lowercase();
+    if a.contains("qwen3") {
+        2.0 // measured: Qwen3 / Qwen3.5 MTP rs cache ≈ 2× weights
+    } else {
+        1.5
+    }
+}
+
 /// VRAM-aware llama-server runtime parameters.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct RuntimePlan {
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct RuntimePlan {
     /// `-ngl` (number of GPU offload layers). 99 means "offload everything".
-    ngl: u32,
+    pub ngl: u32,
     /// `--ctx-size` to pass when VLM/mmproj is active. For chat/embed/rerank
     /// without mmproj llama.cpp uses the GGUF metadata default and this value
     /// is ignored.
-    ctx_size: u32,
+    pub ctx_size: u32,
     /// Free VRAM (GB) observed at planning time. Recorded for log telemetry.
-    free_vram_gb: f32,
+    pub free_vram_gb: f32,
 }
+
+/// llama-server's default context window when `--ctx-size` is not passed
+/// (chat/embed on GPU). Used by the footprint estimator to size the KV cache.
+const LLAMACPP_DEFAULT_CTX: u32 = 4096;
 
 /// Compute `-ngl` and `--ctx-size` from the live VRAM budget and model size.
 ///

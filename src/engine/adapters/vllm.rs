@@ -232,6 +232,7 @@ impl EngineAdapter for VllmAdapter {
         data_dir: &Path,
         logs_dir: &Path,
         role: ModelRole,
+        _plan: &crate::engine::adapter::LoadPlan,
     ) -> Result<ActiveEngine> {
         if role != ModelRole::Chat {
             anyhow::bail!(
@@ -698,6 +699,7 @@ mod tests {
             let tmp = std::env::temp_dir().join("lmforge_vllm_test_start_embed");
             let _ = std::fs::remove_dir_all(&tmp);
             std::fs::create_dir_all(tmp.join("logs")).unwrap();
+            let plan = adapter.plan_load("test-embed", &tmp, &tmp, ModelRole::Embed, 0, 0.0);
             let result = adapter
                 .start(
                     "test-embed",
@@ -706,6 +708,7 @@ mod tests {
                     &tmp,
                     &tmp.join("logs"),
                     ModelRole::Embed,
+                    &plan,
                 )
                 .await;
             let err = match result {
@@ -733,6 +736,7 @@ mod tests {
             let tmp = std::env::temp_dir().join("lmforge_vllm_test_start_rerank");
             let _ = std::fs::remove_dir_all(&tmp);
             std::fs::create_dir_all(tmp.join("logs")).unwrap();
+            let plan = adapter.plan_load("test-rerank", &tmp, &tmp, ModelRole::Rerank, 0, 0.0);
             let result = adapter
                 .start(
                     "test-rerank",
@@ -741,6 +745,7 @@ mod tests {
                     &tmp,
                     &tmp.join("logs"),
                     ModelRole::Rerank,
+                    &plan,
                 )
                 .await;
             let err = match result {

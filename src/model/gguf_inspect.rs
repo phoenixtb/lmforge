@@ -135,6 +135,166 @@ pub fn detect_mtp(gguf_path: &Path) -> Option<bool> {
     Some(names.iter().any(|n| is_mtp_tensor(n)))
 }
 
+/// Read the embedded chat template (`tokenizer.chat_template`) from the
+/// largest non-mmproj `.gguf` in `model_dir`, if present.
+///
+/// GGUF model dirs carry no `tokenizer_config.json` / `chat_template.jinja`
+/// sidecars — the chat template lives in GGUF metadata. Capability detection
+/// uses this to expose reasoning toggles for GGUF thinking models.
+pub fn read_chat_template_for_model(model_dir: &Path) -> Option<String> {
+    let gguf = largest_gguf_in_dir(model_dir)?;
+    read_metadata_string(&gguf, "tokenizer.chat_template")
+}
+
+/// Read a single String-typed metadata value by key, walking the KV section
+/// and skipping everything else. Returns None on any read/parse failure or if
+/// the key is absent / non-String.
+fn read_metadata_string(gguf_path: &Path, want_key: &str) -> Option<String> {
+    let f = File::open(gguf_path).ok()?;
+    let mut r = BufReader::new(f);
+
+    let mut magic = [0u8; 4];
+    read_exact(&mut r, &mut magic).ok()?;
+    if magic != GGUF_MAGIC {
+        return None;
+    }
+    let version = read_u32(&mut r).ok()?;
+    if version < 2 {
+        return None;
+    }
+    let _tensor_count = read_u64(&mut r).ok()?;
+    let metadata_kv_count = read_u64(&mut r).ok()?;
+    if metadata_kv_count > MAX_METADATA_ENTRIES {
+        return None;
+    }
+
+    for _ in 0..metadata_kv_count {
+        let key = read_string(&mut r).ok()?;
+        let vtype = MetaType::from_u32(read_u32(&mut r).ok()?)?;
+        if key == want_key && vtype == MetaType::String {
+            return read_string(&mut r).ok();
+        }
+        skip_value(&mut r, vtype).ok()?;
+    }
+    None
+}
+
+/// KV-cache geometry read from GGUF metadata. All fields are per-model
+/// architecture constants; combined with the runtime context length they give
+/// a closed-form KV-cache size estimate that is generic across attention
+/// transformers (see `kv_cache_bytes`).
+#[derive(Debug, Clone, Copy)]
+pub struct KvGeometry {
+    pub block_count: u64,
+    pub head_count_kv: u64,
+    pub key_length: u64,
+    pub value_length: u64,
+}
+
+/// Read the `general.architecture` string from the largest GGUF in `model_dir`.
+pub fn read_architecture_for_model(model_dir: &Path) -> Option<String> {
+    let gguf = largest_gguf_in_dir(model_dir)?;
+    read_metadata_string(&gguf, "general.architecture")
+}
+
+/// Read KV-cache geometry from the largest GGUF in `model_dir`.
+///
+/// Resolves the architecture prefix (`general.architecture`) then reads the
+/// per-arch `block_count` / `attention.*` keys. `head_count_kv` falls back to
+/// `head_count` (MHA models omit the KV-specific key); `key_length`/
+/// `value_length` fall back to `embedding_length / head_count` when the
+/// explicit per-head dims are absent.
+pub fn read_kv_geometry_for_model(model_dir: &Path) -> Option<KvGeometry> {
+    let gguf = largest_gguf_in_dir(model_dir)?;
+    let arch = read_metadata_string(&gguf, "general.architecture")?;
+
+    let block_count = read_metadata_u64(&gguf, &format!("{arch}.block_count"))?;
+    let head_count = read_metadata_u64(&gguf, &format!("{arch}.attention.head_count"));
+    let head_count_kv = read_metadata_u64(&gguf, &format!("{arch}.attention.head_count_kv"))
+        .or(head_count)?;
+    let embedding_length = read_metadata_u64(&gguf, &format!("{arch}.embedding_length"));
+
+    let derived_head_dim = match (embedding_length, head_count) {
+        (Some(e), Some(h)) if h > 0 => Some(e / h),
+        _ => None,
+    };
+    let key_length = read_metadata_u64(&gguf, &format!("{arch}.attention.key_length"))
+        .or(derived_head_dim)?;
+    let value_length =
+        read_metadata_u64(&gguf, &format!("{arch}.attention.value_length")).unwrap_or(key_length);
+
+    Some(KvGeometry {
+        block_count,
+        head_count_kv,
+        key_length,
+        value_length,
+    })
+}
+
+/// f16 KV-cache size in bytes for a given context length. The cache holds K and
+/// V per layer: `block_count * head_count_kv * (key_length + value_length) *
+/// ctx * 2 bytes`. (llama-server defaults to a unified cache, so parallel slots
+/// don't multiply this; the per-arch spec term covers draft/MTP state caches.)
+pub fn kv_cache_bytes(g: &KvGeometry, ctx: u64) -> u64 {
+    g.block_count
+        .saturating_mul(g.head_count_kv)
+        .saturating_mul(g.key_length + g.value_length)
+        .saturating_mul(ctx)
+        .saturating_mul(2)
+}
+
+/// Read a single integer-typed metadata value by key. Handles all GGUF integer
+/// width/sign variants; returns None for absent keys or non-integer types.
+fn read_metadata_u64(gguf_path: &Path, want_key: &str) -> Option<u64> {
+    let f = File::open(gguf_path).ok()?;
+    let mut r = BufReader::new(f);
+
+    let mut magic = [0u8; 4];
+    read_exact(&mut r, &mut magic).ok()?;
+    if magic != GGUF_MAGIC {
+        return None;
+    }
+    let version = read_u32(&mut r).ok()?;
+    if version < 2 {
+        return None;
+    }
+    let _tensor_count = read_u64(&mut r).ok()?;
+    let metadata_kv_count = read_u64(&mut r).ok()?;
+    if metadata_kv_count > MAX_METADATA_ENTRIES {
+        return None;
+    }
+
+    for _ in 0..metadata_kv_count {
+        let key = read_string(&mut r).ok()?;
+        let vtype = MetaType::from_u32(read_u32(&mut r).ok()?)?;
+        if key == want_key {
+            return read_int_value(&mut r, vtype);
+        }
+        skip_value(&mut r, vtype).ok()?;
+    }
+    None
+}
+
+/// Read an integer metadata scalar of the given type. Returns None for
+/// non-integer types (string/array/float/bool).
+fn read_int_value<R: Read>(r: &mut R, t: MetaType) -> Option<u64> {
+    Some(match t {
+        MetaType::U8 | MetaType::I8 => {
+            let mut b = [0u8; 1];
+            r.read_exact(&mut b).ok()?;
+            b[0] as u64
+        }
+        MetaType::U16 | MetaType::I16 => {
+            let mut b = [0u8; 2];
+            r.read_exact(&mut b).ok()?;
+            u16::from_le_bytes(b) as u64
+        }
+        MetaType::U32 | MetaType::I32 => read_u32(r).ok()? as u64,
+        MetaType::U64 | MetaType::I64 => read_u64(r).ok()?,
+        _ => return None,
+    })
+}
+
 /// Return all tensor names from a GGUF file. Errors propagate as a
 /// generic string so the caller can log without depending on `io::Error`.
 pub fn read_tensor_names(gguf_path: &Path) -> Result<Vec<String>, String> {
@@ -308,6 +468,39 @@ mod tests {
         tmp
     }
 
+    /// Build a synthetic GGUF v3 with a single String metadata KV and no
+    /// tensors, for exercising the metadata reader.
+    fn synth_gguf_with_meta(key: &str, val: &str) -> NamedTempFile {
+        let mut buf = Vec::<u8>::new();
+        buf.extend_from_slice(&GGUF_MAGIC);
+        buf.extend_from_slice(&3u32.to_le_bytes()); // version
+        buf.extend_from_slice(&0u64.to_le_bytes()); // tensor_count
+        buf.extend_from_slice(&1u64.to_le_bytes()); // metadata_kv_count
+        write_string(&mut buf, key);
+        buf.extend_from_slice(&8u32.to_le_bytes()); // MetaType::String
+        write_string(&mut buf, val);
+        let mut tmp = NamedTempFile::new().unwrap();
+        tmp.write_all(&buf).unwrap();
+        tmp.flush().unwrap();
+        tmp
+    }
+
+    #[test]
+    fn read_metadata_string_returns_chat_template() {
+        let f = synth_gguf_with_meta(
+            "tokenizer.chat_template",
+            "{% if enable_thinking %}<think>{% endif %}",
+        );
+        let got = read_metadata_string(f.path(), "tokenizer.chat_template");
+        assert!(got.as_deref().unwrap().contains("enable_thinking"));
+    }
+
+    #[test]
+    fn read_metadata_string_returns_none_for_absent_key() {
+        let f = synth_gguf_with_meta("tokenizer.ggml.model", "gpt2");
+        assert_eq!(read_metadata_string(f.path(), "tokenizer.chat_template"), None);
+    }
+
     #[test]
     fn detect_mtp_recognises_nextn_prefix() {
         let f = synth_gguf(&["token_embd.weight", "nextn.0.norm.weight"]);
@@ -451,5 +644,68 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("readme.txt"), "not a model").unwrap();
         assert_eq!(resolve_mtp_for_model(dir.path(), None), None);
+    }
+
+    // ── numeric metadata + KV geometry ───────────────────────────────────────
+
+    fn write_u32_kv(buf: &mut Vec<u8>, key: &str, val: u32) {
+        write_string(buf, key);
+        buf.extend_from_slice(&4u32.to_le_bytes()); // MetaType::U32
+        buf.extend_from_slice(&val.to_le_bytes());
+    }
+
+    fn write_str_kv(buf: &mut Vec<u8>, key: &str, val: &str) {
+        write_string(buf, key);
+        buf.extend_from_slice(&8u32.to_le_bytes()); // MetaType::String
+        write_string(buf, val);
+    }
+
+    /// Synthesize a GGUF (no tensors) with a Qwen3-like geometry into `dir`.
+    fn write_geometry_gguf(dir: &Path, name: &str) {
+        let mut buf = Vec::<u8>::new();
+        buf.extend_from_slice(&GGUF_MAGIC);
+        buf.extend_from_slice(&3u32.to_le_bytes()); // version
+        buf.extend_from_slice(&0u64.to_le_bytes()); // tensor_count
+        buf.extend_from_slice(&5u64.to_le_bytes()); // metadata_kv_count
+        write_str_kv(&mut buf, "general.architecture", "qwen3");
+        write_u32_kv(&mut buf, "qwen3.block_count", 36);
+        write_u32_kv(&mut buf, "qwen3.attention.head_count_kv", 8);
+        write_u32_kv(&mut buf, "qwen3.attention.key_length", 128);
+        write_u32_kv(&mut buf, "qwen3.attention.value_length", 128);
+        std::fs::write(dir.join(name), buf).unwrap();
+    }
+
+    #[test]
+    fn read_metadata_u64_reads_u32_value() {
+        let dir = tempfile::tempdir().unwrap();
+        write_geometry_gguf(dir.path(), "model.gguf");
+        let p = dir.path().join("model.gguf");
+        assert_eq!(read_metadata_u64(&p, "qwen3.block_count"), Some(36));
+        assert_eq!(read_metadata_u64(&p, "absent.key"), None);
+        // String-typed key is not an integer → None.
+        assert_eq!(read_metadata_u64(&p, "general.architecture"), None);
+    }
+
+    #[test]
+    fn read_kv_geometry_resolves_arch_prefixed_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        write_geometry_gguf(dir.path(), "model.gguf");
+        let g = read_kv_geometry_for_model(dir.path()).unwrap();
+        assert_eq!(g.block_count, 36);
+        assert_eq!(g.head_count_kv, 8);
+        assert_eq!(g.key_length, 128);
+        assert_eq!(g.value_length, 128);
+    }
+
+    #[test]
+    fn kv_cache_bytes_matches_closed_form() {
+        let g = KvGeometry {
+            block_count: 36,
+            head_count_kv: 8,
+            key_length: 128,
+            value_length: 128,
+        };
+        // 36 * 8 * 256 * 4096 * 2 = 603,979,776 bytes (~0.56 GiB) at ctx=4096.
+        assert_eq!(kv_cache_bytes(&g, 4096), 603_979_776);
     }
 }

@@ -305,6 +305,9 @@ pub struct EngineManager {
     active_slots: std::collections::HashMap<String, ActiveSlot>,
     global_keep_alive: String,
     max_loaded_models: u32,
+    /// Empirical VRAM calibration: measured load footprints from prior
+    /// successful loads, used to self-correct the analytic admission estimate.
+    calibration: crate::engine::calibration::CalibrationStore,
     /// Broadcast channel sender — fires a full EngineState snapshot whenever state changes.
     /// Receivers: tray icon (in-process), SSE `/lf/status/stream` (external).
     status_tx: tokio::sync::broadcast::Sender<EngineState>,
@@ -339,6 +342,7 @@ impl EngineManager {
         status_tx: tokio::sync::broadcast::Sender<EngineState>,
     ) -> Self {
         let logs_dir = data_dir.join("logs");
+        let calibration = crate::engine::calibration::CalibrationStore::load(&data_dir);
         let state = Arc::new(RwLock::new(EngineState {
             overall_status: EngineStatus::Ready,
             engine_id: config.id.clone(),
@@ -362,6 +366,7 @@ impl EngineManager {
             active_slots: std::collections::HashMap::new(),
             global_keep_alive,
             max_loaded_models,
+            calibration,
             status_tx,
         }
     }
@@ -526,6 +531,7 @@ impl EngineManager {
         model_dir: &Path,
         port: u16,
         role: ModelRole,
+        plan: &crate::engine::adapter::LoadPlan,
     ) -> Result<ActiveEngine> {
         let engine_pid_file = self
             .data_dir
@@ -573,6 +579,7 @@ impl EngineManager {
                 &self.data_dir,
                 &self.logs_dir,
                 role,
+                plan,
             )
             .await?;
 
@@ -734,7 +741,6 @@ impl EngineManager {
         let load_started = std::time::Instant::now();
 
         let size_bytes = index.get(model_id).map(|m| m.size_bytes).unwrap_or(0);
-        let needed_mem_gb = crate::hardware::vram::estimate_model_vram(size_bytes);
 
         let entry_path = match index.get(model_id).map(|m| m.path.clone()) {
             Some(p) => p,
@@ -753,7 +759,37 @@ impl EngineManager {
         };
         let model_dir = PathBuf::from(entry_path);
 
-        self.evict_for_memory(needed_mem_gb).await?;
+        // ── VRAM-aware admission ─────────────────────────────────────────────
+        // Resolve the full load plan (runtime + spec-dec + analytic footprint)
+        // BEFORE eviction so we budget for the TRUE footprint — weights + KV +
+        // spec-dec overhead — instead of a flat size×1.2 heuristic. A prior
+        // measured footprint (calibration cache) overrides the analytic prior.
+        let profile = crate::hardware::probe::detect_platform().unwrap_or_default();
+        let free_before = self.memory_free_gb(&profile);
+        let mut plan = self.adapter.plan_load(
+            model_id,
+            &model_dir,
+            &self.data_dir,
+            role,
+            size_bytes,
+            free_before,
+        );
+
+        // Calibration key (spec mode + ctx) is free-VRAM-independent, so the
+        // pre-eviction plan is fine to derive it.
+        let cal_ctx = plan.runtime.ctx_size;
+        let cal_key =
+            crate::engine::calibration::signature(model_id, cal_ctx, plan.spec.mode, role);
+        if let Some(measured) = self.calibration.get(&cal_key) {
+            plan.footprint.calibrated_total_gb = Some(measured);
+        }
+
+        // Evict idle LRU models until the FULL footprint (incl. spec-dec) fits,
+        // or only actively-serving models remain. Spec-dec is first-class: idle
+        // models are evicted to make room for it. The footprint is
+        // free-VRAM-independent, so the pre-eviction plan budgets correctly.
+        self.evict_for_memory(plan.footprint.effective_total_gb())
+            .await?;
 
         // Honour the optional hard count cap (max_loaded_models). Only idle slots
         // may be evicted to make room; if every loaded model is busy, refuse the
@@ -780,41 +816,76 @@ impl EngineManager {
             }
         }
 
-        // Admission control: after evicting every *idle* model, if the budget
-        // still can't fit this model, refuse rather than over-commit. Loading
-        // anyway would either OOM the host (CPU) or require killing an in-flight
-        // model (which `evict_for_memory` deliberately won't do).
-        {
-            let profile = crate::hardware::probe::detect_platform().unwrap_or_default();
-            let free_gb = self.memory_free_gb(&profile);
-            if free_gb < needed_mem_gb {
-                let busy = self
-                    .active_slots
-                    .values()
-                    .filter(|s| s.inflight.load(Ordering::Relaxed) > 0)
-                    .count();
-                if busy > 0 {
-                    bail!(
-                        "Insufficient memory to load '{}': needs ~{:.1} GB but only \
-                         {:.1} GB free; {} loaded model(s) are serving requests and \
-                         won't be evicted. Retry once they're idle.",
-                        model_id,
-                        needed_mem_gb,
-                        free_gb,
-                        busy
-                    );
-                } else {
-                    bail!(
-                        "Insufficient memory to load '{}': needs ~{:.1} GB but only \
-                         {:.1} GB available on this host.",
-                        model_id,
-                        needed_mem_gb,
-                        free_gb
-                    );
-                }
+        // Re-resolve the plan AFTER eviction against the now-current free VRAM.
+        // CRITICAL: the runtime params (`-ngl`, ctx) must reflect the memory we
+        // just freed. Planning them against the pre-eviction free VRAM offloads
+        // zero layers to the GPU and loads the whole model on CPU
+        // (catastrophically slow — the original cause of the MTP warm timeout).
+        // The footprint is free-VRAM-independent, so admission above stays valid.
+        let free_now = self.memory_free_gb(&profile);
+        let mut plan = self.adapter.plan_load(
+            model_id,
+            &model_dir,
+            &self.data_dir,
+            role,
+            size_bytes,
+            free_now,
+        );
+        if let Some(measured) = self.calibration.get(&cal_key) {
+            plan.footprint.calibrated_total_gb = Some(measured);
+        }
+        let needed = plan.footprint.effective_total_gb();
+        let base = plan.footprint.base_gb();
+
+        // Tiered admission after eviction:
+        //   free >= needed → load with spec-dec.
+        //   base <= free   → degrade spec-dec to off and still serve (never lose
+        //                    serve-ability for an optimization).
+        //   free < base    → can't fit even the base; deny (busy vs host).
+        if free_now < base {
+            let busy = self
+                .active_slots
+                .values()
+                .filter(|s| s.inflight.load(Ordering::Relaxed) > 0)
+                .count();
+            if busy > 0 {
+                bail!(
+                    "Insufficient memory to load '{}': needs ~{:.1} GB but only \
+                     {:.1} GB free; {} loaded model(s) are serving requests and \
+                     won't be evicted. Retry once they're idle.",
+                    model_id,
+                    base,
+                    free_now,
+                    busy
+                );
+            } else {
+                bail!(
+                    "Insufficient memory to load '{}': needs ~{:.1} GB but only \
+                     {:.1} GB available on this host.",
+                    model_id,
+                    base,
+                    free_now
+                );
             }
+        } else if free_now < needed
+            && !matches!(plan.spec.mode, crate::engine::speculative::SpecMode::Off)
+        {
+            warn!(
+                model_id,
+                free_gb = free_now,
+                needed_gb = needed,
+                base_gb = base,
+                spec_mode = ?plan.spec.mode,
+                "Insufficient VRAM headroom for speculative decoding — loading with spec-dec disabled"
+            );
+            plan.spec = crate::engine::speculative::SpecResolved::off(
+                "degraded: insufficient VRAM headroom for spec-dec",
+            );
+            plan.footprint.spec_gb = 0.0;
+            plan.footprint.calibrated_total_gb = None;
         }
 
+        let vram_est_gb = plan.footprint.effective_total_gb();
         let port = self.allocate_port();
 
         {
@@ -826,20 +897,23 @@ impl EngineManager {
                     port,
                     status: EngineStatus::Starting,
                     idle_secs: 0,
-                    vram_est_gb: needed_mem_gb,
-                    // spec mode + stats are filled in after the engine
-                    // becomes Ready (we don't know spec.mode until the
-                    // adapter resolves it inside `start()`).
-                    spec_mode: crate::engine::speculative::SpecMode::Off,
+                    vram_est_gb,
+                    spec_mode: plan.spec.mode,
                     spec_stats: None,
                 },
             );
         }
 
+        // Snapshot free VRAM just before spawning so we can measure the real
+        // load footprint after health passes and feed it back to the
+        // calibration cache (GPU only).
+        let on_gpu = profile.gpu_vendor != crate::hardware::probe::GpuVendor::None;
+        let free_pre_spawn = if on_gpu { free_now } else { 0.0 };
+
         // Spawn and wait for engine health. On any failure, clean up the dangling Starting slot
         // so the next EnsureModel call can retry a clean cold load.
         let mut engine = match self
-            .spawn_adapter_process(model_id, &model_dir, port, role)
+            .spawn_adapter_process(model_id, &model_dir, port, role, &plan)
             .await
         {
             Ok(e) => e,
@@ -901,30 +975,17 @@ impl EngineManager {
                     }
                 }
 
-                // Save + restore the existing env override so an operator
-                // who set `LMFORGE_SPECULATIVE_MODE=mtp` explicitly isn't
-                // permanently overridden by our retry. The supervisor
-                // task is the single writer of this var, and command
-                // dispatch is sequential, so the restore window can't
-                // race with another spawn.
-                //
-                // SAFETY: `set_var` / `remove_var` are marked `unsafe` in
-                // Rust 1.84+ to flag the thread hazard. We're on the
-                // supervisor task, which is the only thread that calls
-                // `engine::speculative::resolve`.
-                let saved = std::env::var("LMFORGE_SPECULATIVE_MODE").ok();
-                unsafe { std::env::set_var("LMFORGE_SPECULATIVE_MODE", "off") };
+                // Force spec-dec off for the retry by mutating the threaded
+                // plan — no global env juggling. The downgraded plan flows
+                // straight into `start`, so the retry spawns with spec=off.
+                plan.spec = crate::engine::speculative::SpecResolved::off(
+                    "S-2.8 retry: spec-dec disabled after early crash",
+                );
+                plan.footprint.spec_gb = 0.0;
 
                 let retry_result = self
-                    .spawn_adapter_process(model_id, &model_dir, port, role)
+                    .spawn_adapter_process(model_id, &model_dir, port, role, &plan)
                     .await;
-
-                unsafe {
-                    match saved.as_deref() {
-                        Some(v) => std::env::set_var("LMFORGE_SPECULATIVE_MODE", v),
-                        None => std::env::remove_var("LMFORGE_SPECULATIVE_MODE"),
-                    }
-                }
 
                 match retry_result {
                     Ok(mut retry_engine) => {
@@ -994,6 +1055,23 @@ impl EngineManager {
                 self.notify().await;
                 return Err(e);
             }
+        }
+
+        // Health passed — measure the real VRAM footprint and feed it back to
+        // the calibration cache so the next load of this exact configuration
+        // budgets on ground truth instead of the analytic prior. Keyed by the
+        // spec mode actually in effect (the retry/degrade path may have flipped
+        // it to Off). GPU only; CPU residency is RAM-accounted separately.
+        if on_gpu {
+            let free_after = self.memory_free_gb(&profile);
+            let measured = free_pre_spawn - free_after;
+            let key = crate::engine::calibration::signature(
+                model_id,
+                cal_ctx,
+                engine.spec_mode,
+                role,
+            );
+            self.calibration.record(key, measured);
         }
 
         self.active_slots.insert(

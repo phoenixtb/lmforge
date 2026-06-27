@@ -142,6 +142,7 @@ impl EngineAdapter for SglangAdapter {
         data_dir: &Path,
         logs_dir: &Path,
         role: ModelRole,
+        _plan: &crate::engine::adapter::LoadPlan,
     ) -> Result<ActiveEngine> {
         if role == ModelRole::Rerank {
             anyhow::bail!(

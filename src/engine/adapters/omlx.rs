@@ -40,6 +40,7 @@ impl EngineAdapter for OmlxAdapter {
         _data_dir: &Path,
         logs_dir: &Path,
         role: ModelRole,
+        _plan: &crate::engine::adapter::LoadPlan,
     ) -> Result<ActiveEngine> {
         // ModelRole::Rerank — oMLX 0.3.6+ supports Jina-architecture rerankers
         // (JinaForRanking) natively. oMLX auto-detects the model type from each model's

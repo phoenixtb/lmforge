@@ -56,8 +56,47 @@ pub struct ActiveEngine {
     pub spec_mode: crate::engine::speculative::SpecMode,
 }
 
+/// Resolved-once plan for a single model load.
+///
+/// `plan_load` computes it (VRAM footprint the manager budgets with, the
+/// runtime params, and the speculative-decoding decision) and the manager
+/// threads it into `start`, so the admission estimate and the actual spawn
+/// configuration can never drift. The manager may mutate `spec`/`footprint`
+/// (e.g. degrade spec-dec to off) between planning and spawning.
+pub struct LoadPlan {
+    pub footprint: crate::hardware::vram::VramFootprint,
+    pub spec: crate::engine::speculative::SpecResolved,
+    pub runtime: crate::engine::adapters::llamacpp::RuntimePlan,
+}
+
 #[allow(async_fn_in_trait)]
 pub trait EngineAdapter: Send + Sync {
+    /// Estimate the VRAM footprint and resolve the runtime + spec-dec plan for
+    /// a load, without spawning anything. The manager calls this BEFORE
+    /// eviction/admission so it can budget for the true footprint (weights + KV
+    /// + spec overhead) and evict idle models / deny / degrade accordingly.
+    ///
+    /// Default: a size-only footprint with spec-dec off, for engines that don't
+    /// do VRAM-aware planning. The llama.cpp adapter overrides this with an
+    /// analytic GGUF-metadata estimate.
+    fn plan_load(
+        &self,
+        _model_id: &str,
+        _model_dir: &Path,
+        _data_dir: &Path,
+        _role: ModelRole,
+        size_bytes: u64,
+        _free_vram_gb: f32,
+    ) -> LoadPlan {
+        LoadPlan {
+            footprint: crate::hardware::vram::VramFootprint::from_size_bytes(size_bytes),
+            spec: crate::engine::speculative::SpecResolved::off(
+                "engine does not use speculative decoding",
+            ),
+            runtime: crate::engine::adapters::llamacpp::RuntimePlan::default(),
+        }
+    }
+
     /// Attempt a native pull for this engine.
     ///
     /// Returns:
@@ -76,6 +115,7 @@ pub trait EngineAdapter: Send + Sync {
         data_dir: &Path,
         progress_tx: Sender<DownloadProgress>,
     ) -> Result<bool>;
+    #[allow(clippy::too_many_arguments)]
     async fn start(
         &self,
         model_id: &str,
@@ -84,6 +124,7 @@ pub trait EngineAdapter: Send + Sync {
         data_dir: &Path,
         logs_dir: &Path,
         role: ModelRole,
+        plan: &LoadPlan,
     ) -> Result<ActiveEngine>;
     async fn stop(&self, active_engine: &mut ActiveEngine) -> Result<()>;
 }
@@ -99,6 +140,34 @@ pub enum EngineAdapterInstance {
 }
 
 impl EngineAdapter for EngineAdapterInstance {
+    fn plan_load(
+        &self,
+        model_id: &str,
+        model_dir: &Path,
+        data_dir: &Path,
+        role: ModelRole,
+        size_bytes: u64,
+        free_vram_gb: f32,
+    ) -> LoadPlan {
+        match self {
+            Self::Omlx(ad) => {
+                ad.plan_load(model_id, model_dir, data_dir, role, size_bytes, free_vram_gb)
+            }
+            Self::Sglang(ad) => {
+                ad.plan_load(model_id, model_dir, data_dir, role, size_bytes, free_vram_gb)
+            }
+            Self::Llamacpp(ad) => {
+                ad.plan_load(model_id, model_dir, data_dir, role, size_bytes, free_vram_gb)
+            }
+            Self::Vllm(ad) => {
+                ad.plan_load(model_id, model_dir, data_dir, role, size_bytes, free_vram_gb)
+            }
+            Self::TabbyApi(ad) => {
+                ad.plan_load(model_id, model_dir, data_dir, role, size_bytes, free_vram_gb)
+            }
+        }
+    }
+
     async fn pull_model(
         &self,
         repo: &str,
@@ -123,26 +192,27 @@ impl EngineAdapter for EngineAdapterInstance {
         data_dir: &Path,
         logs_dir: &Path,
         role: ModelRole,
+        plan: &LoadPlan,
     ) -> Result<ActiveEngine> {
         match self {
             Self::Omlx(ad) => {
-                ad.start(model_id, model_dir, port, data_dir, logs_dir, role)
+                ad.start(model_id, model_dir, port, data_dir, logs_dir, role, plan)
                     .await
             }
             Self::Sglang(ad) => {
-                ad.start(model_id, model_dir, port, data_dir, logs_dir, role)
+                ad.start(model_id, model_dir, port, data_dir, logs_dir, role, plan)
                     .await
             }
             Self::Llamacpp(ad) => {
-                ad.start(model_id, model_dir, port, data_dir, logs_dir, role)
+                ad.start(model_id, model_dir, port, data_dir, logs_dir, role, plan)
                     .await
             }
             Self::Vllm(ad) => {
-                ad.start(model_id, model_dir, port, data_dir, logs_dir, role)
+                ad.start(model_id, model_dir, port, data_dir, logs_dir, role, plan)
                     .await
             }
             Self::TabbyApi(ad) => {
-                ad.start(model_id, model_dir, port, data_dir, logs_dir, role)
+                ad.start(model_id, model_dir, port, data_dir, logs_dir, role, plan)
                     .await
             }
         }
