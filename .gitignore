@@ -75,5 +75,8 @@ logs/
 tests/integration/reports/*.json
 tests/integration/reports/*.md
 
-# think_bench output
-bench_results/
+# think_bench output: keep human-readable aggregates (report.md, summary.csv)
+# so per-platform baselines can be committed and diffed; ignore the bulky/raw bits.
+bench_results/**/summary.jsonl
+bench_results/**/raw/
+bench_results/LATEST

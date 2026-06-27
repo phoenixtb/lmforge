@@ -8,28 +8,39 @@ reasoning/answer sizes, special-token leaks, loop/repetition signals, latency,
 correctness), and writes everything to a timestamped results dir for later
 analysis.
 
-Usage:
-    # run only models already installed
-    python3 scripts/util/think_bench.py
+Self-contained: stdlib only (no pip installs). Works on macOS, Linux, Windows
+wherever Python 3.8+ and a running LMForge daemon are available.
 
-    # also pull any configured models that are missing first
-    python3 scripts/util/think_bench.py --pull-missing
+Run from a fresh clone on any platform:
+    1. Build + install LMForge core (engine auto-selected per platform):
+         macOS/Linux:  scripts/lmforge.sh install --source local
+         Windows:      pwsh scripts/lmforge.ps1 install --source local
+    2. Make sure the daemon is up (the installer starts it; verify):
+         curl http://127.0.0.1:11430/v1/models
+    3. Run the benchmark (pulls the whole candidate matrix if missing):
+         python3 scripts/util/think_bench.py --pull-missing
+    4. Commit the run's report.md + summary.csv (tracked) and compare the
+       aggregate table across platforms. Engine matters: macOS exercises the
+       oMLX two-call budget orchestrator + stop-token injection; Linux/Windows
+       exercise the llama.cpp <think> rewriter path. Loop/leak numbers are
+       therefore expected to differ by platform — that's the point of running
+       it everywhere.
 
-    # quick smoke run (1 rep, fewer prompts)
-    python3 scripts/util/think_bench.py --quick
-
-    # restrict to a subset
+Common invocations:
+    python3 scripts/util/think_bench.py                 # only installed models
+    python3 scripts/util/think_bench.py --pull-missing  # pull candidates first
+    python3 scripts/util/think_bench.py --quick         # 1 rep, fewer prompts
     python3 scripts/util/think_bench.py --models phi4:4b:reasoning:4bit gemma3:4b:4bit
 
 Results land in:  ./bench_results/<timestamp>/
-    summary.jsonl   one JSON object per run (machine-readable)
-    summary.csv     flat table for spreadsheets
-    report.md       human-readable aggregate
-    raw/*.json      full reasoning+answer text per run
+    summary.jsonl   one JSON object per run (machine-readable, gitignored)
+    summary.csv     flat table for spreadsheets (committed for comparison)
+    report.md       human-readable aggregate (committed for comparison)
+    raw/*.json      full reasoning+answer text per run (gitignored)
 A ./bench_results/LATEST file points at the newest run dir.
 
-No third-party deps — stdlib only. The script flushes after every run, so a
-partial/interrupted run still leaves usable data.
+The script flushes after every run, so a partial/interrupted run still leaves
+usable data.
 """
 from __future__ import annotations
 
@@ -75,14 +86,14 @@ CHAT_MAX_TOKENS = 1024
 # Reasoning-capable and non-reasoning controls are both included on purpose.
 CANDIDATE_MODELS = [
     # family: qwen3.5 (hybrid think toggle)
-    {"id": "qwen3.5:2b:4bit", "family": "qwen3.5", "note": "weak hybrid"},
-    {"id": "qwen3.5:4b:6bit", "family": "qwen3.5", "note": "strong hybrid"},
+    {"id": "qwen3.5:2b:4bit", "family": "qwen3.5", "note": "weak hybrid", "pull": True},
+    {"id": "qwen3.5:4b:6bit", "family": "qwen3.5", "note": "strong hybrid", "pull": True},
     # family: qwen3 (base + dedicated thinking)
-    {"id": "qwen3:1.7b:4bit", "family": "qwen3", "note": "weak"},
-    {"id": "qwen3:4b:thinking:4bit", "family": "qwen3", "note": "dedicated thinking"},
-    {"id": "qwen3:8b:4bit", "family": "qwen3", "note": "strong"},
+    {"id": "qwen3:1.7b:4bit", "family": "qwen3", "note": "weak", "pull": True},
+    {"id": "qwen3:4b:thinking:4bit", "family": "qwen3", "note": "dedicated thinking", "pull": True},
+    {"id": "qwen3:8b:4bit", "family": "qwen3", "note": "strong", "pull": True},
     # family: phi4
-    {"id": "phi4:4b:reasoning:4bit", "family": "phi4", "note": "dedicated reasoning"},
+    {"id": "phi4:4b:reasoning:4bit", "family": "phi4", "note": "dedicated reasoning", "pull": True},
     {"id": "phi4:4b:4bit", "family": "phi4", "note": "instruct control", "pull": True},
     # family: gemma (non-reasoning control)
     {"id": "gemma3:4b:4bit", "family": "gemma3", "note": "instruct control", "pull": True},
