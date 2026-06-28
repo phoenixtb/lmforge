@@ -19,8 +19,8 @@ Run from a fresh clone on any platform:
          curl http://127.0.0.1:11430/v1/models
     3. Run the benchmark (pulls the whole candidate matrix if missing). Tag the
        machine so committed results are self-identifying:
-         python3 scripts/util/think_bench.py --pull-missing --label fedora-cpu
-         python3 scripts/util/think_bench.py --pull-missing --label win-cuda
+         python3 tests/bench/think_bench.py --pull-missing --label fedora-cpu
+         python3 tests/bench/think_bench.py --pull-missing --label win-cuda
        (omit --label and it auto-derives <os>-<arch>-<hostname>). The label
        becomes the result dir suffix and is recorded in report.md + every CSV
        row, so a Fedora run and a Windows run never collide once committed.
@@ -31,20 +31,18 @@ Run from a fresh clone on any platform:
        therefore expected to differ by platform — that's the point of running
        it everywhere.
 
-Result dirs are named  ./bench_results/<timestamp>__<machine-slug>/
-
 Common invocations:
-    python3 scripts/util/think_bench.py                 # only installed models
-    python3 scripts/util/think_bench.py --pull-missing  # pull candidates first
-    python3 scripts/util/think_bench.py --quick         # 1 rep, fewer prompts
-    python3 scripts/util/think_bench.py --models phi4:4b:reasoning:4bit gemma3:4b:4bit
+    python3 tests/bench/think_bench.py                 # only installed models
+    python3 tests/bench/think_bench.py --pull-missing  # pull candidates first
+    python3 tests/bench/think_bench.py --quick         # 1 rep, fewer prompts
+    python3 tests/bench/think_bench.py --models phi4:4b:reasoning:4bit gemma3:4b:4bit
 
-Results land in:  ./bench_results/<timestamp>/
+Results land in:  tests/bench/results/<timestamp>__<machine-slug>/
     summary.jsonl   one JSON object per run (machine-readable, gitignored)
     summary.csv     flat table for spreadsheets (committed for comparison)
     report.md       human-readable aggregate (committed for comparison)
     raw/*.json      full reasoning+answer text per run (gitignored)
-A ./bench_results/LATEST file points at the newest run dir.
+A results/LATEST file points at the newest run dir.
 
 The script flushes after every run, so a partial/interrupted run still leaves
 usable data.
@@ -72,6 +70,9 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 DEFAULT_BASE = os.environ.get("LMFORGE_BASE", "http://127.0.0.1:11430")
 CALL_TIMEOUT = 240  # seconds per request
+# Results live next to this script (tests/bench/results), not the cwd, so runs
+# land in the self-contained bench folder no matter where it's invoked from.
+DEFAULT_OUTDIR = str(Path(__file__).resolve().parent / "results")
 
 # Sampling profiles. Thinking profile is the anti-loop set; chat is lighter.
 THINK_PROFILE = {
@@ -379,7 +380,8 @@ def main() -> int:
     ap.add_argument("--quick", action="store_true", help="1 rep, reduced prompt set")
     ap.add_argument("--repeats", type=int, default=None, help="override repeats for every prompt")
     ap.add_argument("--think-only", action="store_true", help="only run think=on (skip think=off)")
-    ap.add_argument("--outdir", default="bench_results")
+    ap.add_argument("--outdir", default=DEFAULT_OUTDIR,
+                    help="results root (default: tests/bench/results next to this script)")
     ap.add_argument("--label", default=os.environ.get("BENCH_LABEL"),
                     help="human machine tag for the result dir/report "
                          "(e.g. 'fedora-cpu', 'win-cuda'); falls back to os-arch-host")
