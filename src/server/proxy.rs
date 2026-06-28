@@ -544,6 +544,7 @@ async fn stream_call1_accumulate(
     resp: reqwest::Response,
     thinking_budget: u32,
     tx: Option<tokio::sync::mpsc::Sender<Bytes>>,
+    inline_think: bool,
 ) -> Result<
     (
         String,         // reasoning_buf
@@ -562,6 +563,24 @@ async fn stream_call1_accumulate(
     let mut completion_id = String::new();
     let mut model_name = String::new();
     let mut finish_reason: Option<String> = None;
+    // For engines that embed reasoning as inline <think> tags (llama.cpp,
+    // SGLang) we split it out of `content` ourselves.
+    let mut splitter = crate::server::thinking::ThinkSplitter::default();
+
+    // Build an SSE frame carrying a single delta field, forwarded live to the
+    // client when stream_reasoning_deltas is on.
+    let make_frame = |id: &str, model: &str, key: &str, text: &str| -> Bytes {
+        let frame = serde_json::json!({
+            "id": id,
+            "object": "chat.completion.chunk",
+            "model": model,
+            "choices": [{ "index": 0, "delta": { key: text }, "finish_reason": null }]
+        });
+        Bytes::from(format!(
+            "data: {}\n\n",
+            serde_json::to_string(&frame).unwrap_or_default()
+        ))
+    };
 
     while let Some(chunk) = stream.next().await {
         let bytes = match chunk {
@@ -611,33 +630,85 @@ async fn stream_call1_accumulate(
                 }
 
                 if let Some(delta) = choice.get("delta") {
-                    // Accumulate reasoning
-                    if let Some(r) = delta.get("reasoning_content").and_then(|v| v.as_str())
-                        && !r.is_empty()
-                    {
-                        reasoning_buf.push_str(r);
-                        // Live-stream reasoning to client if channel is open
-                        if let Some(ref tx) = tx {
-                            let sse_bytes = Bytes::from(format!("data: {}\n\n", data));
-                            if tx.send(sse_bytes).await.is_err() {
-                                break;
+                    if inline_think {
+                        // llama.cpp / SGLang: reasoning is inline <think>…</think>
+                        // inside `content`. Split it so reasoning and answer go
+                        // to the right buffers (and the right SSE channel).
+                        if let Some(c) = delta.get("content").and_then(|v| v.as_str())
+                            && !c.is_empty()
+                        {
+                            let (r, ans) = splitter.push(c);
+                            if !r.is_empty() {
+                                reasoning_buf.push_str(&r);
+                                if let Some(ref tx) = tx
+                                    && tx
+                                        .send(make_frame(&completion_id, &model_name, "reasoning_content", &r))
+                                        .await
+                                        .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            if !ans.is_empty() {
+                                content_buf.push_str(&ans);
+                                if let Some(ref tx) = tx
+                                    && tx
+                                        .send(make_frame(&completion_id, &model_name, "content", &ans))
+                                        .await
+                                        .is_err()
+                                {
+                                    break;
+                                }
                             }
                         }
-                    }
-                    // Accumulate content (natural finish path)
-                    if let Some(c) = delta.get("content").and_then(|v| v.as_str())
-                        && !c.is_empty()
-                    {
-                        content_buf.push_str(c);
-                        // Also live-stream content if channel is open
-                        if let Some(ref tx) = tx {
-                            let sse_bytes = Bytes::from(format!("data: {}\n\n", data));
-                            if tx.send(sse_bytes).await.is_err() {
-                                break;
+                    } else {
+                        // oMLX: native reasoning_content + content fields.
+                        if let Some(r) = delta.get("reasoning_content").and_then(|v| v.as_str())
+                            && !r.is_empty()
+                        {
+                            reasoning_buf.push_str(r);
+                            if let Some(ref tx) = tx {
+                                let sse_bytes = Bytes::from(format!("data: {}\n\n", data));
+                                if tx.send(sse_bytes).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(c) = delta.get("content").and_then(|v| v.as_str())
+                            && !c.is_empty()
+                        {
+                            content_buf.push_str(c);
+                            if let Some(ref tx) = tx {
+                                let sse_bytes = Bytes::from(format!("data: {}\n\n", data));
+                                if tx.send(sse_bytes).await.is_err() {
+                                    break;
+                                }
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Flush any held-back inline-think fragment (e.g. unterminated <think> when
+    // the budget was exhausted mid-reasoning).
+    if inline_think {
+        let (r, ans) = splitter.flush();
+        if !r.is_empty() {
+            reasoning_buf.push_str(&r);
+            if let Some(ref tx) = tx {
+                let _ = tx
+                    .send(make_frame(&completion_id, &model_name, "reasoning_content", &r))
+                    .await;
+            }
+        }
+        if !ans.is_empty() {
+            content_buf.push_str(&ans);
+            if let Some(ref tx) = tx {
+                let _ = tx
+                    .send(make_frame(&completion_id, &model_name, "content", &ans))
+                    .await;
             }
         }
     }
@@ -672,6 +743,7 @@ pub async fn proxy_stream_with_thinking_budget(
     original_max_tokens: u32,
     thinking_budget: u32,
     stream_reasoning_deltas: bool,
+    inline_think: bool,
 ) -> Result<Body, (u16, String)> {
     let url = format!("http://127.0.0.1:{}{}", engine_port, path);
     debug!(url = %url, thinking_budget, stream_reasoning_deltas, "Starting two-call thinking budget stream");
@@ -717,7 +789,7 @@ pub async fn proxy_stream_with_thinking_budget(
     };
 
     // Spawn Call 1 accumulator in background
-    let call1_task = tokio::spawn(stream_call1_accumulate(resp1, thinking_budget, tx_opt));
+    let call1_task = tokio::spawn(stream_call1_accumulate(resp1, thinking_budget, tx_opt, inline_think));
 
     let original_body_c = original_body.clone();
     let client = client.clone();
@@ -914,6 +986,7 @@ pub async fn proxy_nonstream_with_thinking_budget(
     original_body: serde_json::Value,
     original_max_tokens: u32,
     thinking_budget: u32,
+    inline_think: bool,
 ) -> Result<(u16, String), (u16, String)> {
     let url = format!("http://127.0.0.1:{}{}", engine_port, path);
     debug!(url = %url, thinking_budget, "Starting two-call thinking budget (non-stream)");
@@ -949,7 +1022,7 @@ pub async fn proxy_nonstream_with_thinking_budget(
     }
 
     let (reasoning_buf, content_buf_call1, completion_id, model_name, finish_reason) =
-        stream_call1_accumulate(resp1, thinking_budget, None)
+        stream_call1_accumulate(resp1, thinking_budget, None, inline_think)
             .await
             .map_err(|e| (500u16, e))?;
 
@@ -996,9 +1069,10 @@ pub async fn proxy_nonstream_with_thinking_budget(
         return Err((status, resp2.text().await.unwrap_or_default()));
     }
 
-    // Accumulate Call 2 content
+    // Accumulate Call 2 content. Call-2 runs with enable_thinking:false so it
+    // should emit plain answer content; inline_think is harmless (no tags to split).
     let (_, content_buf_call2, comp_id2, model2, finish2) =
-        stream_call1_accumulate(resp2, u32::MAX, None)
+        stream_call1_accumulate(resp2, u32::MAX, None, inline_think)
             .await
             .map_err(|e| (500u16, e))?;
 

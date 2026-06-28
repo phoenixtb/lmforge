@@ -23,6 +23,7 @@
     reasoning?: string;  // streamed thinking (assistant turns only)
     images?: string[];   // data: or http(s) URLs (user turns only)
     error?: boolean;
+    notice?: string;     // non-error hint (e.g. budget exhausted, no answer)
     streaming?: boolean;
   }
 
@@ -162,7 +163,7 @@
     busy = true;
     abort = new AbortController();
     try {
-      await streamChat(
+      const result = await streamChat(
         selected,
         wire,
         {
@@ -186,7 +187,23 @@
           scrollToBottom();
         },
       );
-      msgs[ai] = { ...msgs[ai], streaming: false };
+      // Blank answer: the model produced no content. Almost always a thinking
+      // model that burned its whole budget while reasoning (finish=length)
+      // before closing </think>, so the user gets a silent empty bubble.
+      // Surface a clear, actionable hint instead.
+      let notice: string | undefined;
+      if (!msgs[ai].text.trim()) {
+        if (useThink && result.reasoningChars > 0) {
+          notice = result.finishReason === 'length'
+            ? 'The model used its entire thinking budget before answering. Try raising the budget, lowering it so it commits sooner, or use a larger model (≥4B) for multi-step reasoning.'
+            : 'The model finished while still thinking and produced no answer. Try again, adjust the thinking budget, or use a larger model (≥4B).';
+        } else if (result.finishReason === 'length') {
+          notice = 'Output was cut off at the token limit before any answer. Raise “max”.';
+        } else {
+          notice = 'The model returned an empty response. Try again or rephrase.';
+        }
+      }
+      msgs[ai] = { ...msgs[ai], streaming: false, notice };
       msgs = msgs;
     } catch (e) {
       const aborted = abort?.signal.aborted;
@@ -412,6 +429,15 @@
             {#if m.text}
               <div class="text">{m.text}</div>
             {/if}
+            {#if m.notice}
+              <div class="notice">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/>
+                </svg>
+                <span>{m.notice}</span>
+              </div>
+            {/if}
             {#if m.streaming && !m.text}
               <div class="typing"><span></span><span></span><span></span></div>
             {/if}
@@ -614,6 +640,16 @@
   .bubble.error { background: var(--danger-dim); color: var(--danger); border-color: hsla(3,78%,60%,.25); box-shadow: none; }
 
   .text { white-space: pre-wrap; word-break: break-word; }
+
+  /* Non-error hint (e.g. thinking budget exhausted with no answer) */
+  .notice {
+    display: flex; align-items: flex-start; gap: 7px;
+    margin-top: 2px; padding: 8px 10px; border-radius: var(--radius-sm);
+    background: hsla(38, 92%, 50%, 0.10);
+    border: 1px solid hsla(38, 92%, 50%, 0.30);
+    color: var(--text-2); font-size: 12px; line-height: 1.45;
+  }
+  .notice svg { width: 15px; height: 15px; flex: none; margin-top: 1px; color: hsl(38, 92%, 52%); }
 
   /* Thinking / reasoning panel */
   .reasoning {

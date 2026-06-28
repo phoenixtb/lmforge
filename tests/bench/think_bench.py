@@ -471,7 +471,7 @@ def main() -> int:
     csv_fields = [
         "host", "os", "arch", "accel", "engine",
         "model", "family", "note", "prompt", "category", "mode", "rep",
-        "finish_reason", "correct", "looped", "latency_s", "ttfb_s",
+        "finish_reason", "correct", "blank", "looped", "latency_s", "ttfb_s",
         "reasoning_chars", "content_chars", "reasoning_deltas", "content_deltas",
         "leak", "max_consecutive_repeat", "top_6gram_freq", "top_line_freq",
         "distinct_line_ratio", "compression_ratio", "error",
@@ -521,16 +521,26 @@ def main() -> int:
         leak = any(t in res["content"] for t in SPECIAL_TOKENS)
         looped = looks_looped(lm, full)
         grader = p.get("grader")
-        # grade against answer; for thinking models the answer is `content`
-        gtext = res["content"] if res["content"].strip() else full
-        correct = bool(re.search(grader, gtext, re.IGNORECASE)) if grader else None
+        # The user only ever sees `content`. A run that emits reasoning but no
+        # content (e.g. thinking budget exhausted mid-<think>, finish=length)
+        # is a BLANK answer and must score as a failure — never fall back to
+        # grading the reasoning text (that inflates "correct" with answers the
+        # user never received).
+        blank = not res["content"].strip()
+        if grader is None:
+            correct = None
+        elif blank:
+            correct = False
+        else:
+            correct = bool(re.search(grader, res["content"], re.IGNORECASE))
 
         row = {
             "host": host["slug"], "os": host["os"], "arch": host["arch"],
             "accel": host["accel"], "engine": host["engine"],
             "model": m["id"], "family": m.get("family"), "note": m.get("note"),
             "prompt": p["id"], "category": p["category"], "mode": mode, "rep": rep,
-            "finish_reason": res["finish_reason"], "correct": correct, "looped": looped,
+            "finish_reason": res["finish_reason"], "correct": correct,
+            "blank": blank, "looped": looped,
             "latency_s": res["latency_s"], "ttfb_s": res["ttfb_s"],
             "reasoning_chars": res["reasoning_chars"], "content_chars": res["content_chars"],
             "reasoning_deltas": res["reasoning_deltas"], "content_deltas": res["content_deltas"],
@@ -547,11 +557,13 @@ def main() -> int:
 
         # aggregate
         key = (m["id"], mode)
-        a = agg.setdefault(key, {"n": 0, "correct": 0, "looped": 0, "leak": 0,
-                                 "length": 0, "errors": 0})
+        a = agg.setdefault(key, {"n": 0, "correct": 0, "blank": 0, "looped": 0,
+                                 "leak": 0, "length": 0, "errors": 0})
         a["n"] += 1
         if correct:
             a["correct"] += 1
+        if blank:
+            a["blank"] += 1
         if looped:
             a["looped"] += 1
         if leak:
@@ -568,9 +580,11 @@ def main() -> int:
             flags.append("LOOP")
         if leak:
             flags.append("LEAK")
+        if blank:
+            flags.append("BLANK")
         if correct is True:
             flags.append("ok")
-        elif correct is False:
+        elif correct is False and not blank:
             flags.append("wrong")
         print(f" {res['finish_reason'] or '?':<7} {res['latency_s']:>5}s "
               f"r/c={res['reasoning_chars']}/{res['content_chars']} {' '.join(flags)}",
@@ -590,11 +604,13 @@ def main() -> int:
              f"- base: {base}",
              f"- models: {len(run_models)} | prompts: {len(prompts)} | runs: {total}", "",
              "## Aggregate (model x mode)", "",
-             "| model | mode | n | correct | looped | leak | length | err |",
-             "|---|---|---|---|---|---|---|---|"]
+             "`correct` = real answers the user saw (blank/length runs score as fail). "
+             "`blank` = produced no answer content (e.g. thinking budget exhausted).", "",
+             "| model | mode | n | correct | blank | looped | leak | length | err |",
+             "|---|---|---|---|---|---|---|---|---|"]
     for (mid, mode), a in sorted(agg.items()):
         lines.append(f"| {mid} | {mode} | {a['n']} | {a['correct']}/{a['n']} | "
-                     f"{a['looped']} | {a['leak']} | {a['length']} | {a['errors']} |")
+                     f"{a['blank']} | {a['looped']} | {a['leak']} | {a['length']} | {a['errors']} |")
     (out / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     print(f"\nDONE. Results in: {out}")

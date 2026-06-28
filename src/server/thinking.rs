@@ -14,6 +14,57 @@ use crate::model::index::ModelCapabilities;
 /// bounded thinking flow. Matches docintel's configured default.
 pub const DEFAULT_THINKING_BUDGET: u32 = 2048;
 
+/// Conservative anti-loop sampling defaults for thinking mode.
+///
+/// Reasoning models (Qwen3-class especially) degenerate into repetition loops
+/// — "Wait. Wait. …" — at low temperature with no penalty, burning the whole
+/// reasoning budget and producing no answer. These mirror docintel's
+/// `LLM_THINKING_*` defaults and the Playground's THINK_PROFILE.
+const THINK_DEFAULT_TEMPERATURE: f64 = 0.6;
+const THINK_DEFAULT_TOP_P: f64 = 0.95;
+const THINK_DEFAULT_TOP_K: i64 = 20;
+const THINK_DEFAULT_PRESENCE_PENALTY: f64 = 0.3;
+
+/// Fill anti-loop sampling **defaults** for thinking requests — only when the
+/// client OMITTED the field. This never overrides a client-supplied value
+/// (LMForge's "client owns sampling" rule still holds); it only stops the
+/// common case of a thinking request arriving with no sampling at all from
+/// degenerating into a budget-burning loop with a blank answer.
+///
+/// Engine-agnostic: sets the OpenAI-standard fields. For oMLX,
+/// `presence_penalty` is later translated to `repetition_penalty` by
+/// `apply_think_for_engine`; for llama.cpp/SGLang it is supported natively.
+/// MUST be called BEFORE `apply_think_for_engine` so that translation sees it.
+///
+/// No-op when `has_think` is false.
+pub fn apply_thinking_sampling_defaults(body: &mut serde_json::Value, has_think: bool) {
+    if !has_think {
+        return;
+    }
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
+    if !obj.contains_key("temperature") {
+        obj.insert("temperature".into(), serde_json::Value::from(THINK_DEFAULT_TEMPERATURE));
+    }
+    if !obj.contains_key("top_p") {
+        obj.insert("top_p".into(), serde_json::Value::from(THINK_DEFAULT_TOP_P));
+    }
+    if !obj.contains_key("top_k") {
+        obj.insert("top_k".into(), serde_json::Value::from(THINK_DEFAULT_TOP_K));
+    }
+    // Only seed presence_penalty if the client supplied no repetition control
+    // at all — otherwise we'd stack penalties (oMLX derives repetition_penalty
+    // from presence_penalty, so seeding it when the client already set
+    // repetition_penalty would be ignored anyway, but we stay explicit).
+    let has_any_penalty = obj.contains_key("presence_penalty")
+        || obj.contains_key("frequency_penalty")
+        || obj.contains_key("repetition_penalty");
+    if !has_any_penalty {
+        obj.insert("presence_penalty".into(), serde_json::Value::from(THINK_DEFAULT_PRESENCE_PENALTY));
+    }
+}
+
 /// Extract `<think>...</think>` content from inline text.
 /// Returns (reasoning_content, clean_content).
 ///
@@ -49,6 +100,87 @@ pub fn extract_think_tags(content: &str) -> (Option<String>, String) {
         );
     }
     (None, content.to_string())
+}
+
+/// Streaming splitter for engines (llama.cpp, SGLang) that embed reasoning as
+/// inline `<think>…</think>` tags inside `content` rather than emitting a
+/// dedicated `reasoning_content` field. Feed it content chunks as they stream;
+/// it returns the portion that is reasoning vs. answer, correctly handling tag
+/// markers that straddle chunk boundaries (e.g. `"<thi"` then `"nk>"`).
+#[derive(Default)]
+pub struct ThinkSplitter {
+    in_think: bool,
+    /// Holds a trailing fragment that could be the start of a `<think>` /
+    /// `</think>` marker split across chunks.
+    pending: String,
+}
+
+impl ThinkSplitter {
+    const OPEN: &'static str = "<think>";
+    const CLOSE: &'static str = "</think>";
+
+    /// Longest suffix of `buf` that is a proper prefix of `tag` (so we can hold
+    /// it back until the next chunk completes a potential marker).
+    fn partial_tail(buf: &str, tag: &str) -> usize {
+        let max = buf.len().min(tag.len() - 1);
+        for n in (1..=max).rev() {
+            if buf.is_char_boundary(buf.len() - n) && tag.starts_with(&buf[buf.len() - n..]) {
+                return n;
+            }
+        }
+        0
+    }
+
+    /// Push a content chunk. Returns `(reasoning, answer)` extracted from it.
+    pub fn push(&mut self, chunk: &str) -> (String, String) {
+        let mut buf = std::mem::take(&mut self.pending);
+        buf.push_str(chunk);
+        let mut reasoning = String::new();
+        let mut answer = String::new();
+
+        loop {
+            if self.in_think {
+                if let Some(pos) = buf.find(Self::CLOSE) {
+                    reasoning.push_str(&buf[..pos]);
+                    buf.drain(..pos + Self::CLOSE.len());
+                    self.in_think = false;
+                } else {
+                    let keep = Self::partial_tail(&buf, Self::CLOSE);
+                    let cut = buf.len() - keep;
+                    reasoning.push_str(&buf[..cut]);
+                    self.pending = buf[cut..].to_string();
+                    break;
+                }
+            } else if let Some(pos) = buf.find(Self::OPEN) {
+                answer.push_str(&buf[..pos]);
+                buf.drain(..pos + Self::OPEN.len());
+                self.in_think = true;
+            } else {
+                let keep = Self::partial_tail(&buf, Self::OPEN);
+                let cut = buf.len() - keep;
+                answer.push_str(&buf[..cut]);
+                self.pending = buf[cut..].to_string();
+                break;
+            }
+        }
+        (reasoning, answer)
+    }
+
+    /// Flush any held-back fragment at stream end. Emits it as reasoning if we
+    /// ended mid-`<think>` (unterminated, e.g. budget exhausted), else as answer.
+    pub fn flush(&mut self) -> (String, String) {
+        let rest = std::mem::take(&mut self.pending);
+        if self.in_think {
+            (rest, String::new())
+        } else {
+            (String::new(), rest)
+        }
+    }
+
+    /// True if the splitter ended while still inside an unterminated `<think>`.
+    pub fn unterminated(&self) -> bool {
+        self.in_think
+    }
 }
 
 /// Inject `reasoning_content` field into a non-streaming response JSON.
@@ -828,6 +960,115 @@ mod tests {
             body.get("repetition_penalty").is_none(),
             "No repetition_penalty should be derived for llamacpp"
         );
+    }
+
+    // ── ThinkSplitter (inline <think> streaming) ──────────────────────────────
+
+    fn splitter_collect(chunks: &[&str]) -> (String, String, bool) {
+        let mut s = ThinkSplitter::default();
+        let (mut r, mut a) = (String::new(), String::new());
+        for c in chunks {
+            let (rr, aa) = s.push(c);
+            r.push_str(&rr);
+            a.push_str(&aa);
+        }
+        let (rr, aa) = s.flush();
+        r.push_str(&rr);
+        a.push_str(&aa);
+        (r, a, s.unterminated())
+    }
+
+    #[test]
+    fn test_splitter_single_chunk() {
+        let (r, a, unterm) = splitter_collect(&["<think>reasoning here</think>the answer"]);
+        assert_eq!(r, "reasoning here");
+        assert_eq!(a, "the answer");
+        assert!(!unterm);
+    }
+
+    #[test]
+    fn test_splitter_no_think() {
+        let (r, a, _) = splitter_collect(&["just a plain answer"]);
+        assert_eq!(r, "");
+        assert_eq!(a, "just a plain answer");
+    }
+
+    #[test]
+    fn test_splitter_open_tag_split_across_chunks() {
+        // "<thi" then "nk>reason</think>ans"
+        let (r, a, _) = splitter_collect(&["<thi", "nk>reason", "</thi", "nk>ans"]);
+        assert_eq!(r, "reason");
+        assert_eq!(a, "ans");
+    }
+
+    #[test]
+    fn test_splitter_unterminated_think_is_reasoning() {
+        // Budget exhausted mid-think: never closed → all reasoning, no answer.
+        let (r, a, unterm) = splitter_collect(&["<think>still thinking and loop", "ing forever"]);
+        assert_eq!(r, "still thinking and looping forever");
+        assert_eq!(a, "");
+        assert!(unterm);
+    }
+
+    #[test]
+    fn test_splitter_token_by_token() {
+        let src = "<think>ab</think>cd";
+        let mut s = ThinkSplitter::default();
+        let (mut r, mut a) = (String::new(), String::new());
+        for ch in src.chars() {
+            let (rr, aa) = s.push(&ch.to_string());
+            r.push_str(&rr);
+            a.push_str(&aa);
+        }
+        let (rr, aa) = s.flush();
+        r.push_str(&rr); a.push_str(&aa);
+        assert_eq!(r, "ab");
+        assert_eq!(a, "cd");
+    }
+
+    // ── thinking sampling defaults ────────────────────────────────────────────
+
+    #[test]
+    fn test_thinking_defaults_noop_when_not_think() {
+        let mut body = serde_json::json!({"model": "x", "messages": []});
+        apply_thinking_sampling_defaults(&mut body, false);
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("top_p").is_none());
+        assert!(body.get("presence_penalty").is_none());
+    }
+
+    #[test]
+    fn test_thinking_defaults_fills_when_absent() {
+        let mut body = serde_json::json!({"model": "x", "messages": [], "think": true});
+        apply_thinking_sampling_defaults(&mut body, true);
+        assert_eq!(body["temperature"], 0.6);
+        assert_eq!(body["top_p"], 0.95);
+        assert_eq!(body["top_k"], 20);
+        assert_eq!(body["presence_penalty"], 0.3);
+    }
+
+    #[test]
+    fn test_thinking_defaults_never_override_client() {
+        let mut body = serde_json::json!({
+            "model": "x", "messages": [], "think": true,
+            "temperature": 0.2, "top_p": 0.8, "top_k": 5
+        });
+        apply_thinking_sampling_defaults(&mut body, true);
+        assert_eq!(body["temperature"], 0.2, "client temperature must win");
+        assert_eq!(body["top_p"], 0.8, "client top_p must win");
+        assert_eq!(body["top_k"], 5, "client top_k must win");
+    }
+
+    #[test]
+    fn test_thinking_defaults_no_penalty_stack() {
+        // Client set repetition_penalty → we must NOT also seed presence_penalty.
+        let mut body = serde_json::json!({
+            "model": "x", "messages": [], "think": true, "repetition_penalty": 1.15
+        });
+        apply_thinking_sampling_defaults(&mut body, true);
+        assert!(body.get("presence_penalty").is_none(),
+            "must not seed presence_penalty when client already set a repetition control");
+        assert_eq!(body["repetition_penalty"], 1.15);
     }
 
     // ── Part B: extract_thinking_budget ───────────────────────────────────────

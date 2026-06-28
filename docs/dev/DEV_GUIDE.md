@@ -254,11 +254,14 @@ See [RELEASE.md](./RELEASE.md) for tag → draft → publish workflow.
 
 ### The problem: reasoning loops eat the budget
 
-LMForge follows a **client-owns-sampling** contract — the daemon advises (e.g. it
-warns when `temperature` is too low for thinking) but never overrides what the
-client sends. That keeps the OpenAI/Ollama surfaces predictable, but it means a
-thin client that sends only `temperature` + `max_tokens` inherits the engine's
-default sampling, and Qwen3-class reasoning models degenerate badly under it.
+LMForge follows a **client-owns-sampling** contract — the daemon never overrides
+a sampling value the client sends. It does, however, **seed anti-loop defaults
+for thinking requests that arrive with no sampling at all** (`think:true` with no
+`temperature`/`top_p`/`top_k`/penalty): absent fields are filled from the thinking
+profile below, present fields are left untouched. That keeps the OpenAI/Ollama
+surfaces predictable while stopping a thin client (only `temperature` +
+`max_tokens`) from inheriting the engine defaults under which Qwen3-class
+reasoning models degenerate badly.
 
 Symptom: ask a reasoning model a "hard" question with `think:true` and a low
 temperature, and the reasoning stream collapses into a repeating tail —
@@ -274,6 +277,14 @@ as a prefill, and call-2 dutifully echoes it — which is why the *thinking* and
 *answer* come back looking identical. Both symptoms (the loop **and** the
 duplicated answer) have one root cause: **missing repetition/nucleus controls**,
 not a bug in the orchestrator.
+
+> The two-call orchestrator runs on **all** thinking engines now — oMLX (native
+> `reasoning_content`) and llama.cpp / SGLang (inline `<think>` tags, split out by
+> the daemon). This guarantees an answer phase even when the reasoning budget is
+> exhausted, so the engine can no longer return a *blank* answer (which used to
+> happen on llama.cpp: a runaway `<think>` would burn `max_tokens` and stream
+> nothing). If a model still produces no answer, the Playground surfaces a
+> "used its entire thinking budget before answering" hint instead of an empty bubble.
 
 ### The fix: send the thinking sampling profile
 
@@ -340,6 +351,27 @@ curl -sN http://127.0.0.1:11430/v1/chat/completions \
     "max_tokens": 256
   }'
 ```
+
+### Model guidance (not a hard rule)
+
+Sampling fixes the *engine default* loop; it does not make a tiny model a strong
+reasoner. Cross-platform benchmarks (`tests/bench/think_bench.py`, run on
+oMLX/metal, llama.cpp/CUDA and llama.cpp/Vulkan) show:
+
+- **≥ 4B reasoning models** (`qwen3.5:4b:6bit`, `qwen3:4b:thinking:4bit`,
+  `qwen3:8b:4bit`) are reliable in thinking mode with the profile above.
+- **Tiny quantized models** (`qwen3.5:2b:4bit`, `qwen3:1.7b:4bit`) still loop on
+  multi-step problems even with the full anti-loop profile — they lack the
+  stability to terminate a reasoning chain, and on a trivial prompt (e.g.
+  "how are you") they may fabricate a problem to reason about.
+
+This is **guidance, not enforcement** — LMForge runs whatever model you point it
+at. For conversational turns, prefer `think:false` (or omit it); reserve
+`think:true` for ≥ 4B models when you actually want step-by-step reasoning. To
+reproduce/extend the matrix on your own hardware, see
+[`tests/bench/think_bench.py`](../../tests/bench/think_bench.py) — the result dir
+is auto-fingerprinted per machine (`<ts>__<os>-<arch>-<accel>`) and `report.md`
+scores blank answers (budget exhausted, no content) as failures.
 
 ### Playground & Postman
 

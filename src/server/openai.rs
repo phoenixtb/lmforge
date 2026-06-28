@@ -185,6 +185,11 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     // Extract stream_reasoning_deltas BEFORE apply_think_for_engine.
     let stream_reasoning_deltas = thinking::extract_stream_reasoning_deltas(&body_value);
 
+    // Seed anti-loop sampling defaults for thinking requests that arrive with no
+    // sampling — only fills absent fields (client values always win). MUST run
+    // before apply_think_for_engine so oMLX penalty translation sees them.
+    thinking::apply_thinking_sampling_defaults(&mut body_value, has_think);
+
     // Apply engine-specific transformations (strips think, num_ctx, translates penalties).
     thinking::apply_think_for_engine(&mut body_value, &state.engine_config.id, model_caps);
 
@@ -235,18 +240,26 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     }
 
     // Determine if the two-call budget path is applicable:
-    //   • engine must be oMLX (only engine with native thinking support we manage)
+    //   • engine must support the orchestrator: oMLX (native reasoning_content)
+    //     or llama.cpp / SGLang (inline <think> tags, split by the accumulator).
+    //     The orchestrator guarantees an answer phase (Call-2) even when the
+    //     reasoning budget is exhausted — without it, a runaway <think> on
+    //     llama.cpp burns max_tokens and returns a blank answer (finish=length).
     //   • model must have thinking capability in the index
     //   • think must be requested (has_think=true)
     //   • model must NOT be a native-reasoning model — those emit reasoning in a
     //     single call and break on the orchestrator's synthetic <think> prefill
     //     (e.g. Phi-4-reasoning hallucinates a new dialogue turn). They stay on
     //     the single-call path, which already separates reasoning_content/content.
-    //   • thinking_budget must be explicitly provided
     let is_omlx = state.engine_config.id == "omlx";
+    // Engines that embed reasoning as inline <think> tags inside `content`.
+    let inline_think =
+        state.engine_config.id == "llamacpp" || state.engine_config.id == "sglang";
+    let supports_orchestrator = is_omlx || inline_think;
     let is_thinking_model = model_caps.map(|c| c.thinking).unwrap_or(false);
     let is_native_reasoning = model_caps.map(|c| c.native_reasoning).unwrap_or(false);
-    let can_use_budget = has_think && is_omlx && is_thinking_model && !is_native_reasoning;
+    let can_use_budget =
+        has_think && supports_orchestrator && is_thinking_model && !is_native_reasoning;
 
     // Default the thinking budget when a client requests thinking on an oMLX
     // thinking model but doesn't pass one. This forces the bounded two-call
@@ -336,6 +349,7 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
                     original_max_tokens,
                     budget,
                     stream_reasoning_deltas,
+                    inline_think,
                 )
                 .await
             }
@@ -404,6 +418,7 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
                         body_value,
                         original_max_tokens,
                         budget,
+                        inline_think,
                     ),
                 )
                 .await

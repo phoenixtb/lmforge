@@ -640,12 +640,21 @@ export type DeltaKind = 'content' | 'reasoning';
  * Thinking: pass `think:true` — reasoning is requested to stream live via
  * `stream_reasoning_deltas` and surfaced on the 'reasoning' channel.
  */
+export interface ChatStreamResult {
+  /** OpenAI finish_reason of the final chunk: 'stop' | 'length' | null, etc. */
+  finishReason: string | null;
+  /** Total content (answer) characters streamed. 0 = blank answer. */
+  contentChars: number;
+  /** Total reasoning characters streamed. */
+  reasoningChars: number;
+}
+
 export async function streamChat(
   model: string,
   messages: ChatMsg[],
   opts: ChatStreamOpts,
   onDelta: (text: string, kind: DeltaKind) => void,
-): Promise<void> {
+): Promise<ChatStreamResult> {
   const body: Record<string, unknown> = {
     model,
     messages,
@@ -693,6 +702,9 @@ export async function streamChat(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
+  let finishReason: string | null = null;
+  let contentChars = 0;
+  let reasoningChars = 0;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -703,17 +715,25 @@ export async function streamChat(
       const t = line.trim();
       if (!t.startsWith('data:')) continue;
       const payload = t.slice(5).trim();
-      if (payload === '[DONE]') return;
+      if (payload === '[DONE]') return { finishReason, contentChars, reasoningChars };
       try {
-        const delta = JSON.parse(payload)?.choices?.[0]?.delta;
-        if (typeof delta?.content === 'string' && delta.content) onDelta(delta.content, 'content');
-        if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content)
+        const choice = JSON.parse(payload)?.choices?.[0];
+        const delta = choice?.delta;
+        if (typeof choice?.finish_reason === 'string') finishReason = choice.finish_reason;
+        if (typeof delta?.content === 'string' && delta.content) {
+          contentChars += delta.content.length;
+          onDelta(delta.content, 'content');
+        }
+        if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content) {
+          reasoningChars += delta.reasoning_content.length;
           onDelta(delta.reasoning_content, 'reasoning');
+        }
       } catch {
         /* keepalive / partial frame — ignore */
       }
     }
   }
+  return { finishReason, contentChars, reasoningChars };
 }
 
 /** Read a File/Blob as a base64 `data:` URL (for VLM image_url parts). */

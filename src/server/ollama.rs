@@ -80,6 +80,11 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
     };
     let engine_port = guard.port();
 
+    // Seed anti-loop sampling defaults for thinking requests with no sampling
+    // (fills absent fields only; client/Ollama-options values win). Before
+    // apply_think_for_engine so oMLX penalty translation sees them.
+    thinking::apply_thinking_sampling_defaults(&mut openai_req, has_think);
+
     // Engine-aware think translation (Ollama path was previously missing this entirely)
     let model_caps = index.get(&model_id).map(|e| &e.capabilities);
     thinking::apply_think_for_engine(&mut openai_req, &state.engine_config.id, model_caps);

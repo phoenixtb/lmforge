@@ -561,11 +561,11 @@ DocIntel-relevant changes since the previous release:
 
 ---
 
-### Thinking Models (oMLX / Apple Silicon)
+### Thinking Models
 
 For models with native reasoning capability (Qwen3, DeepSeek-R1 distillations), LMForge
 implements a **two-call thinking-budget workflow** that gives you control over how long
-the model reasons before it answers.
+the model reasons before it answers. It runs across engines (oMLX, llama.cpp, SGLang).
 
 #### How it works
 
@@ -619,16 +619,21 @@ gap (typically 5–15 seconds for 4B models with a 4096-token budget). Clients c
 this to show a "Generating answer…" indicator. Standard OpenAI clients ignore the
 `lmforge` extension field — it is fully backward-compatible.
 
-> **Note:** The two-call path requires `engine = omlx` (Apple Silicon). On llama.cpp
-> and SGLang, `think: true` translates to `enable_thinking: true` in the chat template
-> and the model generates reasoning natively in a single call.
+> **Note:** The two-call orchestrator runs on **all** thinking engines — oMLX
+> (native `reasoning_content`) and llama.cpp / SGLang (inline `<think>` tags, which
+> the daemon splits into reasoning vs. answer). Running it everywhere guarantees an
+> answer phase even when the reasoning budget is exhausted, so the engine can't
+> return a blank answer (the prior single-call llama.cpp path could burn `max_tokens`
+> inside `<think>` and stream nothing).
 
 #### Sampling (avoid reasoning loops)
 
-LMForge is **client-owns-sampling**: it never overrides what you send. With only
-`temperature` + `max_tokens`, Qwen3-class models loop on reasoning (`… Wait. Wait.
-Wait. …`), burn the whole `thinking_budget`, and the answer ends up echoing the
-thinking. Send the thinking profile to keep reasoning bounded:
+LMForge is **client-owns-sampling**: it never overrides a value you send. For
+`think:true` requests that arrive with *no* sampling, it seeds the thinking
+profile below (absent fields only) so reasoning stays bounded out of the box;
+sending your own values always wins. With only `temperature` + `max_tokens` and
+no defaults, Qwen3-class models loop on reasoning (`… Wait. Wait. Wait. …`), burn
+the whole `thinking_budget`, and the answer echoes the thinking. The profile:
 
 | Param | Chat | Thinking |
 |---|:---:|:---:|
@@ -647,7 +652,10 @@ curl -sN http://127.0.0.1:11430/v1/chat/completions -H "Content-Type: applicatio
 ```
 
 The bundled Playground UI and Postman collection ship these profiles by default.
-Full rationale and tuning notes: [docs/dev/DEV_GUIDE.md → Sampling & thinking](docs/dev/DEV_GUIDE.md#sampling--thinking).
+Sampling fixes the engine-default loop but won't make a tiny model reason: prefer
+**≥ 4B** models for `think:true` and use `think:false` for chat (guidance, not
+enforced — LMForge runs any model). Full rationale, the cross-platform benchmark,
+and tuning notes: [docs/dev/DEV_GUIDE.md → Sampling & thinking](docs/dev/DEV_GUIDE.md#sampling--thinking).
 
 ---
 
