@@ -17,14 +17,21 @@ Run from a fresh clone on any platform:
          Windows:      pwsh scripts/lmforge.ps1 install --source local
     2. Make sure the daemon is up (the installer starts it; verify):
          curl http://127.0.0.1:11430/v1/models
-    3. Run the benchmark (pulls the whole candidate matrix if missing):
-         python3 scripts/util/think_bench.py --pull-missing
+    3. Run the benchmark (pulls the whole candidate matrix if missing). Tag the
+       machine so committed results are self-identifying:
+         python3 scripts/util/think_bench.py --pull-missing --label fedora-cpu
+         python3 scripts/util/think_bench.py --pull-missing --label win-cuda
+       (omit --label and it auto-derives <os>-<arch>-<hostname>). The label
+       becomes the result dir suffix and is recorded in report.md + every CSV
+       row, so a Fedora run and a Windows run never collide once committed.
     4. Commit the run's report.md + summary.csv (tracked) and compare the
        aggregate table across platforms. Engine matters: macOS exercises the
        oMLX two-call budget orchestrator + stop-token injection; Linux/Windows
        exercise the llama.cpp <think> rewriter path. Loop/leak numbers are
        therefore expected to differ by platform — that's the point of running
        it everywhere.
+
+Result dirs are named  ./bench_results/<timestamp>__<machine-slug>/
 
 Common invocations:
     python3 scripts/util/think_bench.py                 # only installed models
@@ -49,7 +56,9 @@ import csv
 import datetime as dt
 import json
 import os
+import platform
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -159,6 +168,56 @@ SPECIAL_TOKENS = ["<|end|>", "<|assistant|>", "<|im_end|>", "<|im_start|>",
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def _slug(s: str, maxlen: int = 40) -> str:
+    """Filesystem/branch-safe lowercase slug."""
+    s = re.sub(r"[^A-Za-z0-9._-]+", "-", str(s)).strip("-").lower()
+    return s[:maxlen] or "x"
+
+
+def daemon_engine(base: str) -> str:
+    """Best-effort active engine id from the daemon (empty string if unknown)."""
+    for path in ("/lf/info", "/lf/status", "/lf/engine"):
+        try:
+            with urllib.request.urlopen(base + path, timeout=5) as r:
+                data = json.load(r)
+            for k in ("engine", "engine_id", "active_engine"):
+                v = data.get(k) if isinstance(data, dict) else None
+                if isinstance(v, dict):
+                    v = v.get("id") or v.get("name")
+                if v:
+                    return str(v)
+        except Exception:
+            continue
+    return ""
+
+
+def host_fingerprint(base: str, label: str | None) -> dict:
+    """Identify the machine a run came from so committed results are
+    attributable. `label` is an optional human tag (e.g. 'fedora-cpu')."""
+    sysname = platform.system() or "unknown"        # Darwin / Linux / Windows
+    arch = platform.machine() or "unknown"           # arm64 / x86_64 / AMD64
+    try:
+        host = socket.gethostname().split(".")[0]
+    except Exception:
+        host = "host"
+    fp = {
+        "label": label or "",
+        "os": sysname,
+        "os_release": platform.release(),
+        "os_version": platform.version(),
+        "arch": arch,
+        "hostname": host,
+        "cpu_count": os.cpu_count(),
+        "python": platform.python_version(),
+        "engine": daemon_engine(base),
+    }
+    # Short slug used in the result dir name. Prefer the explicit label;
+    # otherwise synthesize os-arch-host so machines stay distinguishable.
+    parts = [label] if label else [sysname, arch, host]
+    fp["slug"] = "-".join(_slug(p) for p in parts if p)
+    return fp
+
+
 def http_models(base: str) -> dict:
     """Return {id: capabilities} from /v1/models."""
     try:
@@ -321,9 +380,13 @@ def main() -> int:
     ap.add_argument("--repeats", type=int, default=None, help="override repeats for every prompt")
     ap.add_argument("--think-only", action="store_true", help="only run think=on (skip think=off)")
     ap.add_argument("--outdir", default="bench_results")
+    ap.add_argument("--label", default=os.environ.get("BENCH_LABEL"),
+                    help="human machine tag for the result dir/report "
+                         "(e.g. 'fedora-cpu', 'win-cuda'); falls back to os-arch-host")
     args = ap.parse_args()
 
     base = args.base.rstrip("/")
+    host = host_fingerprint(base, args.label)
 
     # Resolve model set
     if args.models:
@@ -355,9 +418,11 @@ def main() -> int:
     if args.quick:
         prompts = [p for p in PROMPTS if p["id"] in QUICK_PROMPT_IDS]
 
-    # Output dirs
+    # Output dirs — name carries a machine fingerprint so committed results
+    # from different platforms (mac/fedora/windows) never collide and are
+    # self-identifying: <timestamp>__<slug>
     ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    out = Path(args.outdir) / ts
+    out = Path(args.outdir) / f"{ts}__{host['slug']}"
     raw_dir = out / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     Path(args.outdir, "LATEST").write_text(str(out.resolve()) + "\n")
@@ -365,6 +430,7 @@ def main() -> int:
     summ_jsonl = (out / "summary.jsonl").open("w")
     csv_f = (out / "summary.csv").open("w", newline="")
     csv_fields = [
+        "host", "os", "arch", "engine",
         "model", "family", "note", "prompt", "category", "mode", "rep",
         "finish_reason", "correct", "looped", "latency_s", "ttfb_s",
         "reasoning_chars", "content_chars", "reasoning_deltas", "content_deltas",
@@ -391,6 +457,8 @@ def main() -> int:
                     total += 1
 
     print(f"\n== think_bench ==")
+    print(f"host    : {host['slug']}  ({host['os']} {host['os_release']} / "
+          f"{host['arch']}{', engine=' + host['engine'] if host['engine'] else ''})")
     print(f"base    : {base}")
     print(f"models  : {len(run_models)} ({', '.join(x['id'] for x in run_models)})")
     print(f"prompts : {len(prompts)} | total runs: {total}")
@@ -416,6 +484,8 @@ def main() -> int:
         correct = bool(re.search(grader, gtext, re.IGNORECASE)) if grader else None
 
         row = {
+            "host": host["slug"], "os": host["os"], "arch": host["arch"],
+            "engine": host["engine"],
             "model": m["id"], "family": m.get("family"), "note": m.get("note"),
             "prompt": p["id"], "category": p["category"], "mode": mode, "rep": rep,
             "finish_reason": res["finish_reason"], "correct": correct, "looped": looped,
@@ -468,7 +538,14 @@ def main() -> int:
     csv_f.close()
 
     # Report
-    lines = ["# think_bench report", "", f"- when: {ts}", f"- base: {base}",
+    lines = ["# think_bench report", "",
+             f"- when: {ts}",
+             f"- machine: **{host['slug']}**" + (f" (`{host['label']}`)" if host['label'] else ""),
+             f"- os: {host['os']} {host['os_release']} ({host['os_version']})",
+             f"- arch: {host['arch']} | cpus: {host['cpu_count']} | python: {host['python']}",
+             f"- engine: {host['engine'] or 'unknown'}",
+             f"- hostname: {host['hostname']}",
+             f"- base: {base}",
              f"- models: {len(run_models)} | prompts: {len(prompts)} | runs: {total}", "",
              "## Aggregate (model x mode)", "",
              "| model | mode | n | correct | looped | leak | length | err |",
