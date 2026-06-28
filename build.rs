@@ -6,8 +6,76 @@
 ///
 /// On other platforms: no-op (Linux/Windows use nvidia-smi / rocm-smi at runtime).
 fn main() {
+    emit_build_provenance();
+
     #[cfg(target_os = "macos")]
     compile_gpu_probe();
+}
+
+/// Bake build provenance into the binary so `lmforge --version` self-identifies
+/// the exact commit it was built from. The crate version (`0.1.5`) is static
+/// across commits, so on its own it can't tell two builds apart — the embedded
+/// git SHA + dirty flag + UTC build date close that gap. The bench reads this
+/// from the *installed* binary, certifying the running daemon (not the checkout).
+fn emit_build_provenance() {
+    use std::process::Command;
+
+    let git = |args: &[&str]| -> Option<String> {
+        let out = Command::new("git").args(args).output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (!s.is_empty()).then_some(s)
+    };
+
+    let sha = git(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".into());
+    let dirty = git(&["status", "--porcelain"]).map(|s| !s.is_empty()).unwrap_or(false);
+    let sha = if dirty { format!("{sha}-dirty") } else { sha };
+    println!("cargo:rustc-env=LMFORGE_GIT_SHA={sha}");
+
+    let date = utc_build_date();
+    println!("cargo:rustc-env=LMFORGE_BUILD_DATE={date}");
+
+    // Recompute provenance whenever HEAD moves or the working tree is touched.
+    for p in [".git/HEAD", ".git/index"] {
+        if std::path::Path::new(p).exists() {
+            println!("cargo:rerun-if-changed={p}");
+        }
+    }
+    // A new commit on the current branch changes the *ref* file, not .git/HEAD
+    // itself (which just says "ref: refs/heads/<branch>"). Watch the resolved
+    // ref so `git pull && cargo build` always re-embeds the right SHA.
+    if let Ok(head) = std::fs::read_to_string(".git/HEAD")
+        && let Some(reference) = head.strip_prefix("ref: ")
+    {
+        let ref_file = format!(".git/{}", reference.trim());
+        if std::path::Path::new(&ref_file).exists() {
+            println!("cargo:rerun-if-changed={ref_file}");
+        }
+    }
+}
+
+/// UTC `YYYY-MM-DD` from the system clock, no external crates
+/// (civil-from-days, Howard Hinnant's algorithm).
+fn utc_build_date() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let days = secs.div_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 #[cfg(target_os = "macos")]

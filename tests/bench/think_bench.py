@@ -207,6 +207,52 @@ def detect_accelerator(sysname: str, arch: str) -> str:
     return "cpu"
 
 
+def _cmd_out(args: list[str]) -> str:
+    """Run a command, return trimmed stdout or '' on any failure."""
+    try:
+        p = subprocess.run(args, capture_output=True, text=True, timeout=8)
+        if p.returncode == 0:
+            return p.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def build_provenance() -> dict:
+    """Identify the exact build under test so a committed report is never
+    ambiguous about which daemon produced it (the #1 thing that bit us when
+    comparing platforms — we couldn't tell stale daemons from fresh ones)."""
+    here = str(Path(__file__).resolve().parent)
+    return {
+        # e.g. "lmforge 0.1.5" — the installed CLI/daemon on PATH
+        "lmforge_version": _cmd_out(["lmforge", "--version"]),
+        # short SHA of the checkout the harness ran from (best-effort)
+        "git_sha": _cmd_out(["git", "-C", here, "rev-parse", "--short", "HEAD"]),
+        # whether that checkout has uncommitted changes
+        "git_dirty": bool(_cmd_out(["git", "-C", here, "status", "--porcelain"])),
+    }
+
+
+def warn_if_stale_daemon(host: dict) -> None:
+    """Loudly flag the #1 benchmarking footgun: running an old daemon against a
+    new checkout. The daemon's `--version` carries the SHA it was *built* from;
+    `git_sha` is the SHA the harness *ran* from. If they differ, the results
+    describe a binary that no longer matches the source — exactly the confound
+    that invalidated an earlier cross-platform comparison."""
+    ver = host.get("lmforge_version") or ""
+    checkout = (host.get("git_sha") or "").replace("-dirty", "").strip()
+    # daemon version looks like: "lmforge 0.1.5 (08efdff-dirty 2026-06-28)"
+    m = re.search(r"\(([0-9a-f]+)", ver)
+    built = m.group(1) if m else ""
+    if built and checkout and built != checkout:
+        print("\n" + "!" * 72)
+        print(f"WARNING: daemon was built from {built} but checkout is {checkout}.")
+        print("         The running daemon does NOT match this source tree.")
+        print("         Rebuild+install before trusting results:")
+        print("           scripts/lmforge.sh install --source local   (or .ps1 on Windows)")
+        print("!" * 72 + "\n")
+
+
 def daemon_engine(base: str) -> str:
     """Best-effort active engine id from the daemon (empty string if unknown)."""
     for path in ("/lf/info", "/lf/status", "/lf/engine"):
@@ -235,6 +281,7 @@ def host_fingerprint(base: str, label: str | None) -> dict:
         host = socket.gethostname().split(".")[0]
     except Exception:
         host = "host"
+    prov = build_provenance()
     fp = {
         "label": label or "",
         "os": sysname,
@@ -246,6 +293,8 @@ def host_fingerprint(base: str, label: str | None) -> dict:
         "cpu_count": os.cpu_count(),
         "python": platform.python_version(),
         "engine": daemon_engine(base),
+        "lmforge_version": prov["lmforge_version"],
+        "git_sha": prov["git_sha"] + ("-dirty" if prov["git_dirty"] else ""),
     }
     # Slug for the result dir name. Auto-derived and meaningful by default:
     #   linux-x86_64-cuda, windows-amd64-cuda, darwin-arm64-metal, linux-x86_64-cpu
@@ -469,7 +518,7 @@ def main() -> int:
     summ_jsonl = (out / "summary.jsonl").open("w")
     csv_f = (out / "summary.csv").open("w", newline="")
     csv_fields = [
-        "host", "os", "arch", "accel", "engine",
+        "host", "os", "arch", "accel", "engine", "lmforge_version", "git_sha",
         "model", "family", "note", "prompt", "category", "mode", "rep",
         "finish_reason", "correct", "blank", "looped", "latency_s", "ttfb_s",
         "reasoning_chars", "content_chars", "reasoning_deltas", "content_deltas",
@@ -499,6 +548,8 @@ def main() -> int:
     print(f"host    : {host['slug']}  ({host['os']} {host['os_release']} / "
           f"{host['arch']} / {host['accel']}"
           f"{', engine=' + host['engine'] if host['engine'] else ''})")
+    print(f"build   : {host['lmforge_version'] or '?'}  git={host['git_sha'] or '?'}")
+    warn_if_stale_daemon(host)
     print(f"base    : {base}")
     print(f"models  : {len(run_models)} ({', '.join(x['id'] for x in run_models)})")
     print(f"prompts : {len(prompts)} | total runs: {total}")
@@ -537,6 +588,7 @@ def main() -> int:
         row = {
             "host": host["slug"], "os": host["os"], "arch": host["arch"],
             "accel": host["accel"], "engine": host["engine"],
+            "lmforge_version": host["lmforge_version"], "git_sha": host["git_sha"],
             "model": m["id"], "family": m.get("family"), "note": m.get("note"),
             "prompt": p["id"], "category": p["category"], "mode": mode, "rep": rep,
             "finish_reason": res["finish_reason"], "correct": correct,
@@ -600,6 +652,7 @@ def main() -> int:
              f"- os: {host['os']} {host['os_release']} ({host['os_version']})",
              f"- arch: {host['arch']} | accel: {host['accel']} | cpus: {host['cpu_count']} | python: {host['python']}",
              f"- engine: {host['engine'] or 'unknown'}",
+             f"- build: {host['lmforge_version'] or 'unknown'} | git: {host['git_sha'] or 'unknown'}",
              f"- hostname: {host['hostname']}",
              f"- base: {base}",
              f"- models: {len(run_models)} | prompts: {len(prompts)} | runs: {total}", "",

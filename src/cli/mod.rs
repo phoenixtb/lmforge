@@ -17,9 +17,21 @@ use clap::{Parser, Subcommand};
 
 use crate::config::LmForgeConfig;
 
+/// Full version string: crate version + git provenance baked in at build time
+/// (see `build.rs`). e.g. `0.1.5 (08efdff 2026-06-29)`. This is what
+/// `lmforge --version` prints, so reports/benches can certify the exact build.
+pub const LMFORGE_VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("LMFORGE_GIT_SHA"),
+    " ",
+    env!("LMFORGE_BUILD_DATE"),
+    ")"
+);
+
 /// LMForge — Hardware-aware LLM inference orchestrator
 #[derive(Parser, Debug)]
-#[command(name = "lmforge", version, about, long_about = None)]
+#[command(name = "lmforge", version = LMFORGE_VERSION, about, long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,

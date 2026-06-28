@@ -494,25 +494,51 @@ fn set_enable_thinking(obj: &mut serde_json::Map<String, serde_json::Value>, val
 
 /// Build the body for Call 2 of the thinking-budget workflow.
 ///
-/// Appends the accumulated reasoning as a closed `<think>…</think>` assistant
-/// message so the model sees its own reasoning as context for the answer phase.
-/// Also sets `enable_thinking:false` so the model doesn't re-enter think mode.
+/// The reasoning accumulated in Call 1 is fed back so the answer phase has
+/// context, then `enable_thinking:false` stops the model re-entering `<think>`.
+///
+/// **How the reasoning is fed back is engine-specific** (`inline_think`):
+///
+/// - **llama.cpp / SGLang** (`inline_think = true`): append the reasoning as a
+///   closed `<think>…</think>` **assistant** turn. These engines *continue* a
+///   prefilled assistant turn, so they pick up after the reasoning and emit only
+///   the answer.
+///
+/// - **oMLX** (`inline_think = false`): oMLX does **not** continue a prefilled
+///   assistant turn — it *regenerates* it (documented in `thinking.rs`), which
+///   makes it echo the whole reasoning back as the "answer" (reasoning == content,
+///   the duplication bug). So instead we feed the reasoning back as a **user**
+///   turn with an explicit instruction to give only the final answer. User turns
+///   are not regenerated, so the model produces a fresh, concise answer.
 fn build_call2_body(
     original_body: &serde_json::Value,
     reasoning_buf: &str,
     remaining_max_tokens: u32,
+    inline_think: bool,
 ) -> serde_json::Value {
     let mut body2 = original_body.clone();
     let obj = body2.as_object_mut().expect("body must be an object");
 
-    // Append the reasoning as a closed assistant turn.
-    let prefill_content = format!("<think>{}</think>\n\n", reasoning_buf);
-    let prefill_msg = serde_json::json!({
-        "role": "assistant",
-        "content": prefill_content
-    });
+    let call2_msg = if inline_think {
+        // Continue the assistant turn (llama.cpp / SGLang).
+        serde_json::json!({
+            "role": "assistant",
+            "content": format!("<think>{}</think>\n\n", reasoning_buf)
+        })
+    } else {
+        // Feed reasoning back as a user directive (oMLX) — an assistant prefill
+        // would be regenerated and echoed as the answer.
+        serde_json::json!({
+            "role": "user",
+            "content": format!(
+                "Here is your step-by-step reasoning so far:\n\n{}\n\nNow give ONLY your \
+                 final answer, concisely. Do not repeat the reasoning.",
+                reasoning_buf
+            )
+        })
+    };
     if let Some(messages) = obj.get_mut("messages").and_then(|m| m.as_array_mut()) {
-        messages.push(prefill_msg);
+        messages.push(call2_msg);
     }
 
     // Suppress further thinking — CRITICAL: without this the model re-enters <think>
@@ -863,7 +889,7 @@ pub async fn proxy_stream_with_thinking_budget(
             "Call-1 budget exhausted; executing Call-2"
         );
 
-        let body2 = build_call2_body(&original_body_c, &reasoning_buf, remaining);
+        let body2 = build_call2_body(&original_body_c, &reasoning_buf, remaining, inline_think);
 
         // Emit a status event so clients can show a "Generating answer…" indicator
         // during the Call 2 KV-cache prefill gap. Standard OpenAI clients ignore
@@ -1049,7 +1075,7 @@ pub async fn proxy_nonstream_with_thinking_budget(
 
     // Budget exhausted — Call 2
     let remaining = original_max_tokens.saturating_sub(thinking_budget).max(64);
-    let body2 = build_call2_body(&original_body, &reasoning_buf, remaining);
+    let body2 = build_call2_body(&original_body, &reasoning_buf, remaining, inline_think);
 
     let resp2 = client
         .post(&url)
@@ -1554,14 +1580,16 @@ mod tests {
     // ── build_call2_body unit tests ───────────────────────────────────────────
 
     #[test]
-    fn test_build_call2_body_appends_closed_think_block() {
+    fn test_build_call2_body_inline_appends_closed_think_block() {
+        // inline_think=true (llama.cpp / SGLang): reasoning prefilled as an
+        // ASSISTANT turn that the engine continues into the answer.
         let body = serde_json::json!({
             "model": "qwen3.5-4b-4bit",
             "messages": [{"role": "user", "content": "What is 2+2?"}],
             "max_tokens": 2048,
             "stream": true
         });
-        let result = build_call2_body(&body, "I reasoned hard", 512);
+        let result = build_call2_body(&body, "I reasoned hard", 512, true);
 
         let messages = result["messages"].as_array().unwrap();
         // Original message + appended assistant turn
@@ -1576,17 +1604,55 @@ mod tests {
     }
 
     #[test]
+    fn test_build_call2_body_omlx_uses_user_directive() {
+        // inline_think=false (oMLX): reasoning fed back as a USER directive,
+        // NOT an assistant prefill (oMLX regenerates assistant prefills and
+        // echoes the reasoning as the answer — the duplication bug).
+        let body = serde_json::json!({
+            "model": "qwen3.5-4b-4bit",
+            "messages": [{"role": "user", "content": "What is 2+2?"}],
+            "max_tokens": 2048,
+            "stream": true
+        });
+        let result = build_call2_body(&body, "I reasoned hard", 512, false);
+
+        let messages = result["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2);
+        let turn = &messages[1];
+        assert_eq!(
+            turn["role"], "user",
+            "oMLX Call 2 must feed reasoning back as a user turn, not assistant"
+        );
+        let content = turn["content"].as_str().unwrap();
+        assert!(
+            content.contains("I reasoned hard"),
+            "must include the prior reasoning for context"
+        );
+        assert!(
+            content.to_lowercase().contains("final answer"),
+            "must instruct the model to give only the final answer"
+        );
+        assert!(
+            !content.contains("<think>"),
+            "oMLX directive must not wrap reasoning in <think> tags"
+        );
+    }
+
+    #[test]
     fn test_build_call2_body_sets_enable_thinking_false() {
         let body = serde_json::json!({
             "model": "qwen3.5-4b-4bit",
             "messages": [{"role": "user", "content": "hi"}],
             "max_tokens": 2048
         });
-        let result = build_call2_body(&body, "some reasoning", 512);
-        assert_eq!(
-            result["chat_template_kwargs"]["enable_thinking"], false,
-            "Call 2 must suppress thinking mode"
-        );
+        // enable_thinking:false must hold regardless of engine.
+        for inline in [true, false] {
+            let result = build_call2_body(&body, "some reasoning", 512, inline);
+            assert_eq!(
+                result["chat_template_kwargs"]["enable_thinking"], false,
+                "Call 2 must suppress thinking mode (inline_think={inline})"
+            );
+        }
     }
 
     #[test]
@@ -1596,7 +1662,7 @@ mod tests {
             "messages": [{"role": "user", "content": "hi"}],
             "max_tokens": 4096
         });
-        let result = build_call2_body(&body, "reasoning", 768);
+        let result = build_call2_body(&body, "reasoning", 768, true);
         assert_eq!(
             result["max_tokens"], 768,
             "max_tokens must be overridden to remaining budget"
@@ -1611,7 +1677,7 @@ mod tests {
             "max_tokens": 2048,
             "thinking_budget": 4096
         });
-        let result = build_call2_body(&body, "reasoning", 512);
+        let result = build_call2_body(&body, "reasoning", 512, false);
         assert!(
             result.get("thinking_budget").is_none(),
             "thinking_budget must be stripped from Call 2 body"
@@ -1626,7 +1692,7 @@ mod tests {
             "max_tokens": 2048,
             "stream": false   // original was non-streaming
         });
-        let result = build_call2_body(&body, "reasoning", 512);
+        let result = build_call2_body(&body, "reasoning", 512, true);
         assert_eq!(
             result["stream"], true,
             "Call 2 must always be stream:true internally"
