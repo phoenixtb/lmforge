@@ -25,8 +25,11 @@ Run from a fresh clone on any platform:
        are recorded in report.md + every CSV row, so runs from different
        machines never collide once committed. No manual tagging needed; pass
        --label only to disambiguate two boxes that resolve to the same slug.
-    4. Commit the run's report.md + summary.csv (tracked) and compare the
-       aggregate table across platforms. Engine matters: macOS exercises the
+    4. Commit the run's report.md + summary.csv + logs/ (all tracked) and
+       compare across platforms in one go — the committed logs/ snapshot the
+       daemon + engine output so failures (engine crashes, empty Call-1
+       responses) are diagnosable straight from the repo, no per-box tailing.
+       Engine matters: macOS exercises the
        oMLX two-call budget orchestrator + stop-token injection; Linux/Windows
        exercise the llama.cpp <think> rewriter path. Loop/leak numbers are
        therefore expected to differ by platform — that's the point of running
@@ -42,6 +45,8 @@ Results land in:  tests/bench/results/<timestamp>__<machine-slug>/
     summary.jsonl   one JSON object per run (machine-readable, gitignored)
     summary.csv     flat table for spreadsheets (committed for comparison)
     report.md       human-readable aggregate (committed for comparison)
+    logs/*.log      bounded tail of daemon + per-engine logs (committed;
+                    --log-tail N lines each, disable with --no-capture-logs)
     raw/*.json      full reasoning+answer text per run (gitignored)
 A results/LATEST file points at the newest run dir.
 
@@ -231,6 +236,56 @@ def build_provenance() -> dict:
         # whether that checkout has uncommitted changes
         "git_dirty": bool(_cmd_out(["git", "-C", here, "status", "--porcelain"])),
     }
+
+
+def _tail_text(path: Path, max_lines: int, max_bytes: int = 512 * 1024) -> str:
+    """Last `max_lines` lines of a (possibly large) log, reading at most the
+    trailing `max_bytes` to avoid slurping multi-MB engine logs."""
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+                data = f.read()
+                # drop the partial first line we landed in the middle of
+                nl = data.find(b"\n")
+                if nl != -1:
+                    data = data[nl + 1:]
+            else:
+                data = f.read()
+        lines = data.decode("utf-8", "replace").splitlines()
+        return "\n".join(lines[-max_lines:])
+    except Exception as e:  # never let log capture break a finished run
+        return f"<failed to read {path.name}: {e}>"
+
+
+def capture_logs(outdir: Path, tail_lines: int = 400) -> int:
+    """Snapshot a bounded tail of the daemon + per-engine logs into
+    <outdir>/logs/ so a committed result is self-diagnosing — no manual
+    tailing on each box. We capture *after* the run so the snapshot covers the
+    whole matrix (engine crashes / empty Call-1 responses show up here).
+
+    Returns the number of log files captured."""
+    logs_dir = Path.home() / ".lmforge" / "logs"
+    if not logs_dir.is_dir():
+        print(f"  (no logs dir at {logs_dir} — skipping log capture)")
+        return 0
+    # daemon logs first (deterministic order), then engine logs.
+    files = []
+    for name in ("daemon.err.log", "daemon.out.log", "lmforge.log"):
+        p = logs_dir / name
+        if p.is_file():
+            files.append(p)
+    files += sorted(logs_dir.glob("engine-*.log"))  # *.stderr.log / *.stdout.log
+    if not files:
+        return 0
+    dest = outdir / "logs"
+    dest.mkdir(parents=True, exist_ok=True)
+    for p in files:
+        header = f"# tail -n {tail_lines} {p}\n{'-' * 72}\n"
+        (dest / p.name).write_text(header + _tail_text(p, tail_lines) + "\n",
+                                   encoding="utf-8")
+    return len(files)
 
 
 def warn_if_stale_daemon(host: dict) -> None:
@@ -471,6 +526,12 @@ def main() -> int:
                     help="OPTIONAL slug override. By default the machine slug is "
                          "auto-detected as <os>-<arch>-<accel> (e.g. linux-x86_64-cuda); "
                          "only pass this to disambiguate two boxes that resolve the same.")
+    ap.add_argument("--no-capture-logs", dest="capture_logs", action="store_false",
+                    help="skip snapshotting ~/.lmforge/logs into the result dir "
+                         "(by default a bounded tail of daemon + engine logs is captured "
+                         "and committed so results are self-diagnosing)")
+    ap.add_argument("--log-tail", type=int, default=400,
+                    help="lines per log file to snapshot (default: 400)")
     args = ap.parse_args()
 
     base = args.base.rstrip("/")
@@ -666,11 +727,16 @@ def main() -> int:
                      f"{a['blank']} | {a['looped']} | {a['leak']} | {a['length']} | {a['errors']} |")
     (out / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+    # Snapshot daemon/engine logs so the committed result is self-diagnosing.
+    n_logs = capture_logs(out, args.log_tail) if args.capture_logs else 0
+
     print(f"\nDONE. Results in: {out}")
     print(f"  - {out}/summary.csv")
     print(f"  - {out}/summary.jsonl")
     print(f"  - {out}/report.md")
     print(f"  - raw per-run text in {raw_dir}/")
+    if n_logs:
+        print(f"  - {n_logs} log snapshot(s) in {out}/logs/")
     print("BENCH_COMPLETE")
     return 0
 

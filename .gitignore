@@ -85,3 +85,9 @@ __pycache__/
 tests/bench/results/**/summary.jsonl
 tests/bench/results/**/raw/
 tests/bench/results/LATEST
+
+# ...but DO commit the bounded daemon/engine log snapshots captured alongside
+# each result. These override the blanket `*.log` / `logs/` ignores above so a
+# committed baseline carries its own diagnostics (no manual tailing per box).
+!tests/bench/results/**/logs/
+!tests/bench/results/**/logs/**
