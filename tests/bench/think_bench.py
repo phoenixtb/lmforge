@@ -510,6 +510,8 @@ def main() -> int:
         done += 1
         think = (mode == "on")
         tag = f"{m['id']}__{p['id']}__{mode}__r{rep}"
+        # Windows forbids : \ / * ? " < > | in filenames; model ids use colons.
+        safe_tag = re.sub(r'[:\\/*?"<>|]', "-", tag)
         print(f"[{done}/{total}] {m['id']:<26} {p['id']:<20} think={mode} rep={rep} ...",
               end="", flush=True)
         res = stream_chat(base, m["id"], p["text"], think)
@@ -538,10 +540,10 @@ def main() -> int:
         csv_f.flush()
         summ_jsonl.write(json.dumps(row) + "\n")
         summ_jsonl.flush()
-        (raw_dir / f"{tag}.json").write_text(json.dumps({
+        (raw_dir / f"{safe_tag}.json").write_text(json.dumps({
             "prompt_text": p["text"], **row,
             "reasoning": res["reasoning"], "content": res["content"],
-        }, indent=2))
+        }, indent=2), encoding="utf-8")
 
         # aggregate
         key = (m["id"], mode)
@@ -593,7 +595,7 @@ def main() -> int:
     for (mid, mode), a in sorted(agg.items()):
         lines.append(f"| {mid} | {mode} | {a['n']} | {a['correct']}/{a['n']} | "
                      f"{a['looped']} | {a['leak']} | {a['length']} | {a['errors']} |")
-    (out / "report.md").write_text("\n".join(lines) + "\n")
+    (out / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     print(f"\nDONE. Results in: {out}")
     print(f"  - {out}/summary.csv")
