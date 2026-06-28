@@ -17,13 +17,14 @@ Run from a fresh clone on any platform:
          Windows:      pwsh scripts/lmforge.ps1 install --source local
     2. Make sure the daemon is up (the installer starts it; verify):
          curl http://127.0.0.1:11430/v1/models
-    3. Run the benchmark (pulls the whole candidate matrix if missing). Tag the
-       machine so committed results are self-identifying:
-         python3 tests/bench/think_bench.py --pull-missing --label fedora-cpu
-         python3 tests/bench/think_bench.py --pull-missing --label win-cuda
-       (omit --label and it auto-derives <os>-<arch>-<hostname>). The label
-       becomes the result dir suffix and is recorded in report.md + every CSV
-       row, so a Fedora run and a Windows run never collide once committed.
+    3. Run the benchmark (pulls the whole candidate matrix if missing):
+         python3 tests/bench/think_bench.py --pull-missing
+       The machine is fingerprinted automatically — the result dir is named
+       <timestamp>__<os>-<arch>-<accel> (e.g. ..__linux-x86_64-cuda,
+       ..__darwin-arm64-metal, ..__windows-amd64-cpu) and os/arch/accel/engine
+       are recorded in report.md + every CSV row, so runs from different
+       machines never collide once committed. No manual tagging needed; pass
+       --label only to disambiguate two boxes that resolve to the same slug.
     4. Commit the run's report.md + summary.csv (tracked) and compare the
        aggregate table across platforms. Engine matters: macOS exercises the
        oMLX two-call budget orchestrator + stop-token injection; Linux/Windows
@@ -56,6 +57,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -175,6 +177,36 @@ def _slug(s: str, maxlen: int = 40) -> str:
     return s[:maxlen] or "x"
 
 
+def detect_accelerator(sysname: str, arch: str) -> str:
+    """Auto-detect the compute backend so the machine slug is meaningful
+    without a manual label. Returns one of: metal / cuda / rocm / vulkan / cpu."""
+    # Apple Silicon → Metal/MLX
+    if sysname == "Darwin" and arch.lower() in ("arm64", "aarch64"):
+        return "metal"
+    # NVIDIA CUDA — nvidia-smi present and actually lists a GPU
+    if shutil.which("nvidia-smi"):
+        try:
+            p = subprocess.run(["nvidia-smi", "-L"], capture_output=True,
+                               text=True, timeout=8)
+            if p.returncode == 0 and "GPU" in p.stdout:
+                return "cuda"
+        except Exception:
+            pass
+    # AMD ROCm
+    if shutil.which("rocminfo") or shutil.which("rocm-smi"):
+        return "rocm"
+    # Generic Vulkan offload (e.g. integrated/Intel/Arc via llama.cpp)
+    if shutil.which("vulkaninfo"):
+        try:
+            p = subprocess.run(["vulkaninfo", "--summary"], capture_output=True,
+                               text=True, timeout=8)
+            if p.returncode == 0 and "GPU" in p.stdout:
+                return "vulkan"
+        except Exception:
+            pass
+    return "cpu"
+
+
 def daemon_engine(base: str) -> str:
     """Best-effort active engine id from the daemon (empty string if unknown)."""
     for path in ("/lf/info", "/lf/status", "/lf/engine"):
@@ -194,9 +226,11 @@ def daemon_engine(base: str) -> str:
 
 def host_fingerprint(base: str, label: str | None) -> dict:
     """Identify the machine a run came from so committed results are
-    attributable. `label` is an optional human tag (e.g. 'fedora-cpu')."""
+    attributable — fully automatic. `label` is only an optional override for
+    the slug (e.g. when running two boxes that auto-resolve to the same tag)."""
     sysname = platform.system() or "unknown"        # Darwin / Linux / Windows
     arch = platform.machine() or "unknown"           # arm64 / x86_64 / AMD64
+    accel = detect_accelerator(sysname, arch)        # metal / cuda / rocm / vulkan / cpu
     try:
         host = socket.gethostname().split(".")[0]
     except Exception:
@@ -207,15 +241,17 @@ def host_fingerprint(base: str, label: str | None) -> dict:
         "os_release": platform.release(),
         "os_version": platform.version(),
         "arch": arch,
+        "accel": accel,
         "hostname": host,
         "cpu_count": os.cpu_count(),
         "python": platform.python_version(),
         "engine": daemon_engine(base),
     }
-    # Short slug used in the result dir name. Prefer the explicit label;
-    # otherwise synthesize os-arch-host so machines stay distinguishable.
-    parts = [label] if label else [sysname, arch, host]
-    fp["slug"] = "-".join(_slug(p) for p in parts if p)
+    # Slug for the result dir name. Auto-derived and meaningful by default:
+    #   linux-x86_64-cuda, windows-amd64-cuda, darwin-arm64-metal, linux-x86_64-cpu
+    # An explicit --label overrides it entirely (e.g. to disambiguate two boxes
+    # that resolve to the same os-arch-accel).
+    fp["slug"] = _slug(label) if label else "-".join(_slug(p) for p in (sysname, arch, accel))
     return fp
 
 
@@ -383,8 +419,9 @@ def main() -> int:
     ap.add_argument("--outdir", default=DEFAULT_OUTDIR,
                     help="results root (default: tests/bench/results next to this script)")
     ap.add_argument("--label", default=os.environ.get("BENCH_LABEL"),
-                    help="human machine tag for the result dir/report "
-                         "(e.g. 'fedora-cpu', 'win-cuda'); falls back to os-arch-host")
+                    help="OPTIONAL slug override. By default the machine slug is "
+                         "auto-detected as <os>-<arch>-<accel> (e.g. linux-x86_64-cuda); "
+                         "only pass this to disambiguate two boxes that resolve the same.")
     args = ap.parse_args()
 
     base = args.base.rstrip("/")
@@ -432,7 +469,7 @@ def main() -> int:
     summ_jsonl = (out / "summary.jsonl").open("w")
     csv_f = (out / "summary.csv").open("w", newline="")
     csv_fields = [
-        "host", "os", "arch", "engine",
+        "host", "os", "arch", "accel", "engine",
         "model", "family", "note", "prompt", "category", "mode", "rep",
         "finish_reason", "correct", "looped", "latency_s", "ttfb_s",
         "reasoning_chars", "content_chars", "reasoning_deltas", "content_deltas",
@@ -460,7 +497,8 @@ def main() -> int:
 
     print(f"\n== think_bench ==")
     print(f"host    : {host['slug']}  ({host['os']} {host['os_release']} / "
-          f"{host['arch']}{', engine=' + host['engine'] if host['engine'] else ''})")
+          f"{host['arch']} / {host['accel']}"
+          f"{', engine=' + host['engine'] if host['engine'] else ''})")
     print(f"base    : {base}")
     print(f"models  : {len(run_models)} ({', '.join(x['id'] for x in run_models)})")
     print(f"prompts : {len(prompts)} | total runs: {total}")
@@ -487,7 +525,7 @@ def main() -> int:
 
         row = {
             "host": host["slug"], "os": host["os"], "arch": host["arch"],
-            "engine": host["engine"],
+            "accel": host["accel"], "engine": host["engine"],
             "model": m["id"], "family": m.get("family"), "note": m.get("note"),
             "prompt": p["id"], "category": p["category"], "mode": mode, "rep": rep,
             "finish_reason": res["finish_reason"], "correct": correct, "looped": looped,
@@ -544,7 +582,7 @@ def main() -> int:
              f"- when: {ts}",
              f"- machine: **{host['slug']}**" + (f" (`{host['label']}`)" if host['label'] else ""),
              f"- os: {host['os']} {host['os_release']} ({host['os_version']})",
-             f"- arch: {host['arch']} | cpus: {host['cpu_count']} | python: {host['python']}",
+             f"- arch: {host['arch']} | accel: {host['accel']} | cpus: {host['cpu_count']} | python: {host['python']}",
              f"- engine: {host['engine'] or 'unknown'}",
              f"- hostname: {host['hostname']}",
              f"- base: {base}",
