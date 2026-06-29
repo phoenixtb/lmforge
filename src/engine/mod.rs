@@ -9,6 +9,7 @@ pub mod manager;
 pub mod process_pool;
 pub mod registry;
 pub mod residency;
+pub mod shared_server;
 pub mod spec_observer;
 pub mod speculative;
 pub mod torch_backend;

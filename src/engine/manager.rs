@@ -6,7 +6,8 @@ use tokio::sync::RwLock;
 use crate::engine::adapter::EngineAdapterInstance;
 use crate::engine::process_pool::ProcessPoolResidency;
 use crate::engine::registry::EngineConfig;
-use crate::engine::residency::Residency;
+use crate::engine::residency::{Residency, ResidencyKind};
+use crate::engine::shared_server::SharedServerResidency;
 
 // ── Public types (shared data model, wire format) ────────────────────────────
 
@@ -210,16 +211,85 @@ pub enum ManagerCommand {
     UnloadAll,
 }
 
+// ── Residency instance (static enum dispatch) ────────────────────────────────
+
+/// Static dispatch over the two residency strategies.
+///
+/// Using an enum avoids boxing + vtable overhead and follows the same pattern
+/// as `EngineAdapterInstance`. Phase 2 adds `SharedServer`; Phase 3 makes it
+/// the default for oMLX.
+enum ResidencyInstance {
+    ProcessPool(ProcessPoolResidency),
+    SharedServer(SharedServerResidency),
+}
+
+impl ResidencyInstance {
+    fn kind(&self) -> ResidencyKind {
+        match self {
+            Self::ProcessPool(r) => r.kind(),
+            Self::SharedServer(r) => r.kind(),
+        }
+    }
+
+    async fn ensure_model(
+        &mut self,
+        model_id: &str,
+        keep_alive_override: &Option<String>,
+        for_request: bool,
+    ) -> Result<ModelHandle> {
+        match self {
+            Self::ProcessPool(r) => r.ensure_model(model_id, keep_alive_override, for_request).await,
+            Self::SharedServer(r) => r.ensure_model(model_id, keep_alive_override, for_request).await,
+        }
+    }
+
+    async fn unload_model(&mut self, model_id: &str) {
+        match self {
+            Self::ProcessPool(r) => r.unload_model(model_id).await,
+            Self::SharedServer(r) => r.unload_model(model_id).await,
+        }
+    }
+
+    async fn unload_all(&mut self) {
+        match self {
+            Self::ProcessPool(r) => r.unload_all().await,
+            Self::SharedServer(r) => r.unload_all().await,
+        }
+    }
+
+    async fn heartbeat_tick(&mut self) {
+        match self {
+            Self::ProcessPool(r) => r.heartbeat_tick().await,
+            Self::SharedServer(r) => r.heartbeat_tick().await,
+        }
+    }
+
+    fn state(&self) -> Arc<RwLock<EngineState>> {
+        match self {
+            Self::ProcessPool(r) => r.state(),
+            Self::SharedServer(r) => r.state(),
+        }
+    }
+
+    /// Direct write access to the inner EngineState for legacy compat methods.
+    async fn set_overall_status(&self, status: EngineStatus) {
+        match self {
+            Self::ProcessPool(r) => r.state.write().await.overall_status = status,
+            Self::SharedServer(r) => r.state.write().await.overall_status = status,
+        }
+    }
+}
+
 // ── Thin EngineManager dispatcher ────────────────────────────────────────────
 
-/// The engine manager — a thin dispatcher over a `ProcessPoolResidency`.
+/// The engine manager — a thin dispatcher over a `ResidencyInstance`.
 ///
-/// Phase 1: oMLX and all other engines still route through `ProcessPoolResidency`
-/// (behavior-preserving). Phase 2 adds `SharedServerResidency` for oMLX behind
-/// the `LMFORGE_OMLX_SHARED` flag.
+/// Phase 1: all engines route through `ProcessPoolResidency` (behavior-preserving).
+/// Phase 2: oMLX routes through `SharedServerResidency` when `LMFORGE_OMLX_SHARED=1`.
+/// Phase 3: `SharedServerResidency` becomes the default for oMLX.
 pub struct EngineManager {
     pub config: EngineConfig,
-    pool: ProcessPoolResidency,
+    residency: ResidencyInstance,
     health_interval_secs: u64,
 }
 
@@ -235,31 +305,61 @@ impl EngineManager {
         max_loaded_models: u32,
         status_tx: tokio::sync::broadcast::Sender<EngineState>,
     ) -> Self {
-        let pool = ProcessPoolResidency::new(
-            config.clone(),
-            adapter,
-            base_engine_port,
-            data_dir,
-            models_dir,
-            global_keep_alive,
-            max_loaded_models,
-            status_tx,
-        );
+        // Phase 2: opt-in to SharedServerResidency for oMLX via env flag.
+        let use_shared = config.id == "omlx"
+            && std::env::var("LMFORGE_OMLX_SHARED").as_deref() == Ok("1");
+
+        let residency = if use_shared {
+            // Resolve the oMLX executable from the adapter (it's an OmlxAdapter).
+            let executable = match &adapter {
+                EngineAdapterInstance::Omlx(a) => a.executable.clone(),
+                _ => "omlx".to_string(),
+            };
+            tracing::info!(
+                port = base_engine_port,
+                models_dir = %models_dir.display(),
+                "oMLX SharedServerResidency enabled (LMFORGE_OMLX_SHARED=1)"
+            );
+            ResidencyInstance::SharedServer(SharedServerResidency::new(
+                config.clone(),
+                models_dir,
+                data_dir,
+                base_engine_port,
+                executable,
+                status_tx,
+            ))
+        } else {
+            ResidencyInstance::ProcessPool(ProcessPoolResidency::new(
+                config.clone(),
+                adapter,
+                base_engine_port,
+                data_dir,
+                models_dir,
+                global_keep_alive,
+                max_loaded_models,
+                status_tx,
+            ))
+        };
+
         Self {
             config,
-            pool,
+            residency,
             health_interval_secs: 2,
         }
     }
 
     pub fn state(&self) -> Arc<RwLock<EngineState>> {
-        self.pool.state()
+        self.residency.state()
+    }
+
+    /// Returns the active residency kind (for diagnostics / doctor).
+    pub fn residency_kind(&self) -> ResidencyKind {
+        self.residency.kind()
     }
 
     /// Legacy compat: sets overall status to Ready (models are loaded dynamically).
     pub async fn start(&mut self) -> Result<()> {
-        let mut state = self.pool.state.write().await;
-        state.overall_status = EngineStatus::Ready;
+        self.residency.set_overall_status(EngineStatus::Ready).await;
         Ok(())
     }
 
@@ -278,20 +378,20 @@ impl EngineManager {
                 cmd = cmd_rx.recv() => {
                     match cmd {
                         Some(ManagerCommand::EnsureModel { model_id, keep_alive_override, for_request, reply }) => {
-                            let res = self.pool.ensure_model(&model_id, &keep_alive_override, for_request).await;
+                            let res = self.residency.ensure_model(&model_id, &keep_alive_override, for_request).await;
                             let _ = reply.send(res);
                         }
                         Some(ManagerCommand::UnloadModel(model_id)) => {
-                            self.pool.unload_model(&model_id).await;
+                            self.residency.unload_model(&model_id).await;
                         }
                         Some(ManagerCommand::UnloadAll) => {
-                            self.pool.unload_all().await;
+                            self.residency.unload_all().await;
                         }
                         None => break,
                     }
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_secs(self.health_interval_secs)) => {
-                    self.pool.heartbeat_tick().await;
+                    self.residency.heartbeat_tick().await;
                 }
             }
         }
