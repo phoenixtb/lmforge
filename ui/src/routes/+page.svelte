@@ -7,8 +7,6 @@
   import { metricsStore, startMetricsPolling, stopMetricsPolling } from '$lib/stores/metrics';
   import { fmtUptime } from '$lib/api';
   import { dragOnEmpty } from '$lib/drag';
-  import { flip } from 'svelte/animate';
-  import { fade } from 'svelte/transition';
   import LoadErrorBanner from '$lib/components/LoadErrorBanner.svelte';
 
   $: status  = $statusStore.overall_status;
@@ -235,10 +233,7 @@
               {@const role  = slot.role || inferRole(slot.model_id)}
               {@const slotP = vramTotalGb > 0 ? Math.min(100, slot.vram_est_gb/vramTotalGb*100) : 0}
               {@const idle  = (slot.idle_secs ?? 0) >= 60}
-              <div class="slot-card" class:idle
-                   animate:flip={{ duration: 250 }}
-                   in:fade={{ duration: 180 }}
-                   out:fade={{ duration: 120 }}>
+              <div class="slot-card" class:idle>
                 <div class="slot-r1">
                   <span class="dot dot--{slot.status}" style="margin-top:1px"></span>
                   <span class="sn mono">{slot.model_id}</span>

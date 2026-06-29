@@ -63,10 +63,14 @@
     const { listen } = await import('@tauri-apps/api/event');
 
     unlistenHealth = await listen<{ online: boolean }>('lf:health', (event) => {
+      const wasOnline = $daemonOnline === true;
       daemonOnline.set(event.payload.online);
       if (event.payload.online) {
-        tryLoadHardware();
-        startSysInfoPolling();
+        // loadHardware + startPolling only on first online transition, not every tick
+        if (!wasOnline) {
+          tryLoadHardware();
+          startSysInfoPolling();
+        }
       } else {
         stopSysInfoPolling();
       }
@@ -93,11 +97,14 @@
         const wasOnline = $daemonOnline === true;
         const nowOnline = res.ok;
         daemonOnline.set(nowOnline);
-        if (nowOnline && !wasOnline) {
-          tryLoadHardware();
-          startSysInfoPolling();
-          openStatusStream(BASE);
-        } else if (!nowOnline) {
+        if (nowOnline) {
+          // loadHardware + startPolling only on first online transition, not every tick
+          if (!wasOnline) {
+            tryLoadHardware();
+            startSysInfoPolling();
+            openStatusStream(BASE);
+          }
+        } else {
           stopSysInfoPolling();
           closeStatusStream();
         }
