@@ -365,6 +365,27 @@ pub fn apply_think_for_engine(
                         serde_json::Value::Bool(think),
                     );
                 }
+            } else if think_bool_from_field.is_none()
+                && think_bool_from_kwargs.is_none()
+                && model_caps.map(|c| c.thinking).unwrap_or(false)
+            {
+                // Fix #3: no think intent from any source + thinking-capable model.
+                // Without an explicit flag, the Qwen3 HF Jinja template defaults to
+                // enable_thinking=true → the model reasons until max_tokens with no
+                // answer ("blank reply bug", baseline linux-x86_64-cpu run 972dc63).
+                // Inject enable_thinking:false to make thinking opt-in on these engines.
+                debug!("Fix #3: no think intent on thinking model — injecting enable_thinking:false");
+                if let Some(obj) = body.as_object_mut() {
+                    let kwargs = obj
+                        .entry("chat_template_kwargs")
+                        .or_insert_with(|| serde_json::json!({}));
+                    if let Some(map) = kwargs.as_object_mut() {
+                        map.insert(
+                            "enable_thinking".to_string(),
+                            serde_json::Value::Bool(false),
+                        );
+                    }
+                }
             }
         }
 
@@ -711,45 +732,61 @@ mod tests {
         assert_eq!(body["chat_template_kwargs"]["enable_thinking"], true);
     }
 
-    // ── CHARACTERIZATION (current behaviour, pre-Fix #3) ─────────────────────
-    // Locks the blank-reply bug found on the linux-x86_64-cpu baseline (972dc63):
-    // a thinking-capable model with NO think intent gets NO enable_thinking flag,
-    // so the Qwen3 template defaults enable_thinking=true, reasons, and is cut at
-    // finish=length with no answer. Phases 1–2 are behaviour-preserving and MUST
-    // keep these green; Phase 3 (Fix #3, thinking opt-in) will intentionally flip
-    // them to assert enable_thinking:false. Do not "fix" here.
+    // ── Fix #3: plain-client enable_thinking:false default ───────────────────
+    // Without an explicit think flag, the Qwen3 HF Jinja template on llamacpp/
+    // sglang defaults to enable_thinking=true → model reasons until max_tokens
+    // with no answer (the "blank reply bug"). Fix #3 injects enable_thinking:false
+    // so thinking is opt-in (only when the client sends think:true).
+    //
+    // oMLX is unaffected: it uses model-weights natural reasoning when no flag
+    // is set, which is bounded and safe (no template defaulting).
 
     #[test]
-    fn test_llamacpp_no_think_intent_thinking_model_currently_no_flag() {
+    fn test_llamacpp_no_think_intent_thinking_model_injects_false() {
         let mut body = serde_json::json!({
             "model": "test",
             "messages": [{"role": "user", "content": "hi"}]
         });
         apply_think_for_engine(&mut body, "llamacpp", Some(&thinking_caps()));
         assert!(body.get("think").is_none());
-        assert!(
-            body.get("chat_template_kwargs").is_none(),
-            "PRE-Fix#3: no think intent leaves enable_thinking unset (template defaults to thinking) \
-             — Phase 3 will inject enable_thinking:false"
+        assert_eq!(
+            body["chat_template_kwargs"]["enable_thinking"], false,
+            "Fix #3: no think intent on thinking model must inject enable_thinking:false"
         );
     }
 
     #[test]
-    fn test_sglang_no_think_intent_thinking_model_currently_no_flag() {
+    fn test_sglang_no_think_intent_thinking_model_injects_false() {
         let mut body = serde_json::json!({
             "model": "test",
             "messages": [{"role": "user", "content": "hi"}]
         });
         apply_think_for_engine(&mut body, "sglang", Some(&thinking_caps()));
-        assert!(
-            body.get("chat_template_kwargs").is_none(),
-            "PRE-Fix#3: sglang no-think-intent path matches llamacpp"
+        assert_eq!(
+            body["chat_template_kwargs"]["enable_thinking"], false,
+            "Fix #3: sglang mirrors llamacpp behaviour"
         );
     }
 
     #[test]
-    fn test_omlx_no_think_intent_thinking_model_currently_no_flag() {
-        // oMLX with no flag → natural reasoning (documented), also pre-Fix #3.
+    fn test_llamacpp_no_think_intent_non_thinking_model_no_flag() {
+        // Fix #3 only fires for models with thinking capability.
+        let mut body = serde_json::json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        apply_think_for_engine(&mut body, "llamacpp", Some(&non_thinking_caps()));
+        assert!(body.get("think").is_none());
+        assert!(
+            body.get("chat_template_kwargs").is_none(),
+            "non-thinking model: Fix #3 must not inject the flag"
+        );
+    }
+
+    #[test]
+    fn test_omlx_no_think_intent_thinking_model_no_flag() {
+        // oMLX with no flag → natural reasoning (model-weights governed).
+        // Fix #3 does not apply to oMLX (no HF template defaulting risk).
         let mut body = serde_json::json!({
             "model": "test",
             "messages": [{"role": "user", "content": "hi"}]
@@ -757,7 +794,7 @@ mod tests {
         apply_think_for_engine(&mut body, "omlx", Some(&thinking_caps()));
         assert!(
             body.get("chat_template_kwargs").is_none(),
-            "PRE-Fix#3: oMLX no-think-intent leaves reasoning to model weights"
+            "oMLX no-think-intent must NOT inject enable_thinking:false (natural reasoning is safe)"
         );
     }
 

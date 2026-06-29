@@ -691,26 +691,32 @@ async fn stream_call1_accumulate(
                         }
                     } else {
                         // oMLX: native reasoning_content + content fields.
-                        if let Some(r) = delta.get("reasoning_content").and_then(|v| v.as_str())
-                            && !r.is_empty()
-                        {
-                            reasoning_buf.push_str(r);
-                            if let Some(ref tx) = tx {
-                                let sse_bytes = Bytes::from(format!("data: {}\n\n", data));
-                                if tx.send(sse_bytes).await.is_err() {
-                                    break;
-                                }
-                            }
+                        // Accumulate into buffers first, then forward the raw SSE
+                        // line exactly ONCE — a single delta can carry both fields
+                        // and we must not double-emit it.
+                        let r_text = delta
+                            .get("reasoning_content")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let c_text = delta
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+
+                        if !r_text.is_empty() {
+                            reasoning_buf.push_str(r_text);
                         }
-                        if let Some(c) = delta.get("content").and_then(|v| v.as_str())
-                            && !c.is_empty()
+                        if !c_text.is_empty() {
+                            content_buf.push_str(c_text);
+                        }
+
+                        // Forward once if either field had data.
+                        if (!r_text.is_empty() || !c_text.is_empty())
+                            && let Some(ref tx) = tx
                         {
-                            content_buf.push_str(c);
-                            if let Some(ref tx) = tx {
-                                let sse_bytes = Bytes::from(format!("data: {}\n\n", data));
-                                if tx.send(sse_bytes).await.is_err() {
-                                    break;
-                                }
+                            let sse_bytes = Bytes::from(format!("data: {}\n\n", data));
+                            if tx.send(sse_bytes).await.is_err() {
+                                break;
                             }
                         }
                     }
@@ -882,7 +888,33 @@ pub async fn proxy_stream_with_thinking_budget(
             return;
         }
 
-        // 4. Budget exhausted — execute Call 2
+        // 4. Budget exhausted — execute Call 2.
+        //    Guard: if Call-1 produced no reasoning (e.g. oMLX didn't emit
+        //    reasoning_content despite enable_thinking:true) there is nothing
+        //    to prefill. Forward whatever content_buf holds (if any) and
+        //    close rather than dispatching a degenerate empty-reasoning Call-2.
+        if reasoning_buf.is_empty() {
+            debug!("Call-1 budget exhausted but reasoning_buf empty; skipping Call-2 (empty-guard)");
+            if !stream_reasoning_deltas && !content_buf_call1.is_empty() {
+                let chunk = serde_json::json!({
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "model": model_name,
+                    "choices": [{ "index": 0, "delta": { "content": content_buf_call1 }, "finish_reason": null }]
+                });
+                yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default())));
+            }
+            let final_chunk = serde_json::json!({
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "model": model_name,
+                "choices": [{ "index": 0, "delta": {}, "finish_reason": "length" }]
+            });
+            yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&final_chunk).unwrap_or_default())));
+            yield Ok(Bytes::from("data: [DONE]\n\n"));
+            return;
+        }
+
         let remaining = original_max_tokens.saturating_sub(thinking_budget).max(64);
         info!(
             thinking_budget,
@@ -1075,7 +1107,29 @@ pub async fn proxy_nonstream_with_thinking_budget(
         return Ok((200, serde_json::to_string(&assembled).unwrap_or_default()));
     }
 
-    // Budget exhausted — Call 2
+    // Budget exhausted — Call 2.
+    // Guard: no reasoning captured → skip Call-2, return whatever content_buf holds.
+    if reasoning_buf.is_empty() {
+        debug!("Call-1 budget exhausted but reasoning_buf empty; skipping Call-2 (empty-guard)");
+        let assembled = serde_json::json!({
+            "id": completion_id,
+            "object": "chat.completion",
+            "model": model_name,
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "reasoning_content": serde_json::Value::Null,
+                    "content": content_buf_call1,
+                    "refusal": serde_json::Value::Null
+                },
+                "logprobs": serde_json::Value::Null,
+                "finish_reason": "length"
+            }]
+        });
+        return Ok((200, serde_json::to_string(&assembled).unwrap_or_default()));
+    }
+
     let remaining = original_max_tokens.saturating_sub(thinking_budget).max(64);
     let body2 = build_call2_body(&original_body, &reasoning_buf, remaining, inline_think);
 
