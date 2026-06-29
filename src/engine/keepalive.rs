@@ -6,7 +6,9 @@ use tracing::{debug, info};
 ///
 /// When no requests arrive within the keepalive duration, the engine process
 /// can be stopped to free resources. Enforced by `EngineManager`'s heartbeat
-/// sweep (`keep_alive_secs` on each slot, default 5m from config).
+/// for per-process engines (llama.cpp, SGLang, …). oMLX is exempt here because
+/// the target design is one shared `omlx serve` with native in-process LRU —
+/// LMForge must not SIGTERM the whole server when one logical slot goes idle.
 #[derive(Debug, Clone)]
 pub struct KeepaliveTracker {
     last_request: Arc<AtomicU64>,
@@ -18,13 +20,17 @@ impl KeepaliveTracker {
     /// Create a new keepalive tracker.
     /// `keepalive_secs = 0` means disabled (never unload).
     pub fn new(keepalive_secs: u64, engine_id: &str) -> Self {
-        let enabled = keepalive_secs > 0;
-        let _ = engine_id; // reserved — all engines use the same LMForge-side TTL today
+        // oMLX: one shared server, native LRU — LMForge-side per-slot TTL would
+        // kill the entire process and defeat Metal multi-model residency.
+        let enabled = keepalive_secs > 0 && engine_id != "omlx";
 
         if enabled {
             info!(keepalive_secs, engine_id, "Keepalive timer enabled");
         } else {
-            debug!(engine_id, "Keepalive timer disabled (keepalive=0)");
+            debug!(
+                engine_id,
+                "Keepalive timer disabled (oMLX native LRU, or keepalive=0)"
+            );
         }
 
         Self {
@@ -94,12 +100,10 @@ mod tests {
     }
 
     #[test]
-    fn test_keepalive_enabled_for_omlx() {
-        // LMForge spawns one engine process per model slot (including oMLX).
-        // Idle TTL must apply uniformly — oMLX's in-process LRU does not replace
-        // our per-slot process lifecycle.
+    fn test_keepalive_disabled_for_omlx() {
         let tracker = KeepaliveTracker::new(300, "omlx");
-        assert!(tracker.enabled);
+        assert!(!tracker.enabled);
+        assert!(!tracker.is_idle());
     }
 
     #[test]

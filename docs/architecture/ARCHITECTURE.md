@@ -239,12 +239,17 @@ stateDiagram-v2
   cold load can't fit after evicting every idle slot, it is **rejected** (`503`,
   `Insufficient memory…`) instead of OOM'ing the host or killing live work; the
   caller retries once a model goes idle.
-- **oMLX note.** LMForge still spawns **one `omlx serve` process per loaded model
-  slot** (same as llama.cpp), each pointing at the shared models parent dir.
-  oMLX's in-process model LRU does **not** replace LMForge's slot TTL — idle
-  slots are unloaded after `keep_alive` (default 5m) like every other engine.
-  A longer-term fix is a single shared oMLX server for all models (efficiency
-  workstream).
+- **oMLX (design vs today).** **Design intent** (SRS §4.4): one shared
+  `omlx serve` on the base engine port; the `model` field selects which weights
+  oMLX loads/serves; oMLX's native in-process LRU + pinning handles residency.
+  **Other platforms** mimic multi-model with pseudo port mapping — one
+  llama-server (or SGLang worker) per loaded model, LMForge-managed LRU.
+  **Current drift:** the strict-adapter plan (`docs/archive/implementation-plan-omlx-adapter.md`)
+  forced the per-process pattern onto oMLX too, so each cold load spawns another
+  `omlx serve --model-dir <parent>` (redundant — each process discovers all
+  models). oMLX did not lose capability; we never wired the shared-server path.
+  Fix = engine workstream: one oMLX child, logical slots, proxy all models to
+  the same port. Until then, orphan port cleanup (not per-slot TTL) limits leaks.
 - **`max_loaded_models = 0`** in config means unlimited — VRAM is the only
   cap. Setting it to a fixed N caps concurrent residency regardless of VRAM.
 - **Slot keys are model ids**, not repos. Pulling the same repo under two

@@ -1191,9 +1191,10 @@ impl EngineManager {
                         }
                     }
 
-                    // Check TTL — applies to every engine (including oMLX). We spawn
-                    // one process per model slot; idle slots must be unloaded so a
-                    // think_bench matrix doesn't leave a dozen omlx-server forever.
+                    // Check TTL. oMLX is exempt: the intended architecture is ONE
+                    // shared `omlx serve` with native in-process LRU (see SRS §4.4).
+                    // Today we still spawn per-slot processes (strict-adapter drift) —
+                    // fixing that is an engine workstream, not per-slot LMForge TTL.
                     let now = keepalive::now_secs();
                     let mut to_evict = Vec::new();
                     for (id, slot) in self.active_slots.iter() {
@@ -1202,6 +1203,7 @@ impl EngineManager {
                         // last_accessed only happens at request start.
                         if slot.keep_alive_secs > 0
                             && (now.saturating_sub(slot.last_accessed) > slot.keep_alive_secs)
+                            && self.config.id != "omlx"
                             && slot.inflight.load(Ordering::Relaxed) == 0
                         {
                             to_evict.push(id.clone());
