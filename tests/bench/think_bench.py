@@ -183,8 +183,13 @@ def _slug(s: str, maxlen: int = 40) -> str:
 
 
 def detect_accelerator(sysname: str, arch: str) -> str:
-    """Auto-detect the compute backend so the machine slug is meaningful
-    without a manual label. Returns one of: metal / cuda / rocm / vulkan / cpu."""
+    """Local fallback probe for the compute backend, used only when the daemon
+    can't tell us what it actually decided (see accel_from_hardware). Returns
+    one of: metal / cuda / rocm / vulkan / cpu.
+
+    NOTE: this is a *guess*. It can false-positive (e.g. a Vulkan loader or a
+    virtio GPU present on a CPU-only VM made Fedora mislabel as `vulkan`). Always
+    prefer the daemon's own hardware verdict; this is the offline backstop."""
     # Apple Silicon → Metal/MLX
     if sysname == "Darwin" and arch.lower() in ("arm64", "aarch64"):
         return "metal"
@@ -308,20 +313,56 @@ def warn_if_stale_daemon(host: dict) -> None:
         print("!" * 72 + "\n")
 
 
+def _daemon_json(base: str, path: str) -> dict:
+    """GET a daemon endpoint and return the parsed object ({} on any failure)."""
+    try:
+        with urllib.request.urlopen(base + path, timeout=5) as r:
+            data = json.load(r)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def daemon_engine(base: str) -> str:
-    """Best-effort active engine id from the daemon (empty string if unknown)."""
+    """Active engine id from the daemon (empty string if unknown). The real
+    endpoint is /lf/engines → active_engine_id; the others are legacy fallbacks."""
+    eng = _daemon_json(base, "/lf/engines")
+    if eng.get("active_engine_id"):
+        return str(eng["active_engine_id"])
     for path in ("/lf/info", "/lf/status", "/lf/engine"):
-        try:
-            with urllib.request.urlopen(base + path, timeout=5) as r:
-                data = json.load(r)
-            for k in ("engine", "engine_id", "active_engine"):
-                v = data.get(k) if isinstance(data, dict) else None
-                if isinstance(v, dict):
-                    v = v.get("id") or v.get("name")
-                if v:
-                    return str(v)
-        except Exception:
-            continue
+        data = _daemon_json(base, path)
+        for k in ("engine", "engine_id", "active_engine"):
+            v = data.get(k)
+            if isinstance(v, dict):
+                v = v.get("id") or v.get("name")
+            if v:
+                return str(v)
+    return ""
+
+
+def accel_from_hardware(base: str, engine: str) -> str:
+    """Derive the accelerator label from what LMForge *actually detected*
+    (GET /lf/hardware), not from a local re-probe. This is the source of truth
+    that fixes the Fedora CPU-only VM being mislabeled `vulkan`: the daemon
+    reports gpu_vendor="none" there, so we report `cpu`.
+
+    Returns metal / cuda / rocm / vulkan / cpu, or "" if the daemon can't say
+    (caller then falls back to the local detect_accelerator probe)."""
+    hw = _daemon_json(base, "/lf/hardware")
+    vendor = str(hw.get("gpu_vendor") or "").lower()
+    count = hw.get("gpu_count")
+    # oMLX is metal regardless of how the vendor string is spelled.
+    if engine == "omlx" or vendor == "apple":
+        return "metal"
+    if vendor in ("none", "") or count == 0:
+        return "cpu"
+    if vendor == "nvidia":
+        return "cuda"
+    if vendor == "amd":
+        # LMForge ships AMD via its Vulkan llama.cpp variant (not ROCm) today.
+        return "vulkan"
+    if vendor == "intel":
+        return "vulkan"
     return ""
 
 
@@ -331,7 +372,9 @@ def host_fingerprint(base: str, label: str | None) -> dict:
     the slug (e.g. when running two boxes that auto-resolve to the same tag)."""
     sysname = platform.system() or "unknown"        # Darwin / Linux / Windows
     arch = platform.machine() or "unknown"           # arm64 / x86_64 / AMD64
-    accel = detect_accelerator(sysname, arch)        # metal / cuda / rocm / vulkan / cpu
+    engine = daemon_engine(base)
+    # Prefer LMForge's own hardware verdict; only guess locally if it can't say.
+    accel = accel_from_hardware(base, engine) or detect_accelerator(sysname, arch)
     try:
         host = socket.gethostname().split(".")[0]
     except Exception:
@@ -347,7 +390,7 @@ def host_fingerprint(base: str, label: str | None) -> dict:
         "hostname": host,
         "cpu_count": os.cpu_count(),
         "python": platform.python_version(),
-        "engine": daemon_engine(base),
+        "engine": engine,
         "lmforge_version": prov["lmforge_version"],
         "git_sha": prov["git_sha"] + ("-dirty" if prov["git_dirty"] else ""),
     }
