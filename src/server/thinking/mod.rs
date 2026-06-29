@@ -8,6 +8,109 @@ use tracing::{debug, warn};
 
 use crate::model::index::ModelCapabilities;
 
+/// All thinking-related parameters extracted from (and stripped out of) a chat
+/// completions request body in a single pass. Produced by [`prepare_request`].
+///
+/// Callers read from this struct for routing decisions; all thinking-specific
+/// mutations have already been applied to `body` by the time it is returned.
+#[derive(Debug)]
+pub struct ThinkingContext {
+    /// Client requested thinking (`think:true` or `chat_template_kwargs.enable_thinking:true`).
+    pub has_think: bool,
+    /// Reasoning-phase token cap, if specified (or defaulted). `None` when there
+    /// is no think intent or when the budget orchestrator is not applicable.
+    pub thinking_budget: Option<u32>,
+    /// Client requested live `delta.reasoning_content` SSE events.
+    pub stream_reasoning_deltas: bool,
+    /// `max_tokens` from the original request body (before any mutation).
+    /// Needed by the orchestrator to compute remaining tokens for Call-2.
+    pub original_max_tokens: u32,
+    /// True when the two-call budget orchestrator is applicable for this request.
+    /// Requires: `has_think`, engine supports orchestrator, thinking model, not native-reasoning.
+    pub can_use_budget: bool,
+    /// True when the engine embeds reasoning as inline `<think>` tags inside `content`
+    /// (llama.cpp / SGLang). False when the engine uses a dedicated `reasoning_content`
+    /// field (oMLX).
+    pub inline_think: bool,
+}
+
+/// Prepare a chat-completions body for thinking orchestration.
+///
+/// This single call replaces the multi-step preamble previously scattered
+/// across the `chat_completions` handler in `openai.rs`:
+///
+/// 1. Extracts `has_think`, `thinking_budget`, `stream_reasoning_deltas`, and
+///    `original_max_tokens` from `body` **before** any mutation.
+/// 2. Applies anti-loop sampling defaults ([`apply_thinking_sampling_defaults`]).
+/// 3. Applies engine-specific transformations ([`apply_think_for_engine`]).
+/// 4. Strips LMForge-private fields (`thinking_budget`, `stream_reasoning_deltas`)
+///    that engines don't understand.
+/// 5. Resolves engine + model capabilities into `can_use_budget` and `inline_think`.
+/// 6. Defaults `thinking_budget` to [`DEFAULT_THINKING_BUDGET`] when it was
+///    omitted but the budget orchestrator is applicable.
+///
+/// After this call `body` is safe to forward to the engine.
+pub fn prepare_request(
+    body: &mut serde_json::Value,
+    engine_id: &str,
+    model_caps: Option<&ModelCapabilities>,
+) -> ThinkingContext {
+    // 1. Extract intent fields before any mutation (apply_think_for_engine removes them).
+    let has_think = request_has_think(body);
+
+    let original_max_tokens: u32 = body
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(2048)
+        .min(u32::MAX as u64) as u32;
+
+    let thinking_budget_raw = extract_thinking_budget(body);
+    let stream_reasoning_deltas = extract_stream_reasoning_deltas(body);
+
+    // 2. Anti-loop sampling defaults (must run before apply_think_for_engine so
+    //    oMLX penalty translation can see them).
+    apply_thinking_sampling_defaults(body, has_think);
+
+    // 3. Engine-specific transformations.
+    apply_think_for_engine(body, engine_id, model_caps);
+
+    // 4. Strip LMForge-private fields (engines have no concept of them).
+    if let Some(obj) = body.as_object_mut() {
+        obj.remove("thinking_budget");
+        obj.remove("stream_reasoning_deltas");
+        if let Some(extra) = obj.get_mut("extra_body").and_then(|v| v.as_object_mut()) {
+            extra.remove("stream_reasoning_deltas");
+        }
+    }
+
+    // 5. Resolve adapter + model flags into routing booleans.
+    let thinking_adapter = adapter_for_engine(engine_id);
+    let supports_orchestrator = thinking_adapter.supports_orchestrator();
+    let inline_think = thinking_adapter.inline_think();
+
+    let is_thinking_model = model_caps.map(|c| c.thinking).unwrap_or(false);
+    let is_native_reasoning = model_caps.map(|c| c.native_reasoning).unwrap_or(false);
+
+    let can_use_budget =
+        has_think && supports_orchestrator && is_thinking_model && !is_native_reasoning;
+
+    // 6. Default thinking_budget when the orchestrator applies but the client omitted it.
+    let thinking_budget = if can_use_budget && thinking_budget_raw.is_none() {
+        Some(DEFAULT_THINKING_BUDGET)
+    } else {
+        thinking_budget_raw
+    };
+
+    ThinkingContext {
+        has_think,
+        thinking_budget,
+        stream_reasoning_deltas,
+        original_max_tokens,
+        can_use_budget,
+        inline_think,
+    }
+}
+
 /// Default reasoning-phase token cap applied when a client requests thinking
 /// (`think:true`) on an oMLX thinking model but omits `thinking_budget`.
 ///

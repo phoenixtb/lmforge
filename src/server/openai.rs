@@ -164,43 +164,18 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     // Load the model index early — needed for model capabilities before think translation.
     let index = load_index(&state.data_dir, &state.models_dir);
 
-    // Engine-aware think translation:
-    // oMLX  → strip enable_thinking flag; translate penalties; inject enable_thinking:false for think:false
-    // other → translate think → chat_template_kwargs.enable_thinking
-    // Must capture has_think BEFORE apply_think_for_engine removes the field.
-    let has_think = thinking::request_has_think(&body_value);
     let model_caps = index.get(&model_id).map(|e| &e.capabilities);
 
-    // Read original_max_tokens before apply_think_for_engine (which may modify body).
-    // Needed to calculate remaining tokens for call-2 in the budget path.
-    let original_max_tokens: u32 = body_value
-        .get("max_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(2048)
-        .min(u32::MAX as u64) as u32;
-
-    // Extract thinking_budget BEFORE apply_think_for_engine (read-only call).
-    let thinking_budget = thinking::extract_thinking_budget(&body_value);
-
-    // Extract stream_reasoning_deltas BEFORE apply_think_for_engine.
-    let stream_reasoning_deltas = thinking::extract_stream_reasoning_deltas(&body_value);
-
-    // Seed anti-loop sampling defaults for thinking requests that arrive with no
-    // sampling — only fills absent fields (client values always win). MUST run
-    // before apply_think_for_engine so oMLX penalty translation sees them.
-    thinking::apply_thinking_sampling_defaults(&mut body_value, has_think);
-
-    // Apply engine-specific transformations (strips think, num_ctx, translates penalties).
-    thinking::apply_think_for_engine(&mut body_value, &state.engine_config.id, model_caps);
-
-    // Strip thinking_budget and stream_reasoning_deltas — engine has no concept of them.
-    if let Some(obj) = body_value.as_object_mut() {
-        obj.remove("thinking_budget");
-        obj.remove("stream_reasoning_deltas");
-        if let Some(extra) = obj.get_mut("extra_body").and_then(|v| v.as_object_mut()) {
-            extra.remove("stream_reasoning_deltas");
-        }
-    }
+    // Prepare body for thinking orchestration: extracts intent fields, applies
+    // engine transforms + sampling defaults, strips LMForge-private fields, and
+    // resolves routing flags (can_use_budget, inline_think, thinking_budget).
+    let thinking_ctx = thinking::prepare_request(&mut body_value, &state.engine_config.id, model_caps);
+    let has_think = thinking_ctx.has_think;
+    let thinking_budget = thinking_ctx.thinking_budget;
+    let stream_reasoning_deltas = thinking_ctx.stream_reasoning_deltas;
+    let original_max_tokens = thinking_ctx.original_max_tokens;
+    let can_use_budget = thinking_ctx.can_use_budget;
+    let inline_think = thinking_ctx.inline_think;
 
     // oMLX only stops on the configured eos_token. Models whose chat template
     // ends the assistant turn with a different token (e.g. Phi-4's `<|end|>` vs
@@ -238,40 +213,6 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     if let Some(obj) = body_value.as_object_mut() {
         obj.remove("keep_alive");
     }
-
-    // Determine if the two-call budget path is applicable:
-    //   • engine must support the orchestrator: oMLX (native reasoning_content)
-    //     or llama.cpp / SGLang (inline <think> tags, split by the accumulator).
-    //     The orchestrator guarantees an answer phase (Call-2) even when the
-    //     reasoning budget is exhausted — without it, a runaway <think> on
-    //     llama.cpp burns max_tokens and returns a blank answer (finish=length).
-    //   • model must have thinking capability in the index
-    //   • think must be requested (has_think=true)
-    //   • model must NOT be a native-reasoning model — those emit reasoning in a
-    //     single call and break on the orchestrator's synthetic <think> prefill
-    //     (e.g. Phi-4-reasoning hallucinates a new dialogue turn). They stay on
-    //     the single-call path, which already separates reasoning_content/content.
-    let thinking_adapter = thinking::adapter_for_engine(&state.engine_config.id);
-    let supports_orchestrator = thinking_adapter.supports_orchestrator();
-    // True when the engine embeds reasoning as inline <think> tags inside `content`
-    // rather than a dedicated `reasoning_content` field (oMLX emits the latter natively).
-    let inline_think = thinking_adapter.inline_think();
-    let is_thinking_model = model_caps.map(|c| c.thinking).unwrap_or(false);
-    let is_native_reasoning = model_caps.map(|c| c.native_reasoning).unwrap_or(false);
-    let can_use_budget =
-        has_think && supports_orchestrator && is_thinking_model && !is_native_reasoning;
-
-    // Default the thinking budget when a client requests thinking on an oMLX
-    // thinking model but doesn't pass one. This forces the bounded two-call
-    // orchestrator (which sends enable_thinking:true in call-1, capped by the
-    // budget) instead of the no-budget rewriter — the latter yields no
-    // reasoning on quants that don't emit native <think> tags. See
-    // thinking::DEFAULT_THINKING_BUDGET.
-    let thinking_budget = if can_use_budget && thinking_budget.is_none() {
-        Some(thinking::DEFAULT_THINKING_BUDGET)
-    } else {
-        thinking_budget
-    };
 
     debug!(
         stream = is_stream,
@@ -333,9 +274,9 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
 
     let response = if is_stream {
         // Streaming routing:
-        //   1. oMLX + think + budget → two-call stitching (thinking_budget enforcement)
-        //   2. oMLX + think, no budget → existing rewriter (tag splitting)
-        //   3. everything else → plain proxy_stream passthrough
+        //   1. think + budget + supported engine → two-call orchestrator
+        //   2. think, no budget → tag-rewriter (inline <think> splitting)
+        //   3. everything else → plain passthrough
         let stream_result = match (can_use_budget, thinking_budget) {
             (true, Some(budget)) => {
                 // Two-call streaming: budget enforcement path.
@@ -403,10 +344,9 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
         }
     } else if has_think {
         // Non-streaming + thinking routing:
-        //   1. oMLX + thinking model + budget → two-call non-streaming
-        //   2. oMLX + think, no budget → existing assembler
-        //   3. non-oMLX → existing assembler
-        // Hard 120-second timeout prevents infinite oMLX loops from blocking.
+        //   1. think + budget + supported engine → two-call orchestrator
+        //   2. think, no budget (or unsupported engine) → assembling-stream fallback
+        // Hard 120-second timeout prevents runaway reasoning from blocking.
         let result = match (can_use_budget, thinking_budget) {
             (true, Some(budget)) => {
                 tokio::time::timeout(
