@@ -785,6 +785,56 @@ mod tests {
         assert_eq!(body["chat_template_kwargs"]["enable_thinking"], true);
     }
 
+    // ── CHARACTERIZATION (current behaviour, pre-Fix #3) ─────────────────────
+    // Locks the blank-reply bug found on the linux-x86_64-cpu baseline (972dc63):
+    // a thinking-capable model with NO think intent gets NO enable_thinking flag,
+    // so the Qwen3 template defaults enable_thinking=true, reasons, and is cut at
+    // finish=length with no answer. Phases 1–2 are behaviour-preserving and MUST
+    // keep these green; Phase 3 (Fix #3, thinking opt-in) will intentionally flip
+    // them to assert enable_thinking:false. Do not "fix" here.
+
+    #[test]
+    fn test_llamacpp_no_think_intent_thinking_model_currently_no_flag() {
+        let mut body = serde_json::json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        apply_think_for_engine(&mut body, "llamacpp", Some(&thinking_caps()));
+        assert!(body.get("think").is_none());
+        assert!(
+            body.get("chat_template_kwargs").is_none(),
+            "PRE-Fix#3: no think intent leaves enable_thinking unset (template defaults to thinking) \
+             — Phase 3 will inject enable_thinking:false"
+        );
+    }
+
+    #[test]
+    fn test_sglang_no_think_intent_thinking_model_currently_no_flag() {
+        let mut body = serde_json::json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        apply_think_for_engine(&mut body, "sglang", Some(&thinking_caps()));
+        assert!(
+            body.get("chat_template_kwargs").is_none(),
+            "PRE-Fix#3: sglang no-think-intent path matches llamacpp"
+        );
+    }
+
+    #[test]
+    fn test_omlx_no_think_intent_thinking_model_currently_no_flag() {
+        // oMLX with no flag → natural reasoning (documented), also pre-Fix #3.
+        let mut body = serde_json::json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        apply_think_for_engine(&mut body, "omlx", Some(&thinking_caps()));
+        assert!(
+            body.get("chat_template_kwargs").is_none(),
+            "PRE-Fix#3: oMLX no-think-intent leaves reasoning to model weights"
+        );
+    }
+
     // ── oMLX: temperature advisory (warn-only, no modification) ──────────────
 
     #[test]

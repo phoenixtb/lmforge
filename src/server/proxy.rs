@@ -1745,4 +1745,65 @@ mod tests {
         assert_eq!(body1["max_tokens"], 2048);
         assert!(body1.get("thinking_budget").is_none());
     }
+
+    // ── CHARACTERIZATION: full inline-<think> stream replay ───────────────────
+    // Locks the llama.cpp/sglang template path end-to-end: a realistic stream
+    // where the <think>/</think> tags and surrounding text are split awkwardly
+    // across deltas (mid-tag boundaries) must still reassemble into exactly the
+    // intended reasoning vs answer. The refactor consolidates this rewriter into
+    // thinking/splitter.rs — this test is the behavioural oracle for that move.
+    #[test]
+    fn test_characterize_inline_think_chunked_stream_reassembly() {
+        // Intended logical output: reasoning="Let me think step by step. 2+2=4."
+        //                          answer  ="The answer is 4."
+        // Delivered as awkward chunks (tags + words straddle delta boundaries):
+        let deltas = [
+            "<thi",                 // partial open tag
+            "nk>Let me think ",     // completes open tag + reasoning
+            "step by step. ",
+            "2+2=4.",
+            "</thin",               // partial close tag
+            "k>The answer ",        // completes close tag + answer begins
+            "is 4.",
+        ];
+
+        let mut r = ThinkTagRewriter::new();
+        let mut reasoning = String::new();
+        let mut content = String::new();
+        for d in deltas {
+            let (re, co) = r.process(d);
+            reasoning.push_str(&re);
+            content.push_str(&co);
+        }
+        let (re, co) = r.flush();
+        reasoning.push_str(&re);
+        content.push_str(&co);
+
+        assert_eq!(reasoning, "Let me think step by step. 2+2=4.");
+        assert_eq!(content, "The answer is 4.");
+    }
+
+    // Reasoning-only stream that is truncated mid-thought (budget exhausted,
+    // finish=length): everything stays reasoning, answer is empty, and flush
+    // must not leak a dangling partial close tag into content.
+    #[test]
+    fn test_characterize_inline_think_truncated_midreasoning() {
+        let deltas = ["<think>still reasoning when cut off</thin"];
+        let mut r = ThinkTagRewriter::new();
+        let mut reasoning = String::new();
+        let mut content = String::new();
+        for d in deltas {
+            let (re, co) = r.process(d);
+            reasoning.push_str(&re);
+            content.push_str(&co);
+        }
+        let (re, co) = r.flush();
+        reasoning.push_str(&re);
+        content.push_str(&co);
+
+        // The dangling "</thin" was buffered as a possible tag; on flush it is
+        // emitted in the current (Thinking) mode → reasoning, never content.
+        assert_eq!(reasoning, "still reasoning when cut off</thin");
+        assert_eq!(content, "", "truncated reasoning must not leak into the answer");
+    }
 }
