@@ -239,17 +239,19 @@ stateDiagram-v2
   cold load can't fit after evicting every idle slot, it is **rejected** (`503`,
   `Insufficient memory…`) instead of OOM'ing the host or killing live work; the
   caller retries once a model goes idle.
-- **oMLX (design vs today).** **Design intent** (SRS §4.4): one shared
-  `omlx serve` on the base engine port; the `model` field selects which weights
-  oMLX loads/serves; oMLX's native in-process LRU + pinning handles residency.
-  **Other platforms** mimic multi-model with pseudo port mapping — one
-  llama-server (or SGLang worker) per loaded model, LMForge-managed LRU.
-  **Current drift:** the strict-adapter plan (`docs/archive/implementation-plan-omlx-adapter.md`)
-  forced the per-process pattern onto oMLX too, so each cold load spawns another
-  `omlx serve --model-dir <parent>` (redundant — each process discovers all
-  models). oMLX did not lose capability; we never wired the shared-server path.
-  Fix = engine workstream: one oMLX child, logical slots, proxy all models to
-  the same port. Until then, orphan port cleanup (not per-slot TTL) limits leaks.
+- **Two residency strategies** (ADR-006). `ResidencyKind` is a first-class seam:
+  - **`SharedServer` (oMLX default):** one lazily-started `omlx serve --model-dir <parent>`
+    on `base_engine_port`. All models are served through the same port; the `model`
+    field routes to the right weights. oMLX owns LRU/TTL/eviction natively.
+    LMForge does NOT evict oMLX slots (keepalive tracker is exempt for `engine_id="omlx"`).
+    Pull → discovery requires a server restart (oMLX scans `--model-dir` once at
+    startup); `ensure_model` detects newly-pulled models and restarts automatically.
+    Set `LMFORGE_OMLX_SHARED=0` to revert to `ProcessPool` for debugging.
+  - **`ProcessPool` (llama.cpp / SGLang / all non-oMLX):** one OS process per loaded model,
+    each on its own port. LMForge owns admission (VRAM budgeting, `evict_for_memory`),
+    LRU TTL sweep, and crash reaping. This is the battle-tested path, unchanged.
+  - Both strategies return a uniform `ModelHandle { port, inflight }` to the proxy layer —
+    callers are unaware of which strategy is active.
 - **`max_loaded_models = 0`** in config means unlimited — VRAM is the only
   cap. Setting it to a fixed N caps concurrent residency regardless of VRAM.
 - **Slot keys are model ids**, not repos. Pulling the same repo under two
