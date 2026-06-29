@@ -74,6 +74,7 @@ run_install() {
             cargo build --release --bin lmforge || return 1
             LMFORGE_LOCAL_BIN="$REPO_ROOT/target/release/lmforge" \
                 bash "$REPO_ROOT/scripts/install-core.sh"
+            bash "$REPO_ROOT/scripts/util/build-ui-local.sh" || true
             ;;
         release|release:*|latest)
             local tag="${src#release}"; tag="${tag#:}"
