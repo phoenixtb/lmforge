@@ -172,6 +172,7 @@ fn build_app_state(
     let state = AppState {
         engine_state,
         engine_config,
+        residency_kind: lmforge::engine::ResidencyKind::ProcessPool,
         adapter: Arc::new(lmforge::engine::adapter::EngineAdapterInstance::Omlx(
             lmforge::engine::adapters::omlx::OmlxAdapter::default(),
         )),
@@ -713,6 +714,7 @@ async fn tc09_request_body_limit_enforced_and_configurable() {
     let state = AppState {
         engine_state,
         engine_config,
+        residency_kind: lmforge::engine::ResidencyKind::ProcessPool,
         adapter: Arc::new(lmforge::engine::adapter::EngineAdapterInstance::Omlx(
             lmforge::engine::adapters::omlx::OmlxAdapter::default(),
         )),
@@ -948,6 +950,7 @@ async fn tc14_model_list_resolves_relative_index_against_custom_models_dir() {
     let state = AppState {
         engine_state,
         engine_config,
+        residency_kind: lmforge::engine::ResidencyKind::ProcessPool,
         adapter: Arc::new(lmforge::engine::adapter::EngineAdapterInstance::Omlx(
             lmforge::engine::adapters::omlx::OmlxAdapter::default(),
         )),

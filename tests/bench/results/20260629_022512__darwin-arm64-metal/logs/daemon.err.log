@@ -1,0 +1,402 @@
+# tail -n 400 /Users/titasbiswas/.lmforge/logs/daemon.err.log
+------------------------------------------------------------------------
+[2m2026-06-28T20:58:34.250993Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m4
+[2m2026-06-28T20:58:34.256298Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-06-28T20:58:34.479740Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-06-28T20:58:44.612159Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T20:58:44.612265Z[0m [32m INFO[0m Cold load request for model [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T20:58:44.687837Z[0m [32m INFO[0m Spawning native oMLX engine with models parent directory [3mmodel_id[0m[2m=[0mqwen3.5:4b:6bit [3mport[0m[2m=[0m11432 [3mmodels_dir[0m[2m=[0m/Users/titasbiswas/.lmforge/models [3mrole[0m[2m=[0mChat
+[2m2026-06-28T20:59:19.839309Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T20:59:49.720771Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:00:19.801356Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:00:49.878949Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m3028 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:00:49.882541Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:00:49.882624Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:00:51.944343Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m160
+[2m2026-06-28T21:00:51.981822Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:00:51.981935Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m4
+[2m2026-06-28T21:00:51.985213Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:01:22.780342Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m2945 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:01:22.787074Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:01:22.787262Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:01:24.858586Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m173
+[2m2026-06-28T21:01:24.988817Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:01:25.140446Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:01:25.224819Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m6 [3mpayload_bytes[0m[2m=[0m157
+[2m2026-06-28T21:01:25.224886Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m7 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:01:25.225030Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m7
+[2m2026-06-28T21:01:25.227633Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:01:55.358873Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m2946 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:01:55.365395Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:01:55.365635Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:01:57.421068Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m173
+[2m2026-06-28T21:01:57.555684Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m168
+[2m2026-06-28T21:01:57.696176Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m159
+[2m2026-06-28T21:01:57.696299Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m6 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:01:57.696457Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m6
+[2m2026-06-28T21:01:57.701660Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:02:15.936543Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:02:33.159996Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:02:55.968741Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:03:18.743541Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:03:45.653877Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:04:15.479112Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m3352 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:04:15.482284Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:04:15.482393Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:04:17.423551Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m156
+[2m2026-06-28T21:04:17.423627Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:04:17.423750Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m4
+[2m2026-06-28T21:04:17.427493Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:04:47.634856Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m2822 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:04:47.641817Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:04:47.642060Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:04:49.603577Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m156
+[2m2026-06-28T21:04:49.603702Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:04:49.603763Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m4
+[2m2026-06-28T21:04:49.609434Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:05:10.441278Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:05:41.560311Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:06:11.544677Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:06:41.432555Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m3672 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:06:41.435767Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:06:41.435890Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:06:43.466891Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m156
+[2m2026-06-28T21:06:43.466983Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:06:43.467087Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m4
+[2m2026-06-28T21:06:43.471408Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:07:13.510290Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m3682 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:07:13.517514Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:07:13.517778Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:07:15.467587Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m156
+[2m2026-06-28T21:07:15.467638Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:07:15.467772Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m4
+[2m2026-06-28T21:07:15.472100Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:07:45.685214Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:08:16.166397Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:08:46.083760Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m2532 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:08:46.086703Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:08:46.086826Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:08:48.058193Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m157
+[2m2026-06-28T21:08:48.058291Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:08:48.058395Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m4
+[2m2026-06-28T21:08:48.063043Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:09:17.890127Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m2656 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:09:17.893256Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:09:17.893379Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:09:19.866391Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m157
+[2m2026-06-28T21:09:19.866487Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:09:19.866608Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m4
+[2m2026-06-28T21:09:19.869399Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:09:29.513290Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:6bit"
+[2m2026-06-28T21:09:59.409558Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m4097 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:09:59.413003Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:09:59.413119Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:10:01.392686Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m172
+[2m2026-06-28T21:10:01.429399Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:10:01.429495Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m4
+[2m2026-06-28T21:10:01.433777Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:10:01.433828Z[0m [32m INFO[0m Cold load request for model [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:10:01.478805Z[0m [32m INFO[0m Spawning native oMLX engine with models parent directory [3mmodel_id[0m[2m=[0mqwen3:1.7b:4bit [3mport[0m[2m=[0m11433 [3mmodels_dir[0m[2m=[0m/Users/titasbiswas/.lmforge/models [3mrole[0m[2m=[0mChat
+[2m2026-06-28T21:10:14.984036Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:10:24.717861Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:10:34.420126Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:10:44.097313Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m3094 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:10:44.101873Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:10:44.102053Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:10:44.929631Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m188
+[2m2026-06-28T21:10:45.001269Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m160
+[2m2026-06-28T21:10:45.001480Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:10:45.001774Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m5
+[2m2026-06-28T21:10:45.006042Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:10:54.666435Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m3374 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:10:54.675484Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:10:54.676139Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:10:55.541179Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m188
+[2m2026-06-28T21:10:55.615763Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m160
+[2m2026-06-28T21:10:55.615949Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:10:55.616245Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m5
+[2m2026-06-28T21:10:55.621573Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:11:05.274106Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m3186 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:11:05.281686Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:11:05.282371Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:11:06.148485Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m188
+[2m2026-06-28T21:11:06.220374Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m160
+[2m2026-06-28T21:11:06.220567Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:11:06.220843Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m5
+[2m2026-06-28T21:11:06.225995Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:11:07.834873Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:11:09.206878Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:11:18.926738Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:11:28.722639Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:11:38.472085Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:11:48.168555Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m2949 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:11:48.175517Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:11:48.176195Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:11:49.021051Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m210
+[2m2026-06-28T21:11:49.131213Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m189
+[2m2026-06-28T21:11:49.163343Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m157
+[2m2026-06-28T21:11:49.163561Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m6 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:11:49.163847Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m6
+[2m2026-06-28T21:11:49.169462Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:11:57.868185Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:12:08.328729Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m2928 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:12:08.336104Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:12:08.336885Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:12:09.520778Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m194
+[2m2026-06-28T21:12:09.638769Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m192
+[2m2026-06-28T21:12:09.702095Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:12:09.702453Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m6 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:12:09.702884Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m6
+[2m2026-06-28T21:12:09.710301Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:12:20.091316Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:12:29.863381Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:12:39.681908Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m4154 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:12:39.689735Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:12:39.690567Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:12:40.566691Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m205
+[2m2026-06-28T21:12:40.619451Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m158
+[2m2026-06-28T21:12:40.619675Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:12:40.620068Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m5
+[2m2026-06-28T21:12:40.626140Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:12:51.332072Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m4071 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:12:51.339118Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:12:51.339549Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:12:52.257523Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m200
+[2m2026-06-28T21:12:52.325585Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m163
+[2m2026-06-28T21:12:52.325830Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:12:52.326137Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m5
+[2m2026-06-28T21:12:52.331494Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:13:02.785313Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:13:13.111054Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:13:23.063946Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m2700 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:13:23.070996Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:13:23.071590Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:13:23.938605Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m203
+[2m2026-06-28T21:13:24.052782Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m185
+[2m2026-06-28T21:13:24.166122Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m179
+[2m2026-06-28T21:13:24.279910Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m6 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:13:24.395092Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m7 [3mpayload_bytes[0m[2m=[0m176
+[2m2026-06-28T21:13:24.469620Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m8 [3mpayload_bytes[0m[2m=[0m163
+[2m2026-06-28T21:13:24.469769Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m9 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:13:24.470040Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m9
+[2m2026-06-28T21:13:24.474671Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:13:34.413708Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m2729 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:13:34.420874Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:13:34.421464Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:13:35.293433Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m223
+[2m2026-06-28T21:13:35.405939Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m187
+[2m2026-06-28T21:13:35.520300Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m189
+[2m2026-06-28T21:13:35.604465Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m6 [3mpayload_bytes[0m[2m=[0m168
+[2m2026-06-28T21:13:35.604660Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m7 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:13:35.604924Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m7
+[2m2026-06-28T21:13:35.608906Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:13:38.886590Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:1.7b:4bit"
+[2m2026-06-28T21:13:45.454211Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:13:45.454364Z[0m [32m INFO[0m Cold load request for model [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:13:45.529074Z[0m [32m INFO[0m Spawning native oMLX engine with models parent directory [3mmodel_id[0m[2m=[0mqwen3:4b:thinking:4bit [3mport[0m[2m=[0m11434 [3mmodels_dir[0m[2m=[0m/Users/titasbiswas/.lmforge/models [3mrole[0m[2m=[0mChat
+[2m2026-06-28T21:14:11.441179Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:14:32.459435Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:14:53.481460Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:15:31.269537Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:15:53.039358Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:16:30.725002Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:16:38.964353Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:16:47.506675Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:17:08.518685Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:17:30.157656Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:17:51.289959Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:18:29.037725Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:19:06.864245Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:19:44.709872Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:20:05.777284Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:20:26.850481Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:21:04.710796Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:21:42.592522Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:22:03.675827Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:22:24.541289Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:22:55.750582Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:23:33.610900Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:23:50.133590Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:4b:thinking:4bit"
+[2m2026-06-28T21:23:57.101218Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:23:57.101287Z[0m [32m INFO[0m Cold load request for model [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:23:57.146131Z[0m [32m INFO[0m Spawning native oMLX engine with models parent directory [3mmodel_id[0m[2m=[0mqwen3:8b:4bit [3mport[0m[2m=[0m11435 [3mmodels_dir[0m[2m=[0m/Users/titasbiswas/.lmforge/models [3mrole[0m[2m=[0mChat
+[2m2026-06-28T21:24:39.239499Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:25:15.799326Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:25:52.372958Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:26:28.868027Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m3455 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:26:28.871459Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:26:28.871665Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:26:32.176445Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m173
+[2m2026-06-28T21:26:32.306478Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m159
+[2m2026-06-28T21:26:32.435336Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m158
+[2m2026-06-28T21:26:32.435542Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m6 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:26:32.435868Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m6
+[2m2026-06-28T21:26:32.440349Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:27:10.015374Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m3231 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:27:10.019926Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:27:10.020350Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:27:13.353323Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m173
+[2m2026-06-28T21:27:13.538082Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:27:13.631075Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m156
+[2m2026-06-28T21:27:13.631286Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m6 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:27:13.631563Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m6
+[2m2026-06-28T21:27:13.636240Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:27:50.070664Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m3291 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:27:50.079648Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:27:50.080363Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:27:53.427256Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m173
+[2m2026-06-28T21:27:53.612012Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:27:53.704074Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m156
+[2m2026-06-28T21:27:53.704281Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m6 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:27:53.704692Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m6
+[2m2026-06-28T21:27:53.710697Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:28:02.271089Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:28:10.007390Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:28:36.182833Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:29:07.177622Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:29:40.139690Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:30:16.625229Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:30:53.145292Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m3042 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:30:53.149010Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:30:53.149374Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:30:56.388235Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m171
+[2m2026-06-28T21:30:56.573641Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m175
+[2m2026-06-28T21:30:56.720047Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m170
+[2m2026-06-28T21:30:56.862950Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m6 [3mpayload_bytes[0m[2m=[0m168
+[2m2026-06-28T21:30:56.920348Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m7 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:30:56.920605Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m7
+[2m2026-06-28T21:30:56.925536Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:31:33.367118Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m3167 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:31:33.371181Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:31:33.371667Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:31:36.618125Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m171
+[2m2026-06-28T21:31:36.802810Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m175
+[2m2026-06-28T21:31:36.947469Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m170
+[2m2026-06-28T21:31:37.093770Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m6 [3mpayload_bytes[0m[2m=[0m168
+[2m2026-06-28T21:31:37.148947Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m7 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:31:37.149205Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m7
+[2m2026-06-28T21:31:37.154787Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:32:13.693875Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:32:50.219674Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:33:26.708987Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m4401 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:33:26.713028Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:33:26.713349Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:33:30.039058Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m179
+[2m2026-06-28T21:33:30.204683Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m169
+[2m2026-06-28T21:33:30.336911Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m169
+[2m2026-06-28T21:33:30.505193Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m6 [3mpayload_bytes[0m[2m=[0m159
+[2m2026-06-28T21:33:30.505437Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m7 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:33:30.505844Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m7
+[2m2026-06-28T21:33:30.511471Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:34:07.019824Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m4444 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:34:07.023923Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:34:07.024227Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:34:10.342644Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m179
+[2m2026-06-28T21:34:10.527473Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m170
+[2m2026-06-28T21:34:10.674604Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m169
+[2m2026-06-28T21:34:10.841347Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m6 [3mpayload_bytes[0m[2m=[0m159
+[2m2026-06-28T21:34:10.841583Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m7 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:34:10.842608Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m7
+[2m2026-06-28T21:34:10.848057Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:34:47.343183Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:35:23.865052Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:36:00.309664Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m1863 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:36:00.312665Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:36:00.313008Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:36:02.569731Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m165
+[2m2026-06-28T21:36:02.663436Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m156
+[2m2026-06-28T21:36:02.663631Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:36:02.663936Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m5
+[2m2026-06-28T21:36:02.667844Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:36:39.090746Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m2877 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-06-28T21:36:39.094383Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m167
+[2m2026-06-28T21:36:39.094715Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m161
+[2m2026-06-28T21:36:42.417584Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m177
+[2m2026-06-28T21:36:42.602955Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m172
+[2m2026-06-28T21:36:42.732968Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m158
+[2m2026-06-28T21:36:42.733168Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m6 [3mpayload_bytes[0m[2m=[0m166
+[2m2026-06-28T21:36:42.733412Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m6
+[2m2026-06-28T21:36:42.738668Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:36:55.998425Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3:8b:4bit"
+[2m2026-06-28T21:37:05.099101Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:37:05.099174Z[0m [32m INFO[0m Cold load request for model [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:37:05.146608Z[0m [32m INFO[0m Spawning native oMLX engine with models parent directory [3mmodel_id[0m[2m=[0mphi4:4b:reasoning:4bit [3mport[0m[2m=[0m11436 [3mmodels_dir[0m[2m=[0m/Users/titasbiswas/.lmforge/models [3mrole[0m[2m=[0mChat
+[2m2026-06-28T21:37:31.234919Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:37:51.750671Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:38:09.910514Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:38:38.583565Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:38:56.776944Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:39:21.181508Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:39:25.743271Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:39:33.918687Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:39:54.383709Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:40:14.827810Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:40:35.986683Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:40:57.057062Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:41:33.354751Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:42:09.942793Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:42:30.482706Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:42:51.002642Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:43:27.527765Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:44:04.073020Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:44:24.578615Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:44:45.030095Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:45:07.739706Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:45:39.798517Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:45:49.176012Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:reasoning:4bit"
+[2m2026-06-28T21:46:19.799262Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:4bit"
+[2m2026-06-28T21:46:19.799539Z[0m [32m INFO[0m Cold load request for model [3mmodel_id[0m[2m=[0m"phi4:4b:4bit"
+[2m2026-06-28T21:46:19.856678Z[0m [32m INFO[0m Spawning native oMLX engine with models parent directory [3mmodel_id[0m[2m=[0mphi4:4b:4bit [3mport[0m[2m=[0m11437 [3mmodels_dir[0m[2m=[0m/Users/titasbiswas/.lmforge/models [3mrole[0m[2m=[0mChat
+[2m2026-06-28T21:46:47.277949Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:4bit"
+[2m2026-06-28T21:47:07.792757Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:4bit"
+[2m2026-06-28T21:47:28.256429Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:4bit"
+[2m2026-06-28T21:47:29.370905Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:4bit"
+[2m2026-06-28T21:47:32.262110Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:4bit"
+[2m2026-06-28T21:47:37.785370Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:4bit"
+[2m2026-06-28T21:47:41.936589Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:4bit"
+[2m2026-06-28T21:47:44.647509Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:4bit"
+[2m2026-06-28T21:47:47.231369Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:4bit"
+[2m2026-06-28T21:48:07.597261Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:4bit"
+[2m2026-06-28T21:48:27.994326Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"phi4:4b:4bit"
+[2m2026-06-28T21:48:48.701638Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"gemma3:4b:4bit"
+[2m2026-06-28T21:48:48.701766Z[0m [32m INFO[0m Cold load request for model [3mmodel_id[0m[2m=[0m"gemma3:4b:4bit"
+[2m2026-06-28T21:48:48.770509Z[0m [32m INFO[0m Spawning native oMLX engine with models parent directory [3mmodel_id[0m[2m=[0mgemma3:4b:4bit [3mport[0m[2m=[0m11438 [3mmodels_dir[0m[2m=[0m/Users/titasbiswas/.lmforge/models [3mrole[0m[2m=[0mChat
+[2m2026-06-28T21:49:06.398150Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"gemma3:4b:4bit"
+[2m2026-06-28T21:49:10.293414Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"gemma3:4b:4bit"
+[2m2026-06-28T21:49:14.274390Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"gemma3:4b:4bit"
+[2m2026-06-28T21:49:15.214242Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"gemma3:4b:4bit"
+[2m2026-06-28T21:49:17.415393Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"gemma3:4b:4bit"
+[2m2026-06-28T21:49:19.569146Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"gemma3:4b:4bit"
+[2m2026-06-28T21:49:22.496577Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"gemma3:4b:4bit"
+[2m2026-06-28T21:49:24.612215Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"gemma3:4b:4bit"
+[2m2026-06-28T21:49:26.913604Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"gemma3:4b:4bit"
+[2m2026-06-28T21:49:32.441541Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"gemma3:4b:4bit"
+[2m2026-06-28T21:49:37.085830Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"gemma3:4b:4bit"
+[2m2026-06-28T21:49:37.427248Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"llama3.1:8b:4bit"
+[2m2026-06-28T21:49:37.427307Z[0m [32m INFO[0m Cold load request for model [3mmodel_id[0m[2m=[0m"llama3.1:8b:4bit"
+[2m2026-06-28T21:49:37.469157Z[0m [32m INFO[0m Spawning native oMLX engine with models parent directory [3mmodel_id[0m[2m=[0mllama3.1:8b:4bit [3mport[0m[2m=[0m11439 [3mmodels_dir[0m[2m=[0m/Users/titasbiswas/.lmforge/models [3mrole[0m[2m=[0mChat
+[2m2026-06-28T21:49:51.180451Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"llama3.1:8b:4bit"
+[2m2026-06-28T21:49:57.670032Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"llama3.1:8b:4bit"
+[2m2026-06-28T21:50:03.413647Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"llama3.1:8b:4bit"
+[2m2026-06-28T21:50:05.595477Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"llama3.1:8b:4bit"
+[2m2026-06-28T21:50:09.430834Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"llama3.1:8b:4bit"
+[2m2026-06-28T21:50:14.701131Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"llama3.1:8b:4bit"
+[2m2026-06-28T21:50:21.966383Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"llama3.1:8b:4bit"
+[2m2026-06-28T21:50:26.392434Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"llama3.1:8b:4bit"
+[2m2026-06-28T21:50:31.846078Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"llama3.1:8b:4bit"
+[2m2026-06-28T21:50:38.084624Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"llama3.1:8b:4bit"
+[2m2026-06-28T21:50:44.920528Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"llama3.1:8b:4bit"
+[2m2026-06-28T21:50:45.576125Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen2.5:7b:4bit"
+[2m2026-06-28T21:50:45.576186Z[0m [32m INFO[0m Cold load request for model [3mmodel_id[0m[2m=[0m"qwen2.5:7b:4bit"
+[2m2026-06-28T21:50:45.611420Z[0m [32m INFO[0m Spawning native oMLX engine with models parent directory [3mmodel_id[0m[2m=[0mqwen2.5:7b:4bit [3mport[0m[2m=[0m11440 [3mmodels_dir[0m[2m=[0m/Users/titasbiswas/.lmforge/models [3mrole[0m[2m=[0mChat
+[2m2026-06-28T21:51:04.779139Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen2.5:7b:4bit"
+[2m2026-06-28T21:51:17.253070Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen2.5:7b:4bit"
+[2m2026-06-28T21:51:28.911280Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen2.5:7b:4bit"
+[2m2026-06-28T21:51:30.395404Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen2.5:7b:4bit"
+[2m2026-06-28T21:51:37.513204Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen2.5:7b:4bit"
+[2m2026-06-28T21:51:46.607666Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen2.5:7b:4bit"
+[2m2026-06-28T21:51:51.565469Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen2.5:7b:4bit"
+[2m2026-06-28T21:51:55.877996Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen2.5:7b:4bit"
+[2m2026-06-28T21:52:01.339948Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen2.5:7b:4bit"
+[2m2026-06-28T21:52:08.942174Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen2.5:7b:4bit"
+[2m2026-06-28T21:52:17.095690Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen2.5:7b:4bit"

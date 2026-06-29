@@ -284,9 +284,9 @@ impl ResidencyInstance {
 
 /// The engine manager — a thin dispatcher over a `ResidencyInstance`.
 ///
-/// Phase 1: all engines route through `ProcessPoolResidency` (behavior-preserving).
-/// Phase 2: oMLX routes through `SharedServerResidency` when `LMFORGE_OMLX_SHARED=1`.
-/// Phase 3: `SharedServerResidency` becomes the default for oMLX.
+/// oMLX uses `SharedServerResidency` by default (one shared server, native LRU).
+/// All other engines use `ProcessPoolResidency` (per-model process, LMForge LRU).
+/// Set `LMFORGE_OMLX_SHARED=0` to revert oMLX to `ProcessPoolResidency` for debugging.
 pub struct EngineManager {
     pub config: EngineConfig,
     residency: ResidencyInstance,
@@ -305,9 +305,10 @@ impl EngineManager {
         max_loaded_models: u32,
         status_tx: tokio::sync::broadcast::Sender<EngineState>,
     ) -> Self {
-        // Phase 2: opt-in to SharedServerResidency for oMLX via env flag.
+        // Phase 3: SharedServerResidency is the default for oMLX.
+        // Set LMFORGE_OMLX_SHARED=0 to revert to ProcessPoolResidency for debugging.
         let use_shared = config.id == "omlx"
-            && std::env::var("LMFORGE_OMLX_SHARED").as_deref() == Ok("1");
+            && std::env::var("LMFORGE_OMLX_SHARED").as_deref() != Ok("0");
 
         let residency = if use_shared {
             // Resolve the oMLX executable from the adapter (it's an OmlxAdapter).
@@ -318,7 +319,7 @@ impl EngineManager {
             tracing::info!(
                 port = base_engine_port,
                 models_dir = %models_dir.display(),
-                "oMLX SharedServerResidency enabled (LMFORGE_OMLX_SHARED=1)"
+                "oMLX SharedServerResidency active (set LMFORGE_OMLX_SHARED=0 to disable)"
             );
             ResidencyInstance::SharedServer(SharedServerResidency::new(
                 config.clone(),

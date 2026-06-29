@@ -50,10 +50,20 @@ fn print_active_engine_gate(profile: &HardwareProfile, data_dir: &std::path::Pat
         return;
     };
 
+    // Residency mode for informational display.
+    let residency_label = if engine.id == "omlx"
+        && std::env::var("LMFORGE_OMLX_SHARED").as_deref() != Ok("0")
+    {
+        "SharedServer (one omlx serve, native LRU)"
+    } else {
+        "ProcessPool (per-model process, LMForge LRU)"
+    };
+
     println!();
     println!("Engine — {} (active, version-gated)", engine.name);
     println!("  pinned/tested     : {}", engine.version);
     println!("  validated_range   : {range}");
+    println!("  residency         : {residency_label}");
 
     match installer::engine_installed_version(engine) {
         Some(installed) => {

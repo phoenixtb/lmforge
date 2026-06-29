@@ -222,6 +222,7 @@ pub async fn run(
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
 
     let state = manager.state();
+    let residency_kind = manager.residency_kind();
     let pull_in_flight = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     println!("\n✓ LMForge Orchestrator ready");
     println!(
@@ -245,6 +246,7 @@ pub async fn run(
     let app_state = crate::server::AppState {
         engine_state: state,
         engine_config: engine_config.clone(),
+        residency_kind,
         adapter: shared_adapter,
         data_dir: data_dir.clone(),
         models_dir: models_dir.clone(),

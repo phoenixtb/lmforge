@@ -1,0 +1,59 @@
+# tail -n 400 /Users/titasbiswas/.lmforge/logs/engine-qwen3-embed_0.6b_8bit.stderr.log
+------------------------------------------------------------------------
+2026-06-27 13:25:27,946 - omlx.settings - INFO - Saved settings to /Users/titasbiswas/.omlx/settings.json
+INFO:     Uvicorn running on http://127.0.0.1:11431 (Press CTRL+C to quit)
+2026-06-27 13:25:29,637 - omlx.scheduler - INFO - ChunkedKVCache patch: methods already present upstream, skipped: size
+2026-06-27 13:25:29,720 - omlx.server - INFO - CORS origins: ['*']
+2026-06-27 13:25:29,721 - omlx.model_discovery - INFO - Discovered model: qwen3-embedding-0.6b-8bit (type: embedding, engine: embedding, size: 0.62GB)
+2026-06-27 13:25:29,721 - omlx.model_discovery - INFO - Discovered model: qwen3-reranker-0.6b-mxfp8 (type: reranker, engine: reranker, size: 0.60GB)
+2026-06-27 13:25:29,722 - omlx.model_discovery - INFO - Discovered model: qwen3-vl-2b-instruct-4bit (type: vlm, engine: vlm, size: 1.74GB)
+2026-06-27 13:25:29,722 - omlx.model_discovery - INFO - Discovered model: qwen3.5-2b-4bit (type: vlm, engine: vlm, size: 1.68GB)
+2026-06-27 13:25:29,726 - omlx.model_discovery - INFO - Discovered model: mlx-community--SmolLM-135M-Instruct-4bit (type: llm, engine: batched, size: 0.07GB)
+2026-06-27 13:25:29,726 - omlx.engine_pool - INFO - Discovered 5 models
+2026-06-27 13:25:29,727 - omlx.server_metrics - INFO - Loaded all-time stats from /Users/titasbiswas/.omlx/stats.json
+2026-06-27 13:25:29,727 - omlx.server - INFO - Server initialized with 5 models
+2026-06-27 13:25:29,727 - omlx.server - INFO - Default model: qwen3-embedding-0.6b-8bit
+2026-06-27 13:25:29,727 - omlx.server - INFO - Memory guard tier: balanced (guard on)
+2026-06-27 13:25:29,727 - omlx.server - INFO - Default max tokens: 32768
+2026-06-27 13:25:29,728 - omlx.server - INFO - HF Downloader initialized
+2026-06-27 13:25:29,729 - omlx.server - INFO - ModelScope SDK not installed, MS downloader disabled
+2026-06-27 13:25:29,730 - omlx.server - INFO - oQ Quantizer initialized
+2026-06-27 13:25:29,731 - omlx.server - INFO - HF Uploader initialized
+INFO:     Started server process [89282]
+INFO:     Waiting for application startup.
+2026-06-27 13:25:29,750 - omlx.process_memory_enforcer - WARNING - Metal cap (28.1GB, Apple max_recommended_working_set_size) is below the oMLX static ceiling (30.0GB); leaving Apple's default Metal cap active because iogpu.wired_limit_mb is unset. Raise it with: sudo sysctl iogpu.wired_limit_mb=30720
+2026-06-27 13:25:29,750 - omlx.process_memory_enforcer - INFO - Process memory enforcer started (tier=balanced, ceiling=23.4GB, interval=1.0s)
+INFO:     Application startup complete.
+2026-06-27 13:25:30,019 - omlx.engine_pool - INFO - Loading model: qwen3-embedding-0.6b-8bit
+2026-06-27 13:25:30,019 - omlx.engine.embedding - INFO - Starting embedding engine: /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit
+2026-06-27 13:25:30,020 - omlx.engine_core - INFO - MLX executor thread initialized: generation_stream = ThreadLocalStream(Device(gpu, 0), 4)
+2026-06-27 13:25:30,029 - omlx.models.embedding - INFO - Loading embedding model via mlx-embeddings: /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit
+2026-06-27 13:25:30,731 - omlx.models.embedding - INFO - mx.compile enabled for /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit (primitive embedding path)
+2026-06-27 13:25:30,731 - omlx.models.embedding - INFO - Embedding model loaded successfully: /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit (hidden_size=1024, compiled=True)
+2026-06-27 13:25:30,732 - omlx.engine.embedding - INFO - Embedding engine started: /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit
+2026-06-27 13:25:30,732 - omlx.process_memory_enforcer - WARNING - ProcessMemoryEnforcer: could not resolve scheduler for engine type EmbeddingEngine — prefill memory guard will not propagate to this engine. Verify the wrapper chain (engine._engine.engine.scheduler) still holds.
+2026-06-27 13:25:30,732 - omlx.engine_pool - INFO - Loaded model: qwen3-embedding-0.6b-8bit (actual: 892.47MB, estimated: 634.01MB, total: 634.01MB)
+2026-06-27 13:25:30,745 - omlx.models.embedding - WARNING - compiled embedding path failed for /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit: [eval] Attempting to eval an array during function transformations like compile or vmap is not allowed.; disabling compile and falling back to eager generate()
+2026-06-27 13:25:30,809 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 46 tokens, max_length=32768, truncation=True in 0.071s
+2026-06-27 13:25:36,683 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.144s
+2026-06-27 13:25:36,766 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.032s
+2026-06-27 13:25:36,824 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.022s
+2026-06-27 13:25:36,880 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.021s
+2026-06-27 13:25:36,940 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.022s
+2026-06-27 13:25:36,995 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.025s
+2026-06-27 13:25:37,050 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.026s
+2026-06-27 13:25:37,100 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.024s
+2026-06-27 13:25:37,152 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.025s
+2026-06-27 13:25:37,209 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 54 tokens, max_length=32768, truncation=True in 0.026s
+2026-06-27 13:25:51,874 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.047s
+2026-06-27 13:25:51,896 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.068s
+2026-06-27 13:25:51,916 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.089s
+2026-06-27 13:25:51,937 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.109s
+2026-06-27 13:25:51,957 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.079s
+2026-06-27 13:25:51,977 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.079s
+2026-06-27 13:25:51,997 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.078s
+2026-06-27 13:25:52,017 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 54 tokens, max_length=32768, truncation=True in 0.077s
+2026-06-27 13:25:52,037 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.077s
+2026-06-27 13:25:52,057 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.077s
+2026-06-27 13:25:52,248 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 44 tokens, max_length=32768, truncation=True in 0.071s
+INFO:     Shutting down

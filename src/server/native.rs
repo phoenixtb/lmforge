@@ -737,10 +737,20 @@ pub async fn model_unload(
             .unwrap();
     }
 
+    let msg = if matches!(state.residency_kind, crate::engine::ResidencyKind::SharedServer) {
+        if unload_all {
+            r#"{"status":"unloading","message":"oMLX shared server will be stopped. Memory is managed natively by oMLX; models will reload on next request."}"#
+        } else {
+            r#"{"status":"advisory","message":"oMLX manages its own memory via native LRU. The model has been removed from LMForge status view; oMLX will evict it when memory pressure requires."}"#
+        }
+    } else {
+        r#"{"status":"unloading","message":"Engine stop queued. Use /lf/model/switch to reload."}"#
+    };
+
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(r#"{"status":"unloading","message":"Engine stop queued. Use /lf/model/switch to reload."}"#))
+        .body(Body::from(msg))
         .unwrap()
 }
 

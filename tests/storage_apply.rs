@@ -101,6 +101,7 @@ fn make_state(
     let state = AppState {
         engine_state: Arc::new(RwLock::new(engine_state)),
         engine_config: EngineConfig::default(),
+        residency_kind: lmforge::engine::ResidencyKind::ProcessPool,
         adapter: Arc::new(EngineAdapterInstance::Llamacpp(LlamacppAdapter::default())),
         data_dir,
         models_dir,

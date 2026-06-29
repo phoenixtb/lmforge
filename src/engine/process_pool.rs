@@ -826,10 +826,11 @@ impl Residency for ProcessPoolResidency {
         }
 
         // ── TTL sweep ─────────────────────────────────────────────────────────
-        // oMLX is exempt: the intended architecture is ONE shared `omlx serve`
-        // with native in-process LRU (see SRS §4.4). Today we still spawn
-        // per-slot processes (strict-adapter drift) — fixing that is the
-        // SharedServer workstream (Phase 3), not per-slot LMForge TTL.
+        // oMLX in ProcessPool mode (LMFORGE_OMLX_SHARED=0 fallback) is exempt
+        // from LMForge TTL eviction: the shared-server architecture means oMLX
+        // owns LRU/TTL internally. Under ProcessPool this causes slot
+        // accumulation, but that is acceptable for a debug/fallback path only.
+        // SharedServerResidency (the default) handles oMLX lifecycle correctly.
         let now = keepalive::now_secs();
         let mut to_evict = Vec::new();
         for (id, slot) in self.active_slots.iter() {

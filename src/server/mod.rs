@@ -76,6 +76,9 @@ pub fn attach_inflight_guard(resp: Response, guard: InflightGuard) -> Response {
 pub struct AppState {
     pub engine_state: Arc<RwLock<EngineState>>,
     pub engine_config: EngineConfig,
+    /// Residency strategy active for this engine instance. Used by handlers
+    /// to tailor messages (e.g. advisory vs hard unload).
+    pub residency_kind: crate::engine::ResidencyKind,
     /// Shared adapter — used by model_pull to attempt engine-native downloads.
     pub adapter: Arc<EngineAdapterInstance>,
     pub data_dir: std::path::PathBuf,
