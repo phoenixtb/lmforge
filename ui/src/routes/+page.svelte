@@ -12,14 +12,12 @@
   $: status  = $statusStore.overall_status;
   $: engine  = $statusStore.engine_id;
   $: version = $statusStore.engine_version;
-  // Sort: active models first (idle_secs < 60), then by idle_secs ascending
-  // (most recently used at top), stable string tiebreaker to prevent shuffling.
+  // Sort: active bucket first, idle bucket second; alphabetical within each bucket.
+  // Never sort by idle_secs — tiny timestamp jitter swaps neighbours every tick.
   $: slots = Object.values($statusStore.running_models).sort((a, b) => {
-    const aActive = (a.idle_secs ?? 0) < 60;
-    const bActive = (b.idle_secs ?? 0) < 60;
-    if (aActive !== bActive) return aActive ? -1 : 1;
-    const diff = (a.idle_secs ?? 0) - (b.idle_secs ?? 0);
-    if (diff !== 0) return diff;
+    const aIdle = (a.idle_secs ?? 0) >= 60;
+    const bIdle = (b.idle_secs ?? 0) >= 60;
+    if (aIdle !== bIdle) return aIdle ? 1 : -1;
     return a.model_id.localeCompare(b.model_id);
   });
   // model_id → ModelLoadError. Empty when every recent load succeeded.
@@ -249,8 +247,9 @@
                     </span>
                   {/if}
                   <div class="svt"><div class="svf" style="width:{slotP}%;background:{vramBarColor}"></div></div>
-                  {#if idle}<span class="ib">idle {fmtSecs(slot.idle_secs??0)}</span>
-                  {:else}<span class="ab">active</span>{/if}
+                  <span class={idle ? 'ib' : 'ab'}>
+                    {idle ? `idle ${fmtSecs(slot.idle_secs ?? 0)}` : 'active'}
+                  </span>
                 </div>
               </div>
             {/each}
