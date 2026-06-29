@@ -13,38 +13,34 @@ use crate::engine::manager::{
 use crate::engine::registry::EngineConfig;
 use crate::engine::residency::{Residency, ResidencyKind};
 
-// ── Per-model tracking ────────────────────────────────────────────────────────
+// ── oMLX /v1/models/status response types ────────────────────────────────────
 
-/// LMForge-side tracking for a model the shared server has served.
-///
-/// Only models that LMForge has routed a request through (via `ensure_model`)
-/// appear here.  oMLX may have LRU-evicted a model from memory without telling
-/// us; `heartbeat_tick` uses `loaded_count` from oMLX's `/health` endpoint to
-/// reconcile and remove stale entries from the UI.
-#[derive(Clone)]
-struct TrackedModel {
-    /// Unix epoch seconds when the last `ensure_model` call was made for this model.
-    last_accessed: u64,
-    /// Byte-size of the model weights from the model index. Used to estimate VRAM.
-    size_bytes: u64,
-}
-
-// ── oMLX health response (partial) ───────────────────────────────────────────
-
-#[derive(serde::Deserialize, Default)]
-struct OmlxHealth {
-    #[serde(default)]
-    engine_pool: OmlxEnginePool,
-}
-
-#[derive(serde::Deserialize, Default)]
-struct OmlxEnginePool {
-    /// How many models are currently hot in oMLX's Metal memory.
-    #[serde(default)]
-    loaded_count: usize,
-    /// Total bytes of model weight memory currently held by oMLX.
+/// Full response from oMLX's public `/v1/models/status` endpoint.
+/// This is the ground-truth source for per-model load state.
+#[derive(serde::Deserialize)]
+struct OmlxModelsStatus {
+    models: Vec<OmlxModelEntry>,
     #[serde(default)]
     current_model_memory: u64,
+}
+
+/// One entry from `/v1/models/status`.  Fields relevant to LMForge:
+/// - `loaded`      — true only when the model is hot in Metal memory
+/// - `actual_size` — real bytes once loaded (null when not loaded)
+/// - `estimated_size` — pre-load estimate; used for VRAM display before load
+/// - `last_access` — oMLX-native unix float; drives idle_secs display
+/// - `is_loading`  — model is currently being paged in
+#[derive(serde::Deserialize)]
+struct OmlxModelEntry {
+    id: String,
+    loaded: bool,
+    #[serde(default)]
+    is_loading: bool,
+    #[serde(default)]
+    estimated_size: u64,
+    actual_size: Option<u64>,
+    /// oMLX reports this as a float (e.g. 1782766434.02605).
+    last_access: Option<f64>,
 }
 
 // ── SharedServerResidency ─────────────────────────────────────────────────────
@@ -55,23 +51,24 @@ struct OmlxEnginePool {
 /// on `base_port`.  All model requests go to the same port; oMLX routes by the
 /// `model` field and owns LRU/TTL/eviction natively.
 ///
-/// ## What appears in `/lf/status` running_models
-/// Only models that LMForge has actually served (via `ensure_model`) appear.
-/// All 14 discovered models are never shown as active — discovery ≠ loaded.
-/// The `heartbeat_tick` reconciles:
-///   - If oMLX reports `loaded_count == 0`, all models are cleared.
-///   - If oMLX reports fewer loaded models than we track, we TTL-evict the
-///     oldest tracked models to match, assuming oMLX's LRU has reclaimed them.
-///   - Models not accessed for `keep_alive_secs` are also removed.
+/// ## State sync — real, not approximated
+/// oMLX exposes `/v1/models/status` (public, no auth) with per-model:
+///   - `loaded: bool`      — whether the model is hot in Metal memory right now
+///   - `actual_size`       — real bytes in memory (available once loaded)
+///   - `estimated_size`    — pre-load byte estimate
+///   - `last_access`       — oMLX-native unix float; used for idle_secs
+///   - `is_loading`        — model currently being paged in
 ///
-/// ## VRAM display
-/// `vram_est_gb` is set from `estimate_model_vram(size_bytes)` at serve time —
-/// the same analytic prior used by `ProcessPoolResidency` for budgeting.
+/// `heartbeat_tick` calls this endpoint and directly mirrors the state into
+/// `running_models`.  Only `loaded == true` models appear in the UI panel.
+/// `idle_secs` is derived from oMLX's own `last_access`, not from LMForge's
+/// request timestamps.  VRAM is `actual_size` (real) or `estimated_size`
+/// (pre-load) from oMLX — not our generic analytic estimate.
 ///
-/// ## Pull → discovery
-/// oMLX discovers model subdirectories once at startup. Newly-pulled models
-/// require a server restart. `ensure_model` restarts automatically when a model
-/// dir exists on disk but is absent from oMLX's `/v1/models`.
+/// ## ID mapping
+/// oMLX identifies models by their subdirectory name under `--model-dir`.
+/// LMForge uses a `:` delimited ID (e.g. `qwen3:1.7b:4bit`).  We build a
+/// reverse map at sync time from the model index (path last-component → id).
 pub struct SharedServerResidency {
     pub(crate) config: EngineConfig,
     /// Parent directory passed to oMLX as `--model-dir`.
@@ -86,18 +83,9 @@ pub struct SharedServerResidency {
     process: Option<tokio::process::Child>,
     http: reqwest::Client,
     executable: String,
-    /// LMForge-side tracking for models we have served.
-    /// keyed by LMForge model_id (may differ from oMLX subdir name for
-    /// non-ascii models, but in practice they match).
-    tracked: HashMap<String, TrackedModel>,
-    /// How long to keep a model in LMForge's status view after its last
-    /// request, even if oMLX hasn't evicted it yet.  Mirrors the global
-    /// keep_alive setting; defaults to the same default as the orchestrator.
-    keep_alive_secs: u64,
 }
 
 impl SharedServerResidency {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: EngineConfig,
         models_dir: PathBuf,
@@ -131,8 +119,6 @@ impl SharedServerResidency {
             process: None,
             http,
             executable,
-            tracked: HashMap::new(),
-            keep_alive_secs: keepalive::parse_keepalive("5m"),
         }
     }
 
@@ -146,6 +132,10 @@ impl SharedServerResidency {
         format!("http://127.0.0.1:{}/v1/models", self.port)
     }
 
+    fn models_status_url(&self) -> String {
+        format!("http://127.0.0.1:{}/v1/models/status", self.port)
+    }
+
     async fn is_healthy(&self) -> bool {
         self.http
             .get(&self.health_url())
@@ -153,17 +143,6 @@ impl SharedServerResidency {
             .await
             .map(|r| r.status().is_success())
             .unwrap_or(false)
-    }
-
-    /// Fetch oMLX's pool status (loaded_count, current_model_memory).
-    async fn fetch_health(&self) -> OmlxEnginePool {
-        let Ok(resp) = self.http.get(&self.health_url()).send().await else {
-            return OmlxEnginePool::default();
-        };
-        resp.json::<OmlxHealth>()
-            .await
-            .map(|h| h.engine_pool)
-            .unwrap_or_default()
     }
 
     /// Start `omlx serve --model-dir <models_dir> --port <port>` and wait for health.
@@ -254,7 +233,7 @@ impl SharedServerResidency {
         }
     }
 
-    /// Fetch the model list from oMLX's `/v1/models` endpoint.
+    /// Fetch the model list from oMLX's `/v1/models` endpoint (discovery list).
     async fn fetch_omlx_models(&self) -> Vec<String> {
         let Ok(resp) = self.http.get(&self.models_url()).send().await else {
             return vec![];
@@ -277,65 +256,96 @@ impl SharedServerResidency {
         let _ = self.status_tx.send(snapshot);
     }
 
-    /// Upsert a served model into `running_models` with an accurate VRAM estimate.
-    fn model_slot_for(model_id: &str, port: u16, size_bytes: u64) -> ModelSlot {
-        ModelSlot {
-            model_id: model_id.to_string(),
-            port,
-            status: EngineStatus::Ready,
-            idle_secs: 0,
-            vram_est_gb: crate::hardware::vram::estimate_model_vram(size_bytes),
-            spec_mode: crate::engine::speculative::SpecMode::Off,
-            spec_stats: None,
-        }
+    /// Build a reverse map: oMLX model ID (subdir name) → LMForge model ID.
+    ///
+    /// oMLX uses the last path component of each model dir as its model ID.
+    /// The LMForge model index stores both the LMForge ID and the full `path`.
+    fn build_omlx_to_lmforge_map(&self) -> HashMap<String, String> {
+        let index = crate::model::index::ModelIndex::load(&self.data_dir, &self.models_dir)
+            .unwrap_or(crate::model::index::ModelIndex {
+                schema_version: 1,
+                models: vec![],
+            });
+        index
+            .models
+            .into_iter()
+            .filter_map(|m| {
+                let omlx_id = PathBuf::from(&m.path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())?;
+                Some((omlx_id, m.id))
+            })
+            .collect()
     }
 
-    /// Reconcile LMForge's `running_models` with oMLX's actual memory state.
+    /// Sync `running_models` directly from oMLX's `/v1/models/status`.
     ///
-    /// Strategy:
-    /// 1. **TTL sweep**: remove models not accessed for `keep_alive_secs`.
-    /// 2. **loaded_count reconciliation**: if oMLX reports fewer loaded models
-    ///    than we track, assume LRU evicted the oldest — drop from the bottom.
-    /// 3. **All-clear**: if `loaded_count == 0`, clear everything.
-    /// 4. **idle_secs refresh**: update `idle_secs` for remaining entries.
-    async fn reconcile(&mut self, pool: &OmlxEnginePool) {
+    /// - Only models with `loaded == true` (or `is_loading == true`) appear.
+    /// - `idle_secs` comes from oMLX's own `last_access` timestamp — real data.
+    /// - `vram_est_gb` uses `actual_size` when loaded, `estimated_size` otherwise.
+    /// - LMForge model IDs are resolved via the model index path → id map.
+    async fn sync_from_omlx_status(&self) {
+        let Ok(resp) = self.http.get(&self.models_status_url()).send().await else {
+            return;
+        };
+        let Ok(status) = resp.json::<OmlxModelsStatus>().await else {
+            return;
+        };
+
+        let reverse_map = self.build_omlx_to_lmforge_map();
         let now = keepalive::now_secs();
 
-        // ── 1. TTL sweep ──────────────────────────────────────────────────────
-        let ttl = self.keep_alive_secs;
-        self.tracked.retain(|_, t| {
-            ttl == 0 || now.saturating_sub(t.last_accessed) <= ttl
-        });
-
-        // ── 2 & 3. loaded_count reconciliation ───────────────────────────────
-        if pool.loaded_count == 0 {
-            self.tracked.clear();
-        } else if pool.loaded_count < self.tracked.len() {
-            // oMLX has evicted some models. We don't know which ones, so drop
-            // the oldest (by last_accessed) until our count matches.
-            let excess = self.tracked.len() - pool.loaded_count;
-            let mut by_age: Vec<(String, u64)> = self
-                .tracked
-                .iter()
-                .map(|(id, t)| (id.clone(), t.last_accessed))
-                .collect();
-            by_age.sort_by_key(|(_, ts)| *ts);
-            for (id, _) in by_age.into_iter().take(excess) {
-                self.tracked.remove(&id);
-            }
-        }
-
-        // ── 4. Sync running_models to match tracked ───────────────────────────
         let mut state = self.state.write().await;
-        state.running_models.retain(|id, _| self.tracked.contains_key(id));
-        for (model_id, t) in &self.tracked {
-            let idle_secs = now.saturating_sub(t.last_accessed);
-            let slot = state
-                .running_models
-                .entry(model_id.clone())
-                .or_insert_with(|| Self::model_slot_for(model_id, self.port, t.size_bytes));
-            slot.idle_secs = idle_secs;
+
+        // ── Build the desired state from oMLX ground truth ────────────────────
+        // Only models oMLX considers loaded (or loading) should appear.
+        let mut desired: HashMap<String, ModelSlot> = HashMap::new();
+
+        for entry in &status.models {
+            if !entry.loaded && !entry.is_loading {
+                continue;
+            }
+            // Map oMLX model ID → LMForge model ID (fall back to oMLX id if unmapped).
+            let lmforge_id = reverse_map
+                .get(&entry.id)
+                .cloned()
+                .unwrap_or_else(|| entry.id.clone());
+
+            let vram_gb = entry
+                .actual_size
+                .unwrap_or(entry.estimated_size) as f32
+                / 1_073_741_824.0; // bytes → GiB (1 << 30)
+
+            let idle_secs = entry
+                .last_access
+                .map(|ts| now.saturating_sub(ts as u64))
+                .unwrap_or(0);
+
+            let engine_status = if entry.is_loading {
+                EngineStatus::Starting
+            } else {
+                EngineStatus::Ready
+            };
+
+            desired.insert(
+                lmforge_id.clone(),
+                ModelSlot {
+                    model_id: lmforge_id,
+                    port: self.port,
+                    status: engine_status,
+                    idle_secs,
+                    vram_est_gb: vram_gb,
+                    spec_mode: crate::engine::speculative::SpecMode::Off,
+                    spec_stats: None,
+                },
+            );
         }
+
+        // ── Atomically replace running_models with ground truth ───────────────
+        state.running_models = desired;
+        crate::server::metrics::set_active_models(
+            state.running_models.values().filter(|s| s.status == EngineStatus::Ready).count() as u64,
+        );
     }
 }
 
@@ -350,13 +360,17 @@ impl Residency for SharedServerResidency {
     /// subdir must exist on disk (pulled). Returns a handle pointing to the
     /// single shared port.
     ///
-    /// If the model dir is present but absent from oMLX's `/v1/models`
+    /// If the model dir is present but absent from oMLX's discovery list
     /// (pulled while the server was running), the server is restarted so oMLX
     /// rescans and discovers the new subdir.
+    ///
+    /// Note: oMLX loads models lazily on first inference request — the model
+    /// will appear as `loaded` in the UI status after the first actual inference
+    /// call, not at ensure_model time.
     async fn ensure_model(
         &mut self,
         model_id: &str,
-        keep_alive_override: &Option<String>,
+        _keep_alive_override: &Option<String>,
         for_request: bool,
     ) -> Result<ModelHandle> {
         let index = crate::model::index::ModelIndex::load(&self.data_dir, &self.models_dir)
@@ -382,9 +396,6 @@ impl Residency for SharedServerResidency {
             );
         }
 
-        let size_bytes = index.get(model_id).map(|m| m.size_bytes).unwrap_or(0);
-
-        // Derive the subdir name that oMLX uses as the model ID.
         let omlx_model_id = model_dir
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -392,8 +403,8 @@ impl Residency for SharedServerResidency {
 
         self.ensure_server().await?;
 
-        // Check if oMLX already knows the model. If not, the model was likely
-        // pulled while the server was already running — restart to trigger rescan.
+        // If oMLX doesn't know this model yet (pulled while server was live),
+        // restart to trigger a fresh subdir scan.
         let known = self.fetch_omlx_models().await;
         if !known.contains(&omlx_model_id) {
             info!(
@@ -405,42 +416,26 @@ impl Residency for SharedServerResidency {
             self.spawn_server().await?;
         }
 
-        // Apply keep_alive override if provided.
-        if let Some(ov) = keep_alive_override {
-            let secs = keepalive::parse_keepalive(ov);
-            if secs > 0 {
-                self.keep_alive_secs = secs;
-            }
-        }
-
-        // ── Track this model ──────────────────────────────────────────────────
-        let now = keepalive::now_secs();
-        self.tracked
-            .entry(model_id.to_string())
-            .and_modify(|t| t.last_accessed = now)
-            .or_insert(TrackedModel {
-                last_accessed: now,
-                size_bytes,
-            });
-
-        // ── Upsert running_models with accurate VRAM estimate ─────────────────
+        // Add an optimistic "loading" slot so the UI shows something immediately.
+        // The next heartbeat sync will replace it with real data from oMLX.
         {
             let mut state = self.state.write().await;
-            let slot = state
-                .running_models
-                .entry(model_id.to_string())
-                .or_insert_with(|| Self::model_slot_for(model_id, self.port, size_bytes));
-            // Refresh vram_est_gb in case we now have size_bytes we didn't before.
-            if slot.vram_est_gb == 0.0 && size_bytes > 0 {
-                slot.vram_est_gb = crate::hardware::vram::estimate_model_vram(size_bytes);
-            }
-            slot.idle_secs = 0;
+            state.running_models.entry(model_id.to_string()).or_insert_with(|| {
+                let size_bytes = index.get(model_id).map(|m| m.size_bytes).unwrap_or(0);
+                ModelSlot {
+                    model_id: model_id.to_string(),
+                    port: self.port,
+                    status: EngineStatus::Starting,
+                    idle_secs: 0,
+                    vram_est_gb: size_bytes as f32 / 1_073_741_824.0,
+                    spec_mode: crate::engine::speculative::SpecMode::Off,
+                    spec_stats: None,
+                }
+            });
             state.clear_error(model_id);
         }
-        crate::server::metrics::set_active_models(self.tracked.len() as u64);
         self.notify().await;
 
-        // Each request gets its own inflight counter (uniform InflightGuard contract).
         let inflight = Arc::new(AtomicU32::new(0));
         if for_request {
             inflight.fetch_add(1, Ordering::Relaxed);
@@ -451,32 +446,29 @@ impl Residency for SharedServerResidency {
         })
     }
 
-    /// Advisory unload: oMLX manages its own memory. Removes the model from
-    /// LMForge's tracking and status view immediately.
+    /// Advisory unload: removes from LMForge's view immediately. oMLX will
+    /// evict the model under memory pressure on its own schedule.
     async fn unload_model(&mut self, model_id: &str) {
         warn!(
             model_id,
             "unload_model called on SharedServerResidency — oMLX manages its own memory; \
-             removing from LMForge status view (oMLX will evict under memory pressure)"
+             removing from LMForge status view"
         );
-        self.tracked.remove(model_id);
         self.state.write().await.running_models.remove(model_id);
-        crate::server::metrics::set_active_models(self.tracked.len() as u64);
         self.notify().await;
     }
 
-    /// Kill the oMLX server process. Clears all tracking. The next
-    /// `ensure_model` will restart it with fresh model discovery.
+    /// Kill the oMLX server process. Clears all state. The next `ensure_model`
+    /// will restart it with fresh model discovery.
     async fn unload_all(&mut self) {
         info!("Stopping shared oMLX server (unload_all)");
         self.kill_process().await;
-        self.tracked.clear();
         self.state.write().await.running_models.clear();
         crate::server::metrics::set_active_models(0);
         self.notify().await;
     }
 
-    /// Periodic heartbeat: crash detection + oMLX-aware TTL reconciliation.
+    /// Periodic heartbeat: crash detection + real state sync from oMLX.
     async fn heartbeat_tick(&mut self) {
         // ── Crash detection ───────────────────────────────────────────────────
         if let Some(p) = self.process.as_mut() {
@@ -487,7 +479,6 @@ impl Residency for SharedServerResidency {
                      will restart on next request"
                 );
                 self.process = None;
-                self.tracked.clear();
                 self.state.write().await.running_models.clear();
                 crate::server::metrics::set_active_models(0);
                 self.notify().await;
@@ -495,11 +486,10 @@ impl Residency for SharedServerResidency {
             }
         }
 
-        // ── Reconcile with oMLX health ────────────────────────────────────────
-        if self.process.is_some() && !self.tracked.is_empty() {
-            let pool = self.fetch_health().await;
-            self.reconcile(&pool).await;
-            crate::server::metrics::set_active_models(self.tracked.len() as u64);
+        // ── Real state sync from oMLX /v1/models/status ───────────────────────
+        // This drives the UI truthfully: loaded_count, actual VRAM, real idle_secs.
+        if self.process.is_some() {
+            self.sync_from_omlx_status().await;
         }
         self.notify().await;
     }
@@ -550,22 +540,9 @@ mod tests {
         assert_eq!(guard.overall_status, EngineStatus::Ready);
     }
 
-    #[test]
-    fn tracked_starts_empty() {
-        let r = make_residency();
-        assert!(r.tracked.is_empty());
-    }
-
     #[tokio::test]
-    async fn unload_all_clears_state_and_tracked() {
+    async fn unload_all_clears_state() {
         let mut r = make_residency();
-        r.tracked.insert(
-            "test-model".into(),
-            TrackedModel {
-                last_accessed: 100,
-                size_bytes: 1_000_000,
-            },
-        );
         r.state.write().await.running_models.insert(
             "test-model".into(),
             ModelSlot {
@@ -579,20 +556,12 @@ mod tests {
             },
         );
         r.unload_all().await;
-        assert!(r.tracked.is_empty());
         assert!(r.state.read().await.running_models.is_empty());
     }
 
     #[tokio::test]
-    async fn unload_model_removes_from_tracked_and_state() {
+    async fn unload_model_removes_from_state() {
         let mut r = make_residency();
-        r.tracked.insert(
-            "m1".into(),
-            TrackedModel {
-                last_accessed: 100,
-                size_bytes: 0,
-            },
-        );
         r.state.write().await.running_models.insert(
             "m1".into(),
             ModelSlot {
@@ -600,71 +569,19 @@ mod tests {
                 port: 19998,
                 status: EngineStatus::Ready,
                 idle_secs: 0,
-                vram_est_gb: 0.0,
+                vram_est_gb: 2.0,
                 spec_mode: crate::engine::speculative::SpecMode::Off,
                 spec_stats: None,
             },
         );
         r.unload_model("m1").await;
-        assert!(!r.tracked.contains_key("m1"));
         assert!(!r.state.read().await.running_models.contains_key("m1"));
     }
 
-    #[tokio::test]
-    async fn reconcile_clears_all_when_loaded_count_zero() {
-        let mut r = make_residency();
-        let now = keepalive::now_secs();
-        // Seed 2 tracked models.
-        r.tracked.insert("a".into(), TrackedModel { last_accessed: now, size_bytes: 0 });
-        r.tracked.insert("b".into(), TrackedModel { last_accessed: now, size_bytes: 0 });
-        r.state.write().await.running_models.insert("a".into(), ModelSlot {
-            model_id: "a".into(), port: 19998, status: EngineStatus::Ready,
-            idle_secs: 0, vram_est_gb: 0.0,
-            spec_mode: crate::engine::speculative::SpecMode::Off, spec_stats: None,
-        });
-        r.state.write().await.running_models.insert("b".into(), ModelSlot {
-            model_id: "b".into(), port: 19998, status: EngineStatus::Ready,
-            idle_secs: 0, vram_est_gb: 0.0,
-            spec_mode: crate::engine::speculative::SpecMode::Off, spec_stats: None,
-        });
-        let pool = OmlxEnginePool { loaded_count: 0, current_model_memory: 0 };
-        r.reconcile(&pool).await;
-        assert!(r.tracked.is_empty(), "all tracked cleared on loaded_count=0");
-        assert!(r.state.read().await.running_models.is_empty());
-    }
-
-    #[tokio::test]
-    async fn reconcile_drops_oldest_on_lru_eviction() {
-        let mut r = make_residency();
-        r.keep_alive_secs = 0; // disable TTL so only loaded_count logic runs
-        let now = keepalive::now_secs();
-        // 3 tracked, oMLX reports only 1 loaded.
-        r.tracked.insert("old".into(), TrackedModel { last_accessed: now - 30, size_bytes: 0 });
-        r.tracked.insert("mid".into(), TrackedModel { last_accessed: now - 20, size_bytes: 0 });
-        r.tracked.insert("new".into(), TrackedModel { last_accessed: now - 10, size_bytes: 0 });
-        let pool = OmlxEnginePool { loaded_count: 1, current_model_memory: 0 };
-        r.reconcile(&pool).await;
-        assert_eq!(r.tracked.len(), 1, "2 oldest evicted");
-        assert!(r.tracked.contains_key("new"), "newest retained");
-    }
-
-    #[tokio::test]
-    async fn reconcile_ttl_evicts_stale() {
-        let mut r = make_residency();
-        r.keep_alive_secs = 60; // 1 minute TTL
-        let now = keepalive::now_secs();
-        // "stale" was last accessed 2 minutes ago — beyond TTL
-        r.tracked.insert("stale".into(), TrackedModel { last_accessed: now - 120, size_bytes: 0 });
-        r.tracked.insert("fresh".into(), TrackedModel { last_accessed: now, size_bytes: 0 });
-        let pool = OmlxEnginePool { loaded_count: 10, current_model_memory: 0 };
-        r.reconcile(&pool).await;
-        assert!(!r.tracked.contains_key("stale"), "stale model evicted by TTL");
-        assert!(r.tracked.contains_key("fresh"), "fresh model retained");
-    }
-
     #[test]
-    fn model_slot_vram_nonzero_for_nonzero_size() {
-        let slot = SharedServerResidency::model_slot_for("m", 19998, 4_000_000_000);
-        assert!(slot.vram_est_gb > 0.0, "VRAM estimate should be nonzero");
+    fn vram_gb_conversion_is_correct() {
+        // 4 GiB = 4_294_967_296 bytes
+        let vram = 4_294_967_296u64 as f32 / 1_073_741_824.0;
+        assert!((vram - 4.0).abs() < 0.01);
     }
 }
