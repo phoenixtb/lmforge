@@ -4,9 +4,9 @@ use tracing::{debug, info};
 
 /// Tracks the last API request timestamp for idle model unloading.
 ///
-/// When no requests arrive within the keepalive duration,
-/// the engine process can be stopped to free resources.
-/// oMLX handles this natively (LRU eviction) so it's skipped for oMLX.
+/// When no requests arrive within the keepalive duration, the engine process
+/// can be stopped to free resources. Enforced by `EngineManager`'s heartbeat
+/// sweep (`keep_alive_secs` on each slot, default 5m from config).
 #[derive(Debug, Clone)]
 pub struct KeepaliveTracker {
     last_request: Arc<AtomicU64>,
@@ -18,16 +18,13 @@ impl KeepaliveTracker {
     /// Create a new keepalive tracker.
     /// `keepalive_secs = 0` means disabled (never unload).
     pub fn new(keepalive_secs: u64, engine_id: &str) -> Self {
-        // oMLX handles model lifecycle natively — skip keepalive
-        let enabled = keepalive_secs > 0 && engine_id != "omlx";
+        let enabled = keepalive_secs > 0;
+        let _ = engine_id; // reserved — all engines use the same LMForge-side TTL today
 
         if enabled {
             info!(keepalive_secs, engine_id, "Keepalive timer enabled");
         } else {
-            debug!(
-                engine_id,
-                "Keepalive timer disabled (engine handles lifecycle natively or keepalive=0)"
-            );
+            debug!(engine_id, "Keepalive timer disabled (keepalive=0)");
         }
 
         Self {
@@ -97,10 +94,12 @@ mod tests {
     }
 
     #[test]
-    fn test_keepalive_disabled_for_omlx() {
+    fn test_keepalive_enabled_for_omlx() {
+        // LMForge spawns one engine process per model slot (including oMLX).
+        // Idle TTL must apply uniformly — oMLX's in-process LRU does not replace
+        // our per-slot process lifecycle.
         let tracker = KeepaliveTracker::new(300, "omlx");
-        assert!(!tracker.enabled);
-        assert!(!tracker.is_idle()); // always returns false when disabled
+        assert!(tracker.enabled);
     }
 
     #[test]

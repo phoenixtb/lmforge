@@ -657,9 +657,26 @@ impl EngineManager {
             if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
                 break;
             }
+            // Port held by an orphan (common after daemon restart without graceful
+            // shutdown). Attempt cleanup before skipping — skipping without killing
+            // is how omlx-server / llama-server processes accumulate into the dozens.
             warn!(
                 port,
-                "Allocated port is held by an un-tracked process — skipping"
+                "Port held by un-tracked process — attempting orphan cleanup"
+            );
+            let pid_file = self
+                .data_dir
+                .join("engines")
+                .join(format!("{}_{}.pid", self.config.id, port));
+            kill_orphan_engine(&pid_file);
+            kill_port_holder_via_lsof(port);
+            if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+                info!(port, "Port freed after orphan cleanup");
+                break;
+            }
+            warn!(
+                port,
+                "Port still occupied after cleanup — skipping to next port"
             );
             port += 1;
         }
@@ -1153,18 +1170,42 @@ impl EngineManager {
                     }
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_secs(self.health_interval_secs)) => {
-                    // Check TTL
+                    // Reap engine processes that exited without going through stop_slot
+                    // (crash, OOM killer, external kill). Without this the UI keeps
+                    // showing "loaded" slots whose ports are dead.
+                    let mut crashed = Vec::new();
+                    for (id, slot) in self.active_slots.iter_mut() {
+                        if let Ok(Some(status)) = slot.engine.process.try_wait() {
+                            warn!(model_id = %id, ?status, "Engine process exited unexpectedly — removing slot");
+                            crashed.push(id.clone());
+                        }
+                    }
+                    for id in crashed {
+                        if let Some(slot) = self.active_slots.remove(&id) {
+                            let pid_file = self
+                                .data_dir
+                                .join("engines")
+                                .join(format!("{}_{}.pid", self.config.id, slot.port));
+                            let _ = std::fs::remove_file(pid_file);
+                            self.state.write().await.running_models.remove(&id);
+                        }
+                    }
+
+                    // Check TTL — applies to every engine (including oMLX). We spawn
+                    // one process per model slot; idle slots must be unloaded so a
+                    // think_bench matrix doesn't leave a dozen omlx-server forever.
                     let now = keepalive::now_secs();
                     let mut to_evict = Vec::new();
                     for (id, slot) in self.active_slots.iter() {
                         // Never TTL-evict a model that is mid-request: a long
                         // stream can outlive its keep-alive window, and stamping
                         // last_accessed only happens at request start.
-                        if slot.keep_alive_secs > 0 && (now.saturating_sub(slot.last_accessed) > slot.keep_alive_secs)
-                            && self.config.id != "omlx"
-                            && slot.inflight.load(Ordering::Relaxed) == 0 {
-                                to_evict.push(id.clone());
-                            }
+                        if slot.keep_alive_secs > 0
+                            && (now.saturating_sub(slot.last_accessed) > slot.keep_alive_secs)
+                            && slot.inflight.load(Ordering::Relaxed) == 0
+                        {
+                            to_evict.push(id.clone());
+                        }
                     }
 
                     for id in to_evict {

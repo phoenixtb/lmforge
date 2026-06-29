@@ -239,8 +239,12 @@ stateDiagram-v2
   cold load can't fit after evicting every idle slot, it is **rejected** (`503`,
   `Insufficient memory…`) instead of OOM'ing the host or killing live work; the
   caller retries once a model goes idle.
-- **oMLX is special.** It manages its own model residency (Apple's MLX runtime
-  handles eviction). The Rust keepalive timer is skipped for that engine.
+- **oMLX note.** LMForge still spawns **one `omlx serve` process per loaded model
+  slot** (same as llama.cpp), each pointing at the shared models parent dir.
+  oMLX's in-process model LRU does **not** replace LMForge's slot TTL — idle
+  slots are unloaded after `keep_alive` (default 5m) like every other engine.
+  A longer-term fix is a single shared oMLX server for all models (efficiency
+  workstream).
 - **`max_loaded_models = 0`** in config means unlimited — VRAM is the only
   cap. Setting it to a fixed N caps concurrent residency regardless of VRAM.
 - **Slot keys are model ids**, not repos. Pulling the same repo under two
