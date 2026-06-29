@@ -67,9 +67,9 @@ trait ThinkingAdapter {
 Ollama surface stays **deferred** — it keeps its current path until after the
 OpenAI path is proven on the adapter layer. (Explicit decision.)
 
-## Two behaviour fixes to fold in (the only intended behaviour changes)
+## Three behaviour fixes to fold in (the only intended behaviour changes)
 
-Both are currently un-owned; they belong in the new layer with tests.
+All three are currently un-owned; they belong in the new layer with tests.
 
 - **Fix #1 — oMLX truncation dup.** Native-reasoning models (`qwen3:4b:thinking`,
   `phi4:reasoning`) bypass the orchestrator (plain passthrough). On `finish=length`
@@ -79,10 +79,24 @@ Both are currently un-owned; they belong in the new layer with tests.
   merely repeats the accumulated reasoning. Only triggers on truncation; natural
   `stop` already separates correctly — guard against false positives.
 - **Fix #2 — orchestrator silent-empty.** When Call-1 yields nothing (engine
-  evicted/erroring — see Fedora), the stream emits only `[DONE]` → blank reply.
+  evicted/erroring), the stream emits only `[DONE]` → blank reply.
   `orchestrator.rs` INVARIANT: if Call-1 produced neither reasoning nor content,
   fall back to a single plain answer call; if that also fails, emit a structured
   error frame. Never a silent empty stream.
+- **Fix #3 — plain-client default suppresses reasoning.** Proven by the
+  `linux-x86_64-cpu` baseline (commit `972dc63`): a thinking-capable model
+  called with **no `think` intent** gets **no `enable_thinking` flag** on
+  llama.cpp/sglang, so the Qwen3 chat template defaults `enable_thinking=true`.
+  The model reasons, exhausts `max_tokens`, and is cut at `finish=length` with
+  **zero answer content** → blank reply on the default OpenAI/Ollama path
+  (qwen3.5:2b off = 0/12, all `length`; qwen3:1.7b/8b off ≈ half blank).
+  Policy: **thinking is opt-in.** For a thinking-capable, non-`native_reasoning`
+  model with no think intent, `classify()` → `Passthrough` with
+  `enable_thinking:false` injected. Clients opt into reasoning via `think:true`
+  (→ `Orchestrate`). This is in `apply_think_for_engine`/`classify`, not the
+  orchestrator. Tests: no-think-field + thinking caps ⇒ `enable_thinking:false`
+  for llamacpp/sglang **and** oMLX; explicit `think:false` unchanged;
+  `native_reasoning` models unaffected (they manage their own budget).
 
 ## Feature invariants (must hold every phase)
 
@@ -102,8 +116,10 @@ Both are currently un-owned; they belong in the new layer with tests.
 - Baseline = current committed reports for mac/win (Fedora is env-limited, see
   separate efficiency workstream).
 - After Phases 1–2 (behaviour-preserving): bench deltas must be **noise only**.
-- After Phase 3 (fixes): `blank` and `dup (r==c)` counts must **drop**, nothing
-  else regresses.
+- After Phase 3 (fixes): `blank` (both the Call-1-empty kind **and** the
+  plain-client `off`-mode `length` kind) and `dup (r==c)` counts must **drop**,
+  nothing else regresses. Baselines: `darwin-arm64-metal`, `windows-amd64-cuda`,
+  `linux-x86_64-cpu` (all on `972dc63`).
 - Provenance: every report carries the build SHA; no stale-daemon banners.
 
 ---
@@ -192,8 +208,14 @@ not silent; nothing else regresses.
 
 ## Open follow-ups (not in this refactor)
 
-- **Efficiency workstream (separate):** Fedora ran CPU-only (`ngl=0`) despite a
-  detectable Vulkan device → RAM thrash. GPU/variant auto-use, fit-planner,
-  model lease across multi-call ops, smarter eviction. The **model-lease** idea
-  overlaps with Fix #2 (don't evict mid-logical-request) and should coordinate.
+- **Efficiency workstream (separate):** Fedora VM is *genuinely* CPU-only
+  (`/lf/hardware` → `gpu_vendor:"none"`; the earlier `vulkan` label was a bench
+  mis-probe on a virtio GPU, fixed in `972dc63`). `/proc` capture confirmed
+  eviction-on-swap is **correct** there: real `llama-server` RSS ≈ 7.7 GB for an
+  8B-4bit model (CPU weight repacking → anonymous, non-reclaimable) vs LMForge's
+  5.75 GB footprint estimate, so an 11.6 GB box holds ~one big model. Latent
+  issue = footprint **under**-estimation in `estimate_model_vram` for CPU repack
+  (risks over-admit/OOM on tighter boxes; the 60% cap currently masks it).
+  The **model-lease** idea (don't evict mid-logical-request) overlaps with Fix #2
+  and should coordinate.
 - **Ollama on the shared orchestrator** — deferred; revisit after Phase 4.
