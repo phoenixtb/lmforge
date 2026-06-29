@@ -1,4 +1,7 @@
+pub mod adapter;
 pub mod splitter;
+
+pub use adapter::{ThinkingAdapter, adapter_for_engine};
 pub use splitter::ThinkSplitter;
 
 use tracing::{debug, warn};

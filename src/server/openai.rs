@@ -251,11 +251,11 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     //     single call and break on the orchestrator's synthetic <think> prefill
     //     (e.g. Phi-4-reasoning hallucinates a new dialogue turn). They stay on
     //     the single-call path, which already separates reasoning_content/content.
-    let is_omlx = state.engine_config.id == "omlx";
-    // Engines that embed reasoning as inline <think> tags inside `content`.
-    let inline_think =
-        state.engine_config.id == "llamacpp" || state.engine_config.id == "sglang";
-    let supports_orchestrator = is_omlx || inline_think;
+    let thinking_adapter = thinking::adapter_for_engine(&state.engine_config.id);
+    let supports_orchestrator = thinking_adapter.supports_orchestrator();
+    // True when the engine embeds reasoning as inline <think> tags inside `content`
+    // rather than a dedicated `reasoning_content` field (oMLX emits the latter natively).
+    let inline_think = thinking_adapter.inline_think();
     let is_thinking_model = model_caps.map(|c| c.thinking).unwrap_or(false);
     let is_native_reasoning = model_caps.map(|c| c.native_reasoning).unwrap_or(false);
     let can_use_budget =

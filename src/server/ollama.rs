@@ -107,10 +107,17 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
         .unwrap_or(true);
     let client = proxy::build_proxy_client();
 
+    let thinking_adapter = thinking::adapter_for_engine(&state.engine_config.id);
+
     let response = if is_stream {
-        // For oMLX+think, rewrite <think> tags in delta.content into delta.reasoning_content.
-        // All other streaming combinations use plain passthrough.
-        let openai_stream = if has_think && state.engine_config.id == "omlx" {
+        // For engines that support the orchestrator but don't embed reasoning as
+        // inline <think> tags (oMLX), run the SSE rewriter. All other combinations
+        // use plain passthrough — the Ollama path doesn't use the two-call budget
+        // orchestrator (that's OpenAI-path only).
+        let openai_stream = if has_think
+            && thinking_adapter.supports_orchestrator()
+            && !thinking_adapter.inline_think()
+        {
             proxy::proxy_stream_rewriting_think_tags(
                 &client,
                 engine_port,
