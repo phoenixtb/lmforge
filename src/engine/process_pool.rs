@@ -74,8 +74,6 @@ pub struct ProcessPoolResidency {
     pub(crate) models_dir: PathBuf,
     pub(crate) logs_dir: PathBuf,
     pub(crate) state: Arc<RwLock<EngineState>>,
-    #[allow(dead_code)]
-    pub(crate) max_restarts: u32,
     pub(crate) active_slots: std::collections::HashMap<String, ActiveSlot>,
     pub(crate) global_keep_alive: String,
     pub(crate) max_loaded_models: u32,
@@ -115,7 +113,6 @@ impl ProcessPoolResidency {
             models_dir,
             logs_dir,
             state,
-            max_restarts: 3,
             active_slots: std::collections::HashMap::new(),
             global_keep_alive,
             max_loaded_models,
@@ -166,6 +163,25 @@ impl ProcessPoolResidency {
             count: 1,
         };
         self.state.write().await.record_error(model_id, entry);
+    }
+
+    /// Record a cold-load failure, remove the in-progress slot, emit metrics, and
+    /// broadcast state. All four cold-load error paths call this before returning Err.
+    async fn fail_load(
+        &mut self,
+        model_id: &str,
+        err: &anyhow::Error,
+        severity: LoadErrorSeverity,
+        load_started: std::time::Instant,
+    ) {
+        self.record_load_failure(model_id, err, severity).await;
+        self.state.write().await.running_models.remove(model_id);
+        crate::server::metrics::observe_model_load(
+            model_id,
+            false,
+            load_started.elapsed().as_secs_f64(),
+        );
+        self.notify().await;
     }
 
     async fn stop_slot(&self, active: &mut ActiveSlot) -> Result<()> {
@@ -371,6 +387,90 @@ impl ProcessPoolResidency {
             port += 1;
         }
         port
+    }
+
+    /// S-2.8 fallback: retry the spawn with speculative decoding disabled.
+    ///
+    /// Called when the first spawn dies in <5s while spec-dec was active. Mutates
+    /// `plan` to disable spec, records any broken draft pair, spawns once more, and
+    /// waits for health.  Returns the new `ActiveEngine` on success.
+    async fn try_speculative_retry(
+        &mut self,
+        model_id: &str,
+        model_dir: &Path,
+        port: u16,
+        role: ModelRole,
+        plan: &mut crate::engine::adapter::LoadPlan,
+        first_error: &anyhow::Error,
+        first_spec_mode: crate::engine::speculative::SpecMode,
+        elapsed: std::time::Duration,
+        load_started: std::time::Instant,
+    ) -> Result<crate::engine::adapter::ActiveEngine> {
+        warn!(
+            model_id,
+            port,
+            elapsed_ms = elapsed.as_millis() as u64,
+            first_error = %first_error,
+            "Spec-dec engine died <5s after spawn — retrying once with spec=off (S-2.8)"
+        );
+
+        if first_spec_mode == crate::engine::speculative::SpecMode::DraftModel {
+            let hf_repo = crate::model::index::ModelIndex::load(&self.data_dir, &self.models_dir)
+                .ok()
+                .and_then(|idx| idx.get(model_id).and_then(|e| e.hf_repo.clone()));
+            if let Some(draft_id) =
+                crate::engine::draft_pairs::lookup_draft_pair(model_id, hf_repo.as_deref())
+                && let Err(rec_err) = crate::engine::draft_pairs::record_broken_pair(
+                    &self.data_dir,
+                    model_id,
+                    &draft_id,
+                    &first_error.to_string(),
+                )
+            {
+                warn!(model_id, error = %rec_err, "Failed to record broken draft pair");
+            }
+        }
+
+        plan.spec = crate::engine::speculative::SpecResolved::off(
+            "S-2.8 retry: spec-dec disabled after early crash",
+        );
+        plan.footprint.spec_gb = 0.0;
+
+        match self
+            .spawn_adapter_process(model_id, model_dir, port, role, plan)
+            .await
+        {
+            Ok(mut retry_engine) => {
+                if let Err(e2) = self.wait_slot_health(port, &mut retry_engine.process).await {
+                    let _ = self.adapter.stop(&mut retry_engine).await;
+                    let combined = anyhow::anyhow!(
+                        "spec-dec retry with spec=off also failed: {e2} \
+                         (first attempt failed in {}ms with: {first_error})",
+                        elapsed.as_millis()
+                    );
+                    self.fail_load(
+                        model_id,
+                        &combined,
+                        LoadErrorSeverity::Transient,
+                        load_started,
+                    )
+                    .await;
+                    return Err(combined);
+                }
+                info!(model_id, "Spec-dec retry succeeded — slot is Ready with spec=off");
+                Ok(retry_engine)
+            }
+            Err(e2) => {
+                let sev = LoadErrorSeverity::for_spawn_failure(&e2);
+                let combined = anyhow::anyhow!(
+                    "spec-dec retry spawn failed: {e2} \
+                     (first attempt failed in {}ms with: {first_error})",
+                    elapsed.as_millis()
+                );
+                self.fail_load(model_id, &combined, sev, load_started).await;
+                Err(combined)
+            }
+        }
     }
 
     /// Core model-load path: warm-hit fast path, then VRAM-aware cold load with
@@ -588,124 +688,35 @@ impl ProcessPoolResidency {
             Ok(e) => e,
             Err(e) => {
                 let sev = LoadErrorSeverity::for_spawn_failure(&e);
-                self.record_load_failure(model_id, &e, sev).await;
-                self.state.write().await.running_models.remove(model_id);
-                crate::server::metrics::observe_model_load(
-                    model_id,
-                    false,
-                    load_started.elapsed().as_secs_f64(),
-                );
-                self.notify().await;
+                self.fail_load(model_id, &e, sev, load_started).await;
                 return Err(e);
             }
         };
 
-        let spec_was_on_first_attempt =
-            engine.spec_mode != crate::engine::speculative::SpecMode::Off;
+        let first_spec_mode = engine.spec_mode;
 
         if let Err(e) = self.wait_slot_health(port, &mut engine.process).await {
             warn!(model_id, port, error = %e, "Engine health check failed — cleaning up orphan");
             let _ = self.adapter.stop(&mut engine).await;
-
             let elapsed = load_started.elapsed();
             let early_crash = elapsed < std::time::Duration::from_secs(5);
 
-            if spec_was_on_first_attempt && early_crash {
-                warn!(
-                    model_id,
-                    port,
-                    elapsed_ms = elapsed.as_millis() as u64,
-                    first_error = %e,
-                    "Spec-dec engine died <5s after spawn — retrying once with spec=off (S-2.8)"
-                );
-
-                if engine.spec_mode == crate::engine::speculative::SpecMode::DraftModel {
-                    let hf_repo =
-                        crate::model::index::ModelIndex::load(&self.data_dir, &self.models_dir)
-                            .ok()
-                            .and_then(|idx| idx.get(model_id).and_then(|e| e.hf_repo.clone()));
-                    if let Some(draft_id) =
-                        crate::engine::draft_pairs::lookup_draft_pair(model_id, hf_repo.as_deref())
-                        && let Err(rec_err) = crate::engine::draft_pairs::record_broken_pair(
-                            &self.data_dir,
-                            model_id,
-                            &draft_id,
-                            &e.to_string(),
-                        )
-                    {
-                        warn!(model_id, error = %rec_err, "Failed to record broken draft pair");
-                    }
-                }
-
-                plan.spec = crate::engine::speculative::SpecResolved::off(
-                    "S-2.8 retry: spec-dec disabled after early crash",
-                );
-                plan.footprint.spec_gb = 0.0;
-
-                let retry_result = self
-                    .spawn_adapter_process(model_id, &model_dir, port, role, &plan)
-                    .await;
-
-                match retry_result {
-                    Ok(mut retry_engine) => {
-                        if let Err(e2) =
-                            self.wait_slot_health(port, &mut retry_engine.process).await
-                        {
-                            let _ = self.adapter.stop(&mut retry_engine).await;
-                            let combined = anyhow::anyhow!(
-                                "spec-dec retry with spec=off also failed: {e2} \
-                                 (first attempt failed in {}ms with: {e})",
-                                elapsed.as_millis()
-                            );
-                            self.record_load_failure(
-                                model_id,
-                                &combined,
-                                LoadErrorSeverity::Transient,
-                            )
-                            .await;
-                            self.state.write().await.running_models.remove(model_id);
-                            crate::server::metrics::observe_model_load(
-                                model_id,
-                                false,
-                                load_started.elapsed().as_secs_f64(),
-                            );
-                            self.notify().await;
-                            return Err(combined);
-                        }
-                        info!(
-                            model_id,
-                            "Spec-dec retry succeeded — slot is Ready with spec=off"
-                        );
-                        engine = retry_engine;
-                    }
-                    Err(e2) => {
-                        let sev = LoadErrorSeverity::for_spawn_failure(&e2);
-                        let combined = anyhow::anyhow!(
-                            "spec-dec retry spawn failed: {e2} \
-                             (first attempt failed in {}ms with: {e})",
-                            elapsed.as_millis()
-                        );
-                        self.record_load_failure(model_id, &combined, sev).await;
-                        self.state.write().await.running_models.remove(model_id);
-                        crate::server::metrics::observe_model_load(
-                            model_id,
-                            false,
-                            load_started.elapsed().as_secs_f64(),
-                        );
-                        self.notify().await;
-                        return Err(combined);
-                    }
-                }
+            if first_spec_mode != crate::engine::speculative::SpecMode::Off && early_crash {
+                engine = self
+                    .try_speculative_retry(
+                        model_id,
+                        &model_dir,
+                        port,
+                        role,
+                        &mut plan,
+                        &e,
+                        first_spec_mode,
+                        elapsed,
+                        load_started,
+                    )
+                    .await?;
             } else {
-                self.record_load_failure(model_id, &e, LoadErrorSeverity::Transient)
-                    .await;
-                self.state.write().await.running_models.remove(model_id);
-                crate::server::metrics::observe_model_load(
-                    model_id,
-                    false,
-                    load_started.elapsed().as_secs_f64(),
-                );
-                self.notify().await;
+                self.fail_load(model_id, &e, LoadErrorSeverity::Transient, load_started).await;
                 return Err(e);
             }
         }
@@ -853,7 +864,6 @@ impl Residency for ProcessPoolResidency {
         }
 
         // ── idle_secs refresh ─────────────────────────────────────────────────
-        let now = keepalive::now_secs();
         {
             let mut state = self.state.write().await;
             for (id, slot) in self.active_slots.iter() {

@@ -13,6 +13,9 @@ use crate::engine::manager::{
 use crate::engine::registry::EngineConfig;
 use crate::engine::residency::{Residency, ResidencyKind};
 
+/// Bytes per GiB — used to convert oMLX's byte sizes to the GB float the UI expects.
+const BYTES_PER_GIB: f32 = 1_073_741_824.0;
+
 // ── oMLX /v1/models/status response types ────────────────────────────────────
 
 /// Full response from oMLX's public `/v1/models/status` endpoint.
@@ -83,6 +86,10 @@ pub struct SharedServerResidency {
     process: Option<tokio::process::Child>,
     http: reqwest::Client,
     executable: String,
+    /// Cached reverse map: oMLX model ID (subdir name) → LMForge model ID.
+    /// Built once in `new()` and refreshed after every `spawn_server()` call
+    /// (server restarts trigger oMLX to rescan, which may surface new models).
+    reverse_map: HashMap<String, String>,
 }
 
 impl SharedServerResidency {
@@ -108,6 +115,7 @@ impl SharedServerResidency {
             .timeout(std::time::Duration::from_secs(3))
             .build()
             .expect("reqwest client");
+        let reverse_map = Self::build_reverse_map_from(&data_dir, &models_dir);
         Self {
             config,
             models_dir,
@@ -119,6 +127,7 @@ impl SharedServerResidency {
             process: None,
             http,
             executable,
+            reverse_map,
         }
     }
 
@@ -199,6 +208,9 @@ impl SharedServerResidency {
             }
             if self.is_healthy().await {
                 info!(port = self.port, "oMLX shared server is healthy");
+                // Rebuild reverse map: new server scan may have surfaced new model subdirs.
+                self.reverse_map =
+                    Self::build_reverse_map_from(&self.data_dir, &self.models_dir);
                 return Ok(());
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -211,9 +223,11 @@ impl SharedServerResidency {
             return Ok(());
         }
         if self.process.is_some() {
+            // Process handle exists but health check failed — crashed or hung.
             warn!("oMLX shared server is not responding — restarting");
             self.kill_process().await;
         }
+        // Either never started or just killed above.
         self.spawn_server().await
     }
 
@@ -260,8 +274,10 @@ impl SharedServerResidency {
     ///
     /// oMLX uses the last path component of each model dir as its model ID.
     /// The LMForge model index stores both the LMForge ID and the full `path`.
-    fn build_omlx_to_lmforge_map(&self) -> HashMap<String, String> {
-        let index = crate::model::index::ModelIndex::load(&self.data_dir, &self.models_dir)
+    /// This is a pure function; callers cache the result in `self.reverse_map`
+    /// and only rebuild it after a server restart (new models may be discovered).
+    fn build_reverse_map_from(data_dir: &PathBuf, models_dir: &PathBuf) -> HashMap<String, String> {
+        let index = crate::model::index::ModelIndex::load(data_dir, models_dir)
             .unwrap_or(crate::model::index::ModelIndex {
                 schema_version: 1,
                 models: vec![],
@@ -292,7 +308,6 @@ impl SharedServerResidency {
             return;
         };
 
-        let reverse_map = self.build_omlx_to_lmforge_map();
         let now = keepalive::now_secs();
 
         let mut state = self.state.write().await;
@@ -306,7 +321,8 @@ impl SharedServerResidency {
                 continue;
             }
             // Map oMLX model ID → LMForge model ID (fall back to oMLX id if unmapped).
-            let lmforge_id = reverse_map
+            let lmforge_id = self
+                .reverse_map
                 .get(&entry.id)
                 .cloned()
                 .unwrap_or_else(|| entry.id.clone());
@@ -314,7 +330,7 @@ impl SharedServerResidency {
             let vram_gb = entry
                 .actual_size
                 .unwrap_or(entry.estimated_size) as f32
-                / 1_073_741_824.0; // bytes → GiB (1 << 30)
+                / BYTES_PER_GIB;
 
             let idle_secs = entry
                 .last_access
@@ -427,7 +443,7 @@ impl Residency for SharedServerResidency {
                     port: self.port,
                     status: EngineStatus::Starting,
                     idle_secs: 0,
-                    vram_est_gb: size_bytes as f32 / 1_073_741_824.0,
+                    vram_est_gb: size_bytes as f32 / BYTES_PER_GIB,
                     spec_mode: crate::engine::speculative::SpecMode::Off,
                     spec_stats: None,
                 }
@@ -581,7 +597,7 @@ mod tests {
     #[test]
     fn vram_gb_conversion_is_correct() {
         // 4 GiB = 4_294_967_296 bytes
-        let vram = 4_294_967_296u64 as f32 / 1_073_741_824.0;
+        let vram = 4_294_967_296u64 as f32 / BYTES_PER_GIB;
         assert!((vram - 4.0).abs() < 0.01);
     }
 }
