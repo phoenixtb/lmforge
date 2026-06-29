@@ -87,9 +87,11 @@ pub struct SharedServerResidency {
     http: reqwest::Client,
     executable: String,
     /// Cached reverse map: oMLX model ID (subdir name) → LMForge model ID.
-    /// Built once in `new()` and refreshed after every `spawn_server()` call
-    /// (server restarts trigger oMLX to rescan, which may surface new models).
     reverse_map: HashMap<String, String>,
+    /// If > 0, models idle for this many seconds are explicitly unloaded from
+    /// oMLX via `POST /v1/models/{id}/unload`. 0 = oMLX manages eviction only
+    /// via memory pressure (default when no global_keep_alive is set).
+    keep_alive_secs: u64,
 }
 
 impl SharedServerResidency {
@@ -99,6 +101,7 @@ impl SharedServerResidency {
         data_dir: PathBuf,
         port: u16,
         executable: String,
+        global_keep_alive: &str,
         status_tx: tokio::sync::broadcast::Sender<EngineState>,
     ) -> Self {
         let logs_dir = data_dir.join("logs");
@@ -116,6 +119,7 @@ impl SharedServerResidency {
             .build()
             .expect("reqwest client");
         let reverse_map = Self::build_reverse_map_from(&data_dir, &models_dir);
+        let keep_alive_secs = keepalive::parse_keepalive(global_keep_alive);
         Self {
             config,
             models_dir,
@@ -128,6 +132,7 @@ impl SharedServerResidency {
             http,
             executable,
             reverse_map,
+            keep_alive_secs,
         }
     }
 
@@ -365,6 +370,47 @@ impl SharedServerResidency {
     }
 }
 
+// ── Idle eviction ─────────────────────────────────────────────────────────────
+
+impl SharedServerResidency {
+    /// Unload any models idle longer than `keep_alive_secs` via oMLX's own
+    /// `POST /v1/models/{id}/unload`. oMLX releases Metal memory; the next
+    /// `sync_from_omlx_status` will drop them from `running_models`.
+    async fn evict_idle_models(&self) {
+        let idle_ids: Vec<(String, String)> = {
+            let state = self.state.read().await;
+            state
+                .running_models
+                .iter()
+                .filter(|(_, slot)| slot.idle_secs >= self.keep_alive_secs)
+                .filter_map(|(lmf_id, _)| {
+                    let omlx_id = self
+                        .reverse_map
+                        .iter()
+                        .find(|(_, v)| *v == lmf_id)
+                        .map(|(k, _)| k.clone())?;
+                    Some((lmf_id.clone(), omlx_id))
+                })
+                .collect()
+        };
+
+        for (lmf_id, omlx_id) in idle_ids {
+            let url = format!("http://127.0.0.1:{}/v1/models/{}/unload", self.port, omlx_id);
+            match self.http.post(&url).send().await {
+                Ok(r) if r.status().is_success() => {
+                    tracing::info!("oMLX idle evict: unloaded {lmf_id} (omlx: {omlx_id})");
+                }
+                Ok(r) => {
+                    tracing::warn!("oMLX idle evict: {lmf_id} returned {}", r.status());
+                }
+                Err(e) => {
+                    tracing::warn!("oMLX idle evict: {lmf_id} failed: {e}");
+                }
+            }
+        }
+    }
+}
+
 // ── Residency impl ────────────────────────────────────────────────────────────
 
 impl Residency for SharedServerResidency {
@@ -503,9 +549,11 @@ impl Residency for SharedServerResidency {
         }
 
         // ── Real state sync from oMLX /v1/models/status ───────────────────────
-        // This drives the UI truthfully: loaded_count, actual VRAM, real idle_secs.
         if self.process.is_some() {
             self.sync_from_omlx_status().await;
+            if self.keep_alive_secs > 0 {
+                self.evict_idle_models().await;
+            }
         }
         self.notify().await;
     }
@@ -537,6 +585,7 @@ mod tests {
             PathBuf::from("/tmp/lmforge_test_data"),
             19998,
             "omlx".into(),
+            "5m",
             tx,
         )
     }

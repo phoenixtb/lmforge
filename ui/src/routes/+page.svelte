@@ -7,12 +7,23 @@
   import { metricsStore, startMetricsPolling, stopMetricsPolling } from '$lib/stores/metrics';
   import { fmtUptime } from '$lib/api';
   import { dragOnEmpty } from '$lib/drag';
+  import { flip } from 'svelte/animate';
+  import { fade } from 'svelte/transition';
   import LoadErrorBanner from '$lib/components/LoadErrorBanner.svelte';
 
   $: status  = $statusStore.overall_status;
   $: engine  = $statusStore.engine_id;
   $: version = $statusStore.engine_version;
-  $: slots   = Object.values($statusStore.running_models);
+  // Sort: active models first (idle_secs < 60), then by idle_secs ascending
+  // (most recently used at top), stable string tiebreaker to prevent shuffling.
+  $: slots = Object.values($statusStore.running_models).sort((a, b) => {
+    const aActive = (a.idle_secs ?? 0) < 60;
+    const bActive = (b.idle_secs ?? 0) < 60;
+    if (aActive !== bActive) return aActive ? -1 : 1;
+    const diff = (a.idle_secs ?? 0) - (b.idle_secs ?? 0);
+    if (diff !== 0) return diff;
+    return a.model_id.localeCompare(b.model_id);
+  });
   // model_id → ModelLoadError. Empty when every recent load succeeded.
   // Rendered as a dismissable banner above Model Processes (LoadErrorBanner).
   $: lastErrors = Object.entries($statusStore.last_errors ?? {});
@@ -223,8 +234,11 @@
             {#each slots as slot (slot.model_id)}
               {@const role  = slot.role || inferRole(slot.model_id)}
               {@const slotP = vramTotalGb > 0 ? Math.min(100, slot.vram_est_gb/vramTotalGb*100) : 0}
-              {@const idle  = (slot.idle_secs ?? 0) > 30}
-              <div class="slot-card" class:idle>
+              {@const idle  = (slot.idle_secs ?? 0) >= 60}
+              <div class="slot-card" class:idle
+                   animate:flip={{ duration: 250 }}
+                   in:fade={{ duration: 180 }}
+                   out:fade={{ duration: 120 }}>
                 <div class="slot-r1">
                   <span class="dot dot--{slot.status}" style="margin-top:1px"></span>
                   <span class="sn mono">{slot.model_id}</span>
@@ -494,7 +508,7 @@
   .slot-card {
     background: rgba(255,255,255,0.025); border: 1px solid var(--border); border-radius: var(--radius-lg);
     padding: 9px 12px; display: flex; flex-direction: column; gap: 7px;
-    transition: border-color 140ms; animation: fade-in 220ms ease;
+    transition: border-color 140ms, opacity 200ms;
   }
   .slot-card:hover { border-color: var(--border-2); }
   .slot-card.idle { opacity: 0.68; }
@@ -506,8 +520,8 @@
   .dv  { font-size: 11px; color: var(--text-2); }
   .svt { flex: 1; height: 3px; background: rgba(255,255,255,0.07); border-radius: 99px; overflow: hidden; }
   .svf { height: 100%; border-radius: 99px; transition: width 400ms; }
-  .ib  { font-size: 9.5px; color: var(--text-3); padding: 1px 5px; background: rgba(255,255,255,0.05); border-radius: 3px; flex-shrink: 0; }
-  .ab  { font-size: 9.5px; color: var(--success); padding: 1px 5px; background: var(--success-dim); border-radius: 3px; flex-shrink: 0; }
+  .ib  { font-size: 9.5px; color: var(--text-3); padding: 1px 5px; background: rgba(255,255,255,0.05); border-radius: 3px; flex-shrink: 0; transition: opacity 300ms; }
+  .ab  { font-size: 9.5px; color: var(--success); padding: 1px 5px; background: var(--success-dim); border-radius: 3px; flex-shrink: 0; transition: opacity 300ms; }
   .cap-row { margin-top: auto; display: flex; align-items: center; gap: 10px; padding-top: 10px; border-top: 1px solid var(--divider); flex-shrink: 0; }
   .cap-lbl   { font-size: 10.5px; color: var(--text-3); flex-shrink: 0; }
   .cap-track { flex: 1; height: 4px; background: rgba(255,255,255,0.07); border-radius: 99px; overflow: hidden; }

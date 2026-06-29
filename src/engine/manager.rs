@@ -327,6 +327,7 @@ impl EngineManager {
                 data_dir,
                 base_engine_port,
                 executable,
+                &global_keep_alive,
                 status_tx,
             ))
         } else {
