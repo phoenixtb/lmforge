@@ -6,6 +6,8 @@ use futures::StreamExt;
 use reqwest::Client;
 use tracing::{debug, error, info, warn};
 
+use crate::server::thinking::ThinkSplitter;
+
 /// Shared HTTP client for proxying to the engine backend
 pub fn build_proxy_client() -> Client {
     Client::builder()
@@ -1134,126 +1136,15 @@ pub async fn proxy_nonstream_with_thinking_budget(
 }
 
 // =============================================================================
-// Stateful SSE rewriter — Phase 2 think-tag streaming support
+// Stateful SSE rewriter — think-tag streaming support
 // =============================================================================
-
-/// Whether the rewriter is currently inside a `<think>` block or emitting answer tokens.
-#[derive(Debug, Clone, PartialEq)]
-enum ThinkMode {
-    Answer,
-    Thinking,
-}
-
-/// Stateful transformer that rewrites `delta.content` SSE chunks containing `<think>` /
-/// `</think>` tags into proper `delta.reasoning_content` / `delta.content` delta fields.
-///
-/// Designed to handle tags that span SSE chunk boundaries: any bytes that could be the
-/// beginning of a tag are buffered in `tag_buf` until the next chunk resolves them.
-struct ThinkTagRewriter {
-    mode: ThinkMode,
-    /// Bytes at the tail of the last chunk that could be a partial `<think>` or `</think>`
-    tag_buf: String,
-}
-
-impl ThinkTagRewriter {
-    fn new() -> Self {
-        Self {
-            mode: ThinkMode::Answer,
-            tag_buf: String::new(),
-        }
-    }
-
-    /// Process one `delta.content` string.
-    ///
-    /// Returns `(reasoning_addition, content_addition)` — the text that should be
-    /// emitted as `reasoning_content` and `content` respectively in this delta.
-    /// Either may be empty; the caller decides how to serialise nulls.
-    fn process(&mut self, input: &str) -> (String, String) {
-        let mut reasoning = String::new();
-        let mut content = String::new();
-
-        // Prepend any bytes buffered from the previous chunk
-        let full = format!("{}{}", self.tag_buf, input);
-        self.tag_buf.clear();
-
-        let mut remaining = full.as_str();
-
-        loop {
-            let search = match self.mode {
-                ThinkMode::Answer => "<think>",
-                ThinkMode::Thinking => "</think>",
-            };
-
-            if let Some(pos) = remaining.find(search) {
-                let before = &remaining[..pos];
-                let after = &remaining[pos + search.len()..];
-
-                match self.mode {
-                    ThinkMode::Answer => {
-                        content.push_str(before);
-                        // Discard the <think> tag itself; switch mode
-                        self.mode = ThinkMode::Thinking;
-                    }
-                    ThinkMode::Thinking => {
-                        reasoning.push_str(before);
-                        // Discard the </think> tag itself; switch mode
-                        self.mode = ThinkMode::Answer;
-                    }
-                }
-                remaining = after;
-            } else {
-                // Tag not found in `remaining` — but the tail might be a partial tag.
-                // Buffer the longest suffix that could still be a tag prefix.
-                let partial_len = longest_tag_prefix(remaining, search);
-                let safe_len = remaining.len() - partial_len;
-
-                let to_emit = &remaining[..safe_len];
-                self.tag_buf = remaining[safe_len..].to_string();
-
-                match self.mode {
-                    ThinkMode::Answer => content.push_str(to_emit),
-                    ThinkMode::Thinking => reasoning.push_str(to_emit),
-                }
-                break;
-            }
-        }
-
-        (reasoning, content)
-    }
-
-    /// Flush any remaining bytes in `tag_buf` as literal text (called at stream end).
-    fn flush(&mut self) -> (String, String) {
-        if self.tag_buf.is_empty() {
-            return (String::new(), String::new());
-        }
-        let leftover = std::mem::take(&mut self.tag_buf);
-        match self.mode {
-            ThinkMode::Answer => (String::new(), leftover),
-            ThinkMode::Thinking => (leftover, String::new()),
-        }
-    }
-}
-
-/// Returns the length of the longest suffix of `text` that is also a prefix of `tag`.
-/// Used to identify partial tag bytes that must be buffered rather than emitted.
-fn longest_tag_prefix(text: &str, tag: &str) -> usize {
-    // Work in bytes (all our tags are ASCII, so byte-safe)
-    let text_bytes = text.as_bytes();
-    let tag_bytes = tag.as_bytes();
-    for len in (1..=tag_bytes.len().min(text_bytes.len())).rev() {
-        if text_bytes.ends_with(&tag_bytes[..len]) {
-            return len;
-        }
-    }
-    0
-}
 
 /// Rewrite a single parsed SSE `data: {...}` JSON value in-place.
 ///
 /// If the delta has a `content` field, run it through the rewriter and replace with:
 /// - `delta.reasoning_content` = reasoning text (or `null` if empty)
 /// - `delta.content`           = answer text (or `null` if empty)
-fn rewrite_sse_chunk(chunk: &mut serde_json::Value, rewriter: &mut ThinkTagRewriter) {
+fn rewrite_sse_chunk(chunk: &mut serde_json::Value, rewriter: &mut ThinkSplitter) {
     if let Some(choices) = chunk.get_mut("choices").and_then(|c| c.as_array_mut())
         && let Some(choice) = choices.first_mut()
         && let Some(delta) = choice.get_mut("delta").and_then(|d| d.as_object_mut())
@@ -1261,7 +1152,7 @@ fn rewrite_sse_chunk(chunk: &mut serde_json::Value, rewriter: &mut ThinkTagRewri
         // Only rewrite if there's a content field (skip role-only deltas)
         if let Some(content_val) = delta.remove("content") {
             let content_str = content_val.as_str().unwrap_or("");
-            let (reasoning, content) = rewriter.process(content_str);
+            let (reasoning, content) = rewriter.push(content_str);
 
             delta.insert(
                 "reasoning_content".to_string(),
@@ -1334,7 +1225,7 @@ pub async fn proxy_stream_rewriting_think_tags(
         let mut total_bytes: usize = 0;
 
         let mut line_buf = String::new();
-        let mut rewriter = ThinkTagRewriter::new();
+        let mut rewriter = ThinkSplitter::default();
         let mut aborted = false;
 
         'outer: while let Some(chunk_result) = byte_stream.next().await {
@@ -1419,7 +1310,7 @@ pub async fn proxy_stream_rewriting_think_tags(
 
 /// Rewrite a single raw SSE line (e.g. `data: {...}`) through the tag rewriter.
 /// Non-data lines (empty lines, `event:`, `[DONE]`) are returned unchanged.
-fn rewrite_sse_line(line: &str, rewriter: &mut ThinkTagRewriter) -> String {
+fn rewrite_sse_line(line: &str, rewriter: &mut ThinkSplitter) -> String {
     let data = match line.strip_prefix("data: ") {
         Some(d) => d.trim(),
         None => return line.to_string(), // pass through: empty / event: / comment lines
@@ -1447,68 +1338,68 @@ fn rewrite_sse_line(line: &str, rewriter: &mut ThinkTagRewriter) -> String {
 mod tests {
     use super::*;
 
-    // ── ThinkTagRewriter unit tests ───────────────────────────────────────────
+    // ── ThinkSplitter SSE rewriter tests ─────────────────────────────────────
 
     #[test]
     fn test_rewriter_passthrough_no_tags() {
-        let mut r = ThinkTagRewriter::new();
-        let (reasoning, content) = r.process("Hello world");
+        let mut r = ThinkSplitter::default();
+        let (reasoning, content) = r.push("Hello world");
         assert_eq!(reasoning, "");
         assert_eq!(content, "Hello world");
     }
 
     #[test]
     fn test_rewriter_full_think_block_in_one_chunk() {
-        let mut r = ThinkTagRewriter::new();
-        let (reasoning, content) = r.process("<think>I reason</think>Answer");
+        let mut r = ThinkSplitter::default();
+        let (reasoning, content) = r.push("<think>I reason</think>Answer");
         assert_eq!(reasoning, "I reason");
         assert_eq!(content, "Answer");
     }
 
     #[test]
     fn test_rewriter_think_open_tag_split_across_chunks() {
-        let mut r = ThinkTagRewriter::new();
+        let mut r = ThinkSplitter::default();
         // Chunk 1 ends mid-tag
-        let (r1, c1) = r.process("<thi");
+        let (r1, c1) = r.push("<thi");
         assert_eq!(r1, "");
         assert_eq!(c1, ""); // buffered, not emitted yet
 
         // Chunk 2 completes the tag + reasoning
-        let (r2, c2) = r.process("nk>reasoning");
+        let (r2, c2) = r.push("nk>reasoning");
         assert_eq!(r2, "reasoning");
         assert_eq!(c2, "");
     }
 
     #[test]
     fn test_rewriter_think_close_tag_split_across_chunks() {
-        let mut r = ThinkTagRewriter::new();
+        let mut r = ThinkSplitter::default();
         // Enter thinking mode
-        r.process("<think>");
+        r.push("<think>");
         // Chunk ends mid-close-tag
-        let (r1, c1) = r.process("some reasoning</th");
+        let (r1, c1) = r.push("some reasoning</th");
         assert_eq!(r1, "some reasoning");
         assert_eq!(c1, "");
 
         // Chunk 2 completes close tag + answer
-        let (r2, c2) = r.process("ink>The answer");
+        let (r2, c2) = r.push("ink>The answer");
         assert_eq!(r2, "");
         assert_eq!(c2, "The answer");
     }
 
     #[test]
     fn test_rewriter_content_before_think_block() {
-        let mut r = ThinkTagRewriter::new();
-        let (reasoning, content) = r.process("Prefix<think>reasons</think>Suffix");
+        let mut r = ThinkSplitter::default();
+        let (reasoning, content) = r.push("Prefix<think>reasons</think>Suffix");
         assert_eq!(reasoning, "reasons");
         assert_eq!(content, "PrefixSuffix");
     }
 
     #[test]
     fn test_rewriter_no_think_tag_non_thinking_model() {
-        let mut r = ThinkTagRewriter::new();
+        let mut r = ThinkSplitter::default();
         // Non-thinking model: all goes to content
-        let (r1, c1) = r.process("Chunk one ");
-        let (r2, c2) = r.process("chunk two");
+        let (r1, c1) = r.push("Chunk one ");
+        let (r2, c2) = r.push("chunk two");
         assert_eq!(r1, "");
         assert_eq!(c1, "Chunk one ");
         assert_eq!(r2, "");
@@ -1516,41 +1407,24 @@ mod tests {
     }
 
     #[test]
-    fn test_longest_tag_prefix_exact_match() {
-        // "<thi" is a 4-char prefix of "<think>"
-        assert_eq!(longest_tag_prefix("hello<thi", "<think>"), 4);
-    }
-
-    #[test]
-    fn test_longest_tag_prefix_no_match() {
-        assert_eq!(longest_tag_prefix("hello world", "<think>"), 0);
-    }
-
-    #[test]
-    fn test_longest_tag_prefix_full_tag() {
-        // Full tag at end — entire tag buffered
-        assert_eq!(longest_tag_prefix("text<think>", "<think>"), 7);
-    }
-
-    #[test]
     fn test_rewrite_sse_line_done_passthrough() {
-        let mut r = ThinkTagRewriter::new();
+        let mut r = ThinkSplitter::default();
         let result = rewrite_sse_line("data: [DONE]", &mut r);
         assert_eq!(result, "data: [DONE]");
     }
 
     #[test]
     fn test_rewrite_sse_line_empty_passthrough() {
-        let mut r = ThinkTagRewriter::new();
+        let mut r = ThinkSplitter::default();
         let result = rewrite_sse_line("", &mut r);
         assert_eq!(result, "");
     }
 
     #[test]
     fn test_rewrite_sse_line_rewrites_content_to_reasoning() {
-        let mut r = ThinkTagRewriter::new();
-        // Put rewriter into Thinking mode first
-        r.process("<think>");
+        let mut r = ThinkSplitter::default();
+        // Put splitter into thinking mode first
+        r.push("<think>");
 
         let line = r#"data: {"choices":[{"delta":{"content":"I think therefore"}}]}"#;
         let result = rewrite_sse_line(line, &mut r);
@@ -1566,8 +1440,8 @@ mod tests {
 
     #[test]
     fn test_rewrite_sse_line_rewrites_content_to_content() {
-        let mut r = ThinkTagRewriter::new();
-        // In Answer mode (default)
+        let mut r = ThinkSplitter::default();
+        // In answer mode (default)
         let line = r#"data: {"choices":[{"delta":{"content":"The answer is 4"}}]}"#;
         let result = rewrite_sse_line(line, &mut r);
 
@@ -1767,11 +1641,11 @@ mod tests {
             "is 4.",
         ];
 
-        let mut r = ThinkTagRewriter::new();
+        let mut r = ThinkSplitter::default();
         let mut reasoning = String::new();
         let mut content = String::new();
         for d in deltas {
-            let (re, co) = r.process(d);
+            let (re, co) = r.push(d);
             reasoning.push_str(&re);
             content.push_str(&co);
         }
@@ -1789,11 +1663,11 @@ mod tests {
     #[test]
     fn test_characterize_inline_think_truncated_midreasoning() {
         let deltas = ["<think>still reasoning when cut off</thin"];
-        let mut r = ThinkTagRewriter::new();
+        let mut r = ThinkSplitter::default();
         let mut reasoning = String::new();
         let mut content = String::new();
         for d in deltas {
-            let (re, co) = r.process(d);
+            let (re, co) = r.push(d);
             reasoning.push_str(&re);
             content.push_str(&co);
         }
@@ -1802,7 +1676,7 @@ mod tests {
         content.push_str(&co);
 
         // The dangling "</thin" was buffered as a possible tag; on flush it is
-        // emitted in the current (Thinking) mode → reasoning, never content.
+        // emitted in the current (thinking) mode → reasoning, never content.
         assert_eq!(reasoning, "still reasoning when cut off</thin");
         assert_eq!(content, "", "truncated reasoning must not leak into the answer");
     }
