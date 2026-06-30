@@ -770,6 +770,7 @@ pub async fn model_get(
             "embeddings": m.capabilities.embeddings,
             "reranking": m.capabilities.reranking,
             "thinking": m.capabilities.thinking,
+            "native_reasoning": m.capabilities.native_reasoning,
             "vision": m.capabilities.vision,
             "embedding_dims": m.capabilities.embedding_dims,
             "mmproj_path": m.capabilities.mmproj_path,
@@ -804,6 +805,7 @@ pub async fn models(State(state): State<AppState>) -> impl IntoResponse {
                     "embeddings": m.capabilities.embeddings,
                     "reranking": m.capabilities.reranking,
                     "thinking": m.capabilities.thinking,
+                    "native_reasoning": m.capabilities.native_reasoning,
                     "vision": m.capabilities.vision,
                     "embedding_dims": m.capabilities.embedding_dims,
                 }

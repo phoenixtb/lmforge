@@ -811,24 +811,44 @@ def main() -> int:
     # Optional (--assert-strict): blank answers in think=on mode above a threshold.
     if args.do_assert:
         failures = []
+        warnings = []
         for (mid, mode), a in sorted(agg.items()):
+            # native_reasoning models (Phi-4-reasoning, qwen3:Nb:thinking, …) reason
+            # on every call and do NOT honour enable_thinking — on oMLX they cannot be
+            # told to skip reasoning. Under a finite budget they legitimately exhaust
+            # tokens mid-reasoning and return a blank, which is a budget characteristic,
+            # NOT a Fix #3c regression. So their off-mode blanks are warnings, never
+            # hard failures. The Fix #3c contract is about template-flag engines
+            # (llama.cpp/SGLang) suppressing reasoning — a non-native population.
+            is_native = bool(installed.get(mid, {}).get("native_reasoning"))
             if a["errors"]:
                 failures.append(f"{mid} [{mode}]: {a['errors']} engine error(s)")
             if a["dup"]:
                 failures.append(f"{mid} [{mode}]: {a['dup']} reasoning==content dup(s)")
             if mode == "off" and a["blank"]:
-                failures.append(f"{mid} [off]: {a['blank']} blank answer(s) (think=off must answer)")
+                if is_native:
+                    warnings.append(
+                        f"{mid} [off]: {a['blank']} blank (native_reasoning budget "
+                        f"exhaustion — expected, not gated)"
+                    )
+                else:
+                    failures.append(
+                        f"{mid} [off]: {a['blank']} blank answer(s) (think=off must answer)"
+                    )
             if args.assert_strict and mode == "on" and a["blank"] > args.assert_max_blank_on:
                 failures.append(
                     f"{mid} [on]: {a['blank']} blank answer(s) > "
                     f"{args.assert_max_blank_on} allowed"
                 )
+        for w in warnings:
+            print(f"  ! {w}")
         if failures:
             print("\nASSERT FAILED:")
             for f in failures:
                 print(f"  ✗ {f}")
             return 1
-        print("\nASSERT PASSED: no errors, dups, or off-mode blanks.")
+        print("\nASSERT PASSED: no errors, dups, or off-mode blanks "
+              "(native_reasoning budget-exhaustion blanks excluded).")
     return 0
 
 

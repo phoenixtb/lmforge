@@ -495,11 +495,13 @@ e2e_thinking() {
     outdir="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/lmforge-think-$$")"
     local strict=()
     [[ "${E2E_THINK_STRICT:-0}" == "1" ]] && strict+=(--assert-strict)
+    # NB: ${strict[@]+"${strict[@]}"} — guard empty-array expansion under `set -u`
+    # (macOS ships bash 3.2, where a bare "${strict[@]}" on an empty array errors).
     # shellcheck disable=SC2086
     python3 "$E2E_REPO_ROOT/tests/bench/think_bench.py" \
         --base "${E2E_API:-http://127.0.0.1:11430}" \
         --models $models \
-        --quick --assert "${strict[@]}" \
+        --quick --assert ${strict[@]+"${strict[@]}"} \
         --outdir "$outdir" --no-capture-logs
     local rc=$?
     rm -rf "$outdir" 2>/dev/null || true
