@@ -28,6 +28,8 @@
 | [ADR-003](./architecture/ADR-003-last-errors-surface.md) | `last_errors` failure surface |
 | [ADR-004](./architecture/ADR-004-cuda-variant-pipeline.md) | CUDA variant pipeline |
 | [ADR-005](./architecture/ADR-005-speculative-decoding.md) | MTP / speculative decoding |
+| [ADR-006](./architecture/ADR-006-engine-residency.md) | Engine residency (SharedServer vs ProcessPool) |
+| [ADR-007](./architecture/ADR-007-thinking-pipeline.md) | Thinking pipeline (adapters, orchestrator, fixes) |
 
 ## Engineering (`docs/engineering/`)
 

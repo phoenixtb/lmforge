@@ -102,6 +102,32 @@ e2e_engine_supports_rerank() {
         '.engines[] | select(.active == true) | .supports_reranking' 2>/dev/null | head -1
 }
 
+# Echoes "true" when the given model is thinking-capable per its indexed caps.
+e2e_model_thinking_capable() {
+    local id="${1:-$CHAT_MODEL}"
+    curl -sf "${LF_HOST}/lf/model/list" 2>/dev/null | jq -r --arg id "$id" \
+        'if any(.models[]; .id == $id and .capabilities.thinking == true) then "true" else "false" end' \
+        2>/dev/null | head -1
+}
+
+# think=true (top-level `think`), non-streaming → expect reasoning_content + answer.
+e2e_api_chat_think_on() {
+    local model="${1:-$CHAT_MODEL}" text="$2" max_tokens="${3:-512}"
+    curl -sf --max-time "${E2E_CHAT_TIMEOUT:-180}" -X POST "${LF_HOST}/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d "$(jq -nc --arg m "$model" --arg t "$text" --argjson n "$max_tokens" \
+            '{model:$m,messages:[{role:"user",content:$t}],stream:false,max_tokens:$n,temperature:0.6,think:true}')"
+}
+
+# think=true + thinking_budget → two-call orchestrator (oMLX) / tag path → expect answer.
+e2e_api_chat_think_budget() {
+    local model="${1:-$CHAT_MODEL}" text="$2" max_tokens="${3:-512}" budget="${4:-256}"
+    curl -sf --max-time "${E2E_CHAT_TIMEOUT:-180}" -X POST "${LF_HOST}/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d "$(jq -nc --arg m "$model" --arg t "$text" --argjson n "$max_tokens" --argjson b "$budget" \
+            '{model:$m,messages:[{role:"user",content:$t}],stream:false,max_tokens:$n,temperature:0.6,think:true,thinking_budget:$b}')"
+}
+
 e2e_api_embed() {
     local model="${1:-$EMBED_MODEL}" text="$2"
     curl -sf --max-time "${3:-180}" -X POST "${LF_HOST}/v1/embeddings" \

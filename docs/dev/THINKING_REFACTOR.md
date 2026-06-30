@@ -1,8 +1,21 @@
 # Thinking Layer Refactor — Execution Playbook
 
-> Status: **planned, not started**. This is a pick-up-and-execute plan so the
-> work survives context loss. Each phase is self-contained: goal, steps, tests,
-> exit criteria. Do them in order; the benchmark is the regression net.
+> Status: **SHIPPED** (commits `cc20617` → Phase 1, `acdb1fd` → Phase 2,
+> `719b5f3` → Phase 3, `df6a1b7` → Phase 4, + Phase 5 playbook reconciliation).
+> The implemented design is documented in **`docs/architecture/ADR-007-thinking-pipeline.md`**,
+> which is the source of truth. This file is kept as the historical plan; where it
+> diverges from what shipped (see below), ADR-007 wins.
+>
+> **Deviations from this plan (intentional):**
+> - The shipped `ThinkingAdapter` is a **2-bool** trait (`supports_orchestrator`,
+>   `inline_think`), not the `call1_body`/`parse_delta`/`call2_body`/`finalize`
+>   shape sketched below. No `orchestrator.rs` / `adapters/*.rs` / `classify()→Plan`
+>   / `thinking::handle()`; the two-call loop stays in `proxy.rs`, fronted by
+>   `prepare_request() → ThinkingContext`.
+> - Fix numbering differs from ADR-007. This file's **Fix #1** (oMLX truncation
+>   dup) = ADR **Fix #5a**; **Fix #2** (empty→fallback) = ADR **Fix #5b**;
+>   **Fix #3** (plain-client default) = ADR **Fix #3c** (shipped for
+>   llama.cpp/SGLang only, **not** oMLX). All three are now landed + unit-tested.
 
 ## Why
 

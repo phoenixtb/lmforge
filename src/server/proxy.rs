@@ -115,6 +115,20 @@ pub fn normalise_chat_response(text: String) -> String {
     serde_json::to_string(&val).unwrap_or(text)
 }
 
+/// Minimum reasoning length (chars, trimmed) for the native-reasoning dedup
+/// (Fix #1) to fire. Short strings risk false positives — a substantial verbatim
+/// match between the whole reasoning and a content delta is the reliable signal
+/// of oMLX's truncation echo.
+const NATIVE_REASONING_DEDUP_MIN_CHARS: usize = 40;
+
+/// True when `content` is the oMLX truncation echo of `reasoning` (Fix #1):
+/// a substantial, exact verbatim copy of the whole reasoning. Length-guarded to
+/// avoid false positives on short strings; both are compared trimmed.
+fn is_reasoning_echo(content: &str, reasoning: &str) -> bool {
+    let r = reasoning.trim();
+    !r.is_empty() && r.len() >= NATIVE_REASONING_DEDUP_MIN_CHARS && content.trim() == r
+}
+
 /// Proxy a streaming SSE request to the engine backend.
 /// Returns an axum Body that streams SSE events.
 pub async fn proxy_stream(
@@ -365,13 +379,29 @@ pub async fn proxy_request_assembling_stream(
     // If the engine emitted <think>...</think> tags inside delta.content rather than
     // using a separate delta.reasoning_content field (natural Qwen3/oMLX mode after
     // flag suppression), extract them now to correctly separate reasoning from answer.
-    let (final_reasoning, final_content) =
+    let (final_reasoning, mut final_content) =
         if reasoning_buf.is_empty() && content_buf.contains("<think>") {
             let (r, c) = crate::server::thinking::extract_think_tags(&content_buf);
             (r.unwrap_or_default(), c)
         } else {
             (reasoning_buf, content_buf)
         };
+
+    // Fix #1 (ADR-007): native-reasoning oMLX models, on `finish=length`, emit
+    // the reasoning_content deltas and then echo the *entire* reasoning once more
+    // as a single `content` delta (r==c). That duplicate is not an answer — drop
+    // it. Exact full-match on a substantial reasoning string guards against
+    // false positives (a real answer never reproduces the whole reasoning verbatim);
+    // natural `stop` separates correctly and is untouched.
+    if finish_reason.as_deref() == Some("length")
+        && is_reasoning_echo(&final_content, &final_reasoning)
+    {
+        debug!(
+            reasoning_len = final_reasoning.len(),
+            "Fix #1: dropping content that duplicates reasoning on finish=length"
+        );
+        final_content = String::new();
+    }
 
     // Build validated tool_calls array (C2).
     // Safeguard: only include entries that have all required fields (id, type="function",
@@ -559,6 +589,23 @@ fn build_call2_body(
     obj.remove("thinking_budget");
 
     body2
+}
+
+/// Build a **plain answer** request body for the empty-Call-1 fallback.
+///
+/// When Call-1 produces neither reasoning nor content (engine evicted, errored,
+/// or produced an empty stream), the orchestrator must not return a blank reply.
+/// This re-issues the *original* messages — no synthetic reasoning prefill — with
+/// `enable_thinking:false` and the full token budget, yielding a single normal
+/// answer. See Fix #2 (ADR-007) and the orchestrator empty-guard call sites.
+fn build_plain_answer_body(original_body: &serde_json::Value, max_tokens: u32) -> serde_json::Value {
+    let mut body = original_body.clone();
+    let obj = body.as_object_mut().expect("body must be an object");
+    set_enable_thinking(obj, false);
+    obj.insert("max_tokens".to_string(), serde_json::Value::from(max_tokens));
+    obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+    obj.remove("thinking_budget");
+    body
 }
 
 /// Consume Call 1's SSE stream:
@@ -769,6 +816,7 @@ async fn stream_call1_accumulate(
 /// 4. If Call 1 exhausts the budget → accumulate the reasoning, POST Call 2 with
 ///    the closed `<think>…</think>` prefill. Stream Call 2's SSE events directly
 ///    to the client with per-event byte-count tracing for diagnostics.
+#[allow(clippy::too_many_arguments)] // orchestrator fan-out params; grouping into a struct adds churn without clarity
 pub async fn proxy_stream_with_thinking_budget(
     client: &Client,
     engine_port: u16,
@@ -888,14 +936,22 @@ pub async fn proxy_stream_with_thinking_budget(
             return;
         }
 
-        // 4. Budget exhausted — execute Call 2.
-        //    Guard: if Call-1 produced no reasoning (e.g. oMLX didn't emit
-        //    reasoning_content despite enable_thinking:true) there is nothing
-        //    to prefill. Forward whatever content_buf holds (if any) and
-        //    close rather than dispatching a degenerate empty-reasoning Call-2.
-        if reasoning_buf.is_empty() {
-            debug!("Call-1 budget exhausted but reasoning_buf empty; skipping Call-2 (empty-guard)");
-            if !stream_reasoning_deltas && !content_buf_call1.is_empty() {
+        // 4. Budget exhausted — execute the second call.
+        //
+        //    Three sub-cases (Fix #2, empty-guard — never emit a silent blank):
+        //      a. reasoning present            → Call-2 (reasoning prefill + answer)
+        //      b. reasoning empty, content present
+        //                                      → emit the content as the answer, done
+        //      c. reasoning empty, content empty (engine evicted/errored/empty)
+        //                                      → plain-answer fallback (original
+        //                                        messages, enable_thinking:false).
+        //                                        If that ALSO yields nothing, a
+        //                                        structured error frame is emitted.
+
+        // Sub-case (b): Call-1 emitted a direct answer without structured reasoning.
+        if reasoning_buf.is_empty() && !content_buf_call1.is_empty() {
+            debug!("Call-1 budget exhausted, no reasoning but content present; emitting content");
+            if !stream_reasoning_deltas {
                 let chunk = serde_json::json!({
                     "id": completion_id,
                     "object": "chat.completion.chunk",
@@ -915,15 +971,21 @@ pub async fn proxy_stream_with_thinking_budget(
             return;
         }
 
-        let remaining = original_max_tokens.saturating_sub(thinking_budget).max(64);
-        info!(
-            thinking_budget,
-            reasoning_len = reasoning_buf.len(),
-            remaining_tokens = remaining,
-            "Call-1 budget exhausted; executing Call-2"
-        );
-
-        let body2 = build_call2_body(&original_body_c, &reasoning_buf, remaining, inline_think);
+        // Sub-cases (a) and (c): build the second-call body.
+        let is_fallback = reasoning_buf.is_empty();
+        let (body2, remaining) = if is_fallback {
+            warn!("Call-1 produced neither reasoning nor content; issuing plain-answer fallback (Fix #2)");
+            (build_plain_answer_body(&original_body_c, original_max_tokens), original_max_tokens)
+        } else {
+            let remaining = original_max_tokens.saturating_sub(thinking_budget).max(64);
+            info!(
+                thinking_budget,
+                reasoning_len = reasoning_buf.len(),
+                remaining_tokens = remaining,
+                "Call-1 budget exhausted; executing Call-2"
+            );
+            (build_call2_body(&original_body_c, &reasoning_buf, remaining, inline_think), remaining)
+        };
 
         // Emit a status event so clients can show a "Generating answer…" indicator
         // during the Call 2 KV-cache prefill gap. Standard OpenAI clients ignore
@@ -934,7 +996,7 @@ pub async fn proxy_stream_with_thinking_budget(
             "model": model_name,
             "choices": [{ "index": 0, "delta": {}, "finish_reason": null }],
             "lmforge": {
-                "status": "call2_prefill",
+                "status": if is_fallback { "answer_fallback" } else { "call2_prefill" },
                 "reasoning_len": reasoning_buf.len(),
                 "remaining_tokens": remaining
             }
@@ -975,6 +1037,10 @@ pub async fn proxy_stream_with_thinking_budget(
         let model_name_inner = model_name.clone();
         let mut inner_buf = String::new();
         let mut call2_event_count: usize = 0;
+        // Track whether the second call produced any answer content. Used by the
+        // plain-answer fallback (Fix #2) to emit a structured error instead of a
+        // silent empty stream when even the fallback yields nothing.
+        let mut saw_content = false;
 
         while let Some(chunk) = call2_stream.next().await {
             let bytes = match chunk {
@@ -997,6 +1063,12 @@ pub async fn proxy_stream_with_thinking_budget(
 
                 if data == "[DONE]" {
                     info!(call2_total_events = call2_event_count, "Call-2 stream complete (received [DONE])");
+                    if is_fallback && !saw_content {
+                        // Fallback also produced nothing — surface a structured error
+                        // rather than a blank reply (Fix #2 invariant).
+                        let err = serde_json::json!({"error": {"message": "Model produced no output (reasoning and answer both empty)", "type": "server_error"}});
+                        yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&err).unwrap_or_default())));
+                    }
                     yield Ok::<Bytes, std::io::Error>(Bytes::from("data: [DONE]\n\n"));
                     return;
                 }
@@ -1006,6 +1078,9 @@ pub async fn proxy_stream_with_thinking_budget(
                     if let Some(obj) = val.as_object_mut() {
                         obj.insert("id".to_string(), serde_json::Value::String(completion_id_inner.clone()));
                         obj.insert("model".to_string(), serde_json::Value::String(model_name_inner.clone()));
+                    }
+                    if val.pointer("/choices/0/delta/content").and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty()) {
+                        saw_content = true;
                     }
                     format!("data: {}\n\n", serde_json::to_string(&val).unwrap_or_default())
                 } else {
@@ -1028,6 +1103,10 @@ pub async fn proxy_stream_with_thinking_budget(
         }
 
         info!(call2_total_events = call2_event_count, "Call-2 stream ended (no [DONE] received)");
+        if is_fallback && !saw_content {
+            let err = serde_json::json!({"error": {"message": "Model produced no output (reasoning and answer both empty)", "type": "server_error"}});
+            yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&err).unwrap_or_default())));
+        }
         yield Ok::<Bytes, std::io::Error>(Bytes::from("data: [DONE]\n\n"));
     };
 
@@ -1107,10 +1186,12 @@ pub async fn proxy_nonstream_with_thinking_budget(
         return Ok((200, serde_json::to_string(&assembled).unwrap_or_default()));
     }
 
-    // Budget exhausted — Call 2.
-    // Guard: no reasoning captured → skip Call-2, return whatever content_buf holds.
-    if reasoning_buf.is_empty() {
-        debug!("Call-1 budget exhausted but reasoning_buf empty; skipping Call-2 (empty-guard)");
+    // Budget exhausted — Call 2 (Fix #2 empty-guard, three sub-cases mirroring
+    // the streaming path).
+    //
+    //   b. reasoning empty, content present → return the content as the answer.
+    if reasoning_buf.is_empty() && !content_buf_call1.is_empty() {
+        debug!("Call-1 budget exhausted, no reasoning but content present; returning content");
         let assembled = serde_json::json!({
             "id": completion_id,
             "object": "chat.completion",
@@ -1130,8 +1211,16 @@ pub async fn proxy_nonstream_with_thinking_budget(
         return Ok((200, serde_json::to_string(&assembled).unwrap_or_default()));
     }
 
-    let remaining = original_max_tokens.saturating_sub(thinking_budget).max(64);
-    let body2 = build_call2_body(&original_body, &reasoning_buf, remaining, inline_think);
+    //   a. reasoning present → Call-2 (reasoning prefill + answer).
+    //   c. reasoning empty, content empty → plain-answer fallback.
+    let is_fallback = reasoning_buf.is_empty();
+    let body2 = if is_fallback {
+        warn!("Call-1 produced neither reasoning nor content; issuing plain-answer fallback (Fix #2)");
+        build_plain_answer_body(&original_body, original_max_tokens)
+    } else {
+        let remaining = original_max_tokens.saturating_sub(thinking_budget).max(64);
+        build_call2_body(&original_body, &reasoning_buf, remaining, inline_think)
+    };
 
     let resp2 = client
         .post(&url)
@@ -1157,6 +1246,16 @@ pub async fn proxy_nonstream_with_thinking_budget(
         stream_call1_accumulate(resp2, u32::MAX, None, inline_think)
             .await
             .map_err(|e| (500u16, e))?;
+
+    // Fix #2: if the plain-answer fallback ALSO produced nothing, surface a
+    // structured error rather than a 200 with a blank answer.
+    if is_fallback && content_buf_call2.trim().is_empty() {
+        warn!("Plain-answer fallback produced no content; returning structured error");
+        return Err((
+            502u16,
+            r#"{"error":{"message":"Model produced no output (reasoning and answer both empty)","type":"server_error","param":null,"code":null}}"#.to_string(),
+        ));
+    }
 
     let final_id = if completion_id.is_empty() {
         comp_id2
@@ -1362,6 +1461,97 @@ pub async fn proxy_stream_rewriting_think_tags(
     Ok(Body::from_stream(output))
 }
 
+/// Streaming proxy for **native-reasoning oMLX models** that drops the trailing
+/// `content` delta which merely echoes the full accumulated reasoning on
+/// `finish=length` (Fix #1, ADR-007).
+///
+/// Native-reasoning models (`qwen3:4b:thinking`, `phi4:reasoning`) bypass the
+/// budget orchestrator and stream straight through. On truncation oMLX emits the
+/// reasoning as `reasoning_content` deltas and then re-emits the *entire*
+/// reasoning once as a single `content` delta — a duplicate, not an answer. This
+/// proxy accumulates reasoning and suppresses any `content` delta whose text
+/// exactly equals the accumulated reasoning (length-guarded). All other deltas —
+/// including legitimate answers on natural `stop` — pass through unchanged.
+pub async fn proxy_stream_dedup_native_reasoning(
+    client: &Client,
+    engine_port: u16,
+    path: &str,
+    body: Bytes,
+) -> Result<Body, (u16, String)> {
+    let url = format!("http://127.0.0.1:{}{}", engine_port, path);
+    debug!(url = %url, "Proxying streaming request with native-reasoning dedup");
+
+    let resp = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to proxy dedup stream to engine");
+            (502u16, format!("{{\"error\":\"Engine unavailable: {}\"}}", e))
+        })?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let text = resp.text().await.unwrap_or_default();
+        return Err((status, text));
+    }
+
+    let mut byte_stream = resp.bytes_stream();
+    let output = stream! {
+        let mut line_buf = String::new();
+        let mut reasoning_buf = String::new();
+
+        while let Some(chunk_result) = byte_stream.next().await {
+            let bytes = match chunk_result {
+                Ok(b) => b,
+                Err(e) => { error!(error = %e, "Stream read error in dedup proxy"); break; }
+            };
+            line_buf.push_str(&String::from_utf8_lossy(&bytes));
+
+            while let Some(nl) = line_buf.find('\n') {
+                let raw_line = line_buf[..nl].trim_end_matches('\r').to_string();
+                line_buf.drain(..=nl);
+
+                let data = match raw_line.strip_prefix("data: ") {
+                    Some(d) => d.trim(),
+                    None => { yield Ok::<Bytes, std::io::Error>(Bytes::from(format!("{raw_line}\n"))); continue; }
+                };
+                if data == "[DONE]" {
+                    yield Ok(Bytes::from("data: [DONE]\n\n"));
+                    continue;
+                }
+                let Ok(val) = serde_json::from_str::<serde_json::Value>(data) else {
+                    yield Ok(Bytes::from(format!("{raw_line}\n")));
+                    continue;
+                };
+
+                // Accumulate reasoning; detect the duplicate content echo.
+                if let Some(r) = val.pointer("/choices/0/delta/reasoning_content").and_then(|v| v.as_str()) {
+                    reasoning_buf.push_str(r);
+                }
+                let is_dup = val
+                    .pointer("/choices/0/delta/content")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|c| is_reasoning_echo(c, &reasoning_buf));
+                if is_dup {
+                    debug!("Fix #1: suppressing streamed content delta duplicating reasoning");
+                    continue; // drop the duplicate echo
+                }
+
+                yield Ok(Bytes::from(format!("{raw_line}\n")));
+            }
+        }
+
+        if !line_buf.trim().is_empty() {
+            yield Ok(Bytes::from(format!("{}\n", line_buf.trim_end_matches('\r'))));
+        }
+    };
+
+    Ok(Body::from_stream(output))
+}
+
 /// Rewrite a single raw SSE line (e.g. `data: {...}`) through the tag rewriter.
 /// Non-data lines (empty lines, `event:`, `[DONE]`) are returned unchanged.
 fn rewrite_sse_line(line: &str, rewriter: &mut ThinkSplitter) -> String {
@@ -1391,6 +1581,38 @@ fn rewrite_sse_line(line: &str, rewriter: &mut ThinkSplitter) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Fix #1: native-reasoning echo dedup ──────────────────────────────────
+
+    #[test]
+    fn test_is_reasoning_echo_exact_long_match() {
+        let reasoning = "Let me work through this carefully step by step to reach the answer.";
+        assert!(is_reasoning_echo(reasoning, reasoning));
+        // trimmed comparison
+        assert!(is_reasoning_echo(&format!("  {reasoning}  "), reasoning));
+    }
+
+    #[test]
+    fn test_is_reasoning_echo_rejects_short_reasoning() {
+        // Below the min-length guard — never treated as an echo (false-positive guard).
+        let short = "2+2=4";
+        assert!(!is_reasoning_echo(short, short));
+    }
+
+    #[test]
+    fn test_is_reasoning_echo_rejects_real_answer() {
+        let reasoning = "Let me work through this carefully step by step to reach the answer.";
+        // A genuine, different answer must survive.
+        assert!(!is_reasoning_echo("The answer is 42.", reasoning));
+        // A partial overlap (not a full verbatim copy) must survive.
+        assert!(!is_reasoning_echo("Let me work through this", reasoning));
+    }
+
+    #[test]
+    fn test_is_reasoning_echo_empty_reasoning() {
+        assert!(!is_reasoning_echo("anything", ""));
+        assert!(!is_reasoning_echo("", ""));
+    }
 
     // ── ThinkSplitter SSE rewriter tests ─────────────────────────────────────
 
@@ -1595,6 +1817,32 @@ mod tests {
             result["max_tokens"], 768,
             "max_tokens must be overridden to remaining budget"
         );
+    }
+
+    // ── build_plain_answer_body unit tests (Fix #2 fallback) ──────────────────
+
+    #[test]
+    fn test_build_plain_answer_body_disables_thinking_keeps_messages() {
+        let body = serde_json::json!({
+            "model": "qwen3.5-4b-4bit",
+            "messages": [{"role": "user", "content": "What is 2+2?"}],
+            "max_tokens": 256,
+            "thinking_budget": 2048,
+            "stream": false
+        });
+        let result = build_plain_answer_body(&body, 2048);
+
+        // Original messages are preserved verbatim — no synthetic reasoning turn.
+        let messages = result["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"], "What is 2+2?");
+
+        // Thinking suppressed, full budget restored, internal stream forced, private field stripped.
+        assert_eq!(result["chat_template_kwargs"]["enable_thinking"], false);
+        assert_eq!(result["max_tokens"], 2048);
+        assert_eq!(result["stream"], true);
+        assert!(result.get("thinking_budget").is_none());
     }
 
     #[test]

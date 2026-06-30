@@ -99,6 +99,38 @@ function Test-E2eEngineSupportsRerank {
     return ($eng.supports_reranking -eq $true)
 }
 
+function Test-E2eModelThinkingCapable {
+    param([string]$Model = $script:ChatModel, [string]$HostUrl = $script:LfHost)
+    try {
+        $m = (Invoke-RestMethod "$HostUrl/lf/model/list").models | Where-Object { $_.id -eq $Model } | Select-Object -First 1
+        return ($m.capabilities.thinking -eq $true)
+    } catch { return $false }
+}
+
+# think=true (top-level), non-streaming → expect reasoning_content + answer.
+function Invoke-E2eChatThinkOn {
+    param([string]$Text, [string]$Model = $script:ChatModel, [int]$MaxTokens = 512, [string]$HostUrl = $script:LfHost)
+    $body = @{
+        model = $Model
+        messages = @(@{ role = "user"; content = $Text })
+        stream = $false; max_tokens = $MaxTokens; temperature = 0.6; think = $true
+    }
+    Invoke-RestMethod -Uri "$HostUrl/v1/chat/completions" -Method Post `
+        -Body ($body | ConvertTo-Json -Depth 8 -Compress) -ContentType "application/json" -TimeoutSec 180
+}
+
+# think=true + thinking_budget → orchestrator → expect answer.
+function Invoke-E2eChatThinkBudget {
+    param([string]$Text, [string]$Model = $script:ChatModel, [int]$MaxTokens = 512, [int]$Budget = 256, [string]$HostUrl = $script:LfHost)
+    $body = @{
+        model = $Model
+        messages = @(@{ role = "user"; content = $Text })
+        stream = $false; max_tokens = $MaxTokens; temperature = 0.6; think = $true; thinking_budget = $Budget
+    }
+    Invoke-RestMethod -Uri "$HostUrl/v1/chat/completions" -Method Post `
+        -Body ($body | ConvertTo-Json -Depth 8 -Compress) -ContentType "application/json" -TimeoutSec 180
+}
+
 function Invoke-E2eEmbed {
     param([string]$Text, [string]$Model = $script:EmbedModel, [string]$HostUrl = $script:LfHost)
     $body = @{ model = $Model; input = $Text } | ConvertTo-Json -Compress

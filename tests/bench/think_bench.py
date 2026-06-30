@@ -575,6 +575,17 @@ def main() -> int:
                          "and committed so results are self-diagnosing)")
     ap.add_argument("--log-tail", type=int, default=400,
                     help="lines per log file to snapshot (default: 400)")
+    ap.add_argument("--assert", dest="do_assert", action="store_true",
+                    help="regression gate: exit non-zero if any hard failure is seen "
+                         "(engine errors, reasoning==content dup, or blank answers in "
+                         "think=off mode). For CI / pre-release harness use.")
+    ap.add_argument("--assert-strict", action="store_true",
+                    help="with --assert, ALSO fail on blank answers in think=on mode "
+                         "(reasoning models can occasionally exhaust budget legitimately, "
+                         "so this is off by default).")
+    ap.add_argument("--assert-max-blank-on", type=int, default=0,
+                    help="with --assert-strict, tolerated think=on blank answers before "
+                         "failing (default 0).")
     args = ap.parse_args()
 
     base = args.base.rstrip("/")
@@ -624,7 +635,7 @@ def main() -> int:
     csv_fields = [
         "host", "os", "arch", "accel", "engine", "lmforge_version", "git_sha",
         "model", "family", "note", "prompt", "category", "mode", "rep",
-        "finish_reason", "correct", "blank", "looped", "latency_s", "ttfb_s",
+        "finish_reason", "correct", "blank", "dup", "looped", "latency_s", "ttfb_s",
         "reasoning_chars", "content_chars", "reasoning_deltas", "content_deltas",
         "leak", "max_consecutive_repeat", "top_6gram_freq", "top_line_freq",
         "distinct_line_ratio", "compression_ratio", "error",
@@ -682,6 +693,11 @@ def main() -> int:
         # grading the reasoning text (that inflates "correct" with answers the
         # user never received).
         blank = not res["content"].strip()
+        # Reasoning==content duplication (Fix #5a target): the engine echoed the
+        # whole reasoning back as the answer. A substantial verbatim match is the
+        # signal; short coincidental matches are ignored.
+        _r, _c = res["reasoning"].strip(), res["content"].strip()
+        dup = bool(_r) and len(_r) >= 40 and _c == _r
         if grader is None:
             correct = None
         elif blank:
@@ -696,7 +712,7 @@ def main() -> int:
             "model": m["id"], "family": m.get("family"), "note": m.get("note"),
             "prompt": p["id"], "category": p["category"], "mode": mode, "rep": rep,
             "finish_reason": res["finish_reason"], "correct": correct,
-            "blank": blank, "looped": looped,
+            "blank": blank, "dup": dup, "looped": looped,
             "latency_s": res["latency_s"], "ttfb_s": res["ttfb_s"],
             "reasoning_chars": res["reasoning_chars"], "content_chars": res["content_chars"],
             "reasoning_deltas": res["reasoning_deltas"], "content_deltas": res["content_deltas"],
@@ -713,13 +729,15 @@ def main() -> int:
 
         # aggregate
         key = (m["id"], mode)
-        a = agg.setdefault(key, {"n": 0, "correct": 0, "blank": 0, "looped": 0,
+        a = agg.setdefault(key, {"n": 0, "correct": 0, "blank": 0, "dup": 0, "looped": 0,
                                  "leak": 0, "length": 0, "errors": 0})
         a["n"] += 1
         if correct:
             a["correct"] += 1
         if blank:
             a["blank"] += 1
+        if dup:
+            a["dup"] += 1
         if looped:
             a["looped"] += 1
         if leak:
@@ -738,6 +756,8 @@ def main() -> int:
             flags.append("LEAK")
         if blank:
             flags.append("BLANK")
+        if dup:
+            flags.append("DUP")
         if correct is True:
             flags.append("ok")
         elif correct is False and not blank:
@@ -763,11 +783,12 @@ def main() -> int:
              "## Aggregate (model x mode)", "",
              "`correct` = real answers the user saw (blank/length runs score as fail). "
              "`blank` = produced no answer content (e.g. thinking budget exhausted).", "",
-             "| model | mode | n | correct | blank | looped | leak | length | err |",
-             "|---|---|---|---|---|---|---|---|---|"]
+             "| model | mode | n | correct | blank | dup | looped | leak | length | err |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
     for (mid, mode), a in sorted(agg.items()):
         lines.append(f"| {mid} | {mode} | {a['n']} | {a['correct']}/{a['n']} | "
-                     f"{a['blank']} | {a['looped']} | {a['leak']} | {a['length']} | {a['errors']} |")
+                     f"{a['blank']} | {a['dup']} | {a['looped']} | {a['leak']} | "
+                     f"{a['length']} | {a['errors']} |")
     (out / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     # Snapshot daemon/engine logs so the committed result is self-diagnosing.
@@ -781,6 +802,33 @@ def main() -> int:
     if n_logs:
         print(f"  - {n_logs} log snapshot(s) in {out}/logs/")
     print("BENCH_COMPLETE")
+
+    # ── Regression gate (--assert) ───────────────────────────────────────────
+    # Hard failures that must never ship (see ADR-007):
+    #   - any engine error
+    #   - reasoning==content duplication (Fix #5a)
+    #   - blank answer in think=off mode (Fix #3c plain-client default)
+    # Optional (--assert-strict): blank answers in think=on mode above a threshold.
+    if args.do_assert:
+        failures = []
+        for (mid, mode), a in sorted(agg.items()):
+            if a["errors"]:
+                failures.append(f"{mid} [{mode}]: {a['errors']} engine error(s)")
+            if a["dup"]:
+                failures.append(f"{mid} [{mode}]: {a['dup']} reasoning==content dup(s)")
+            if mode == "off" and a["blank"]:
+                failures.append(f"{mid} [off]: {a['blank']} blank answer(s) (think=off must answer)")
+            if args.assert_strict and mode == "on" and a["blank"] > args.assert_max_blank_on:
+                failures.append(
+                    f"{mid} [on]: {a['blank']} blank answer(s) > "
+                    f"{args.assert_max_blank_on} allowed"
+                )
+        if failures:
+            print("\nASSERT FAILED:")
+            for f in failures:
+                print(f"  ✗ {f}")
+            return 1
+        print("\nASSERT PASSED: no errors, dups, or off-mode blanks.")
     return 0
 
 

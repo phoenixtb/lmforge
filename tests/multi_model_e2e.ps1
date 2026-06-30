@@ -268,6 +268,66 @@ try {
         }
     }
 
+    # ─── TC-E13..E15: thinking pipeline (ADR-007) ───────────────────────────
+    $thinkCapable = Test-E2eModelThinkingCapable -Model $script:ChatModel
+
+    # TC-E14 always applies: think=off MUST yield a non-blank answer (Fix #3c).
+    try {
+        $r = Invoke-E2eChat -Text "What is the capital of France? Answer in one word." -Model $script:ChatModel -MaxTokens 64 -DisableThinking
+        $ans = [string]$r.choices[0].message.content
+        if ($ans.Trim()) {
+            Record "TC-E14" "PASS" "Thinking off non-blank" "$($ans.Length) chars"
+        } else {
+            Record "TC-E14" "FAIL" "Thinking off non-blank" "blank answer (Fix #3c regression)"
+            Warn "TC-E14: think=off produced a blank answer"
+        }
+    } catch {
+        Record "TC-E14" "FAIL" "Thinking off non-blank" $_.Exception.Message
+        Warn "TC-E14: request failed - $($_.Exception.Message)"
+    }
+
+    if (-not $thinkCapable) {
+        Warn "TC-E13/E15: $($script:ChatModel) is not thinking-capable - skipping"
+        Record "TC-E13" "SKIP" "Thinking on reasoning+answer" "model not thinking-capable"
+        Record "TC-E15" "SKIP" "Thinking budget answer" "model not thinking-capable"
+    } else {
+        # TC-E13: think=true → reasoning_content present AND a non-blank answer.
+        try {
+            $r = Invoke-E2eChatThinkOn -Text "A bat and ball cost `$1.10. The bat costs `$1 more than the ball. How much is the ball? Think step by step." -Model $script:ChatModel -MaxTokens 512
+            $reasoning = [string]$r.choices[0].message.reasoning_content
+            $ans = [string]$r.choices[0].message.content
+            if ($reasoning.Trim() -and $ans.Trim()) {
+                Record "TC-E13" "PASS" "Thinking on reasoning+answer" "r=$($reasoning.Length) a=$($ans.Length)"
+            } else {
+                Record "TC-E13" "FAIL" "Thinking on reasoning+answer" "r='$($reasoning.Length)' a='$($ans.Length)' (expected both non-empty)"
+                Warn "TC-E13: missing reasoning_content or answer"
+            }
+        } catch {
+            Record "TC-E13" "FAIL" "Thinking on reasoning+answer" $_.Exception.Message
+            Warn "TC-E13: request failed - $($_.Exception.Message)"
+        }
+
+        # TC-E15: think=true + thinking_budget → orchestrator must yield an answer
+        # or a structured error, never a silent blank (Fix #5b).
+        try {
+            $r = Invoke-E2eChatThinkBudget -Text "Explain why the sky appears blue, briefly." -Model $script:ChatModel -MaxTokens 512 -Budget 256
+            $ans = [string]$r.choices[0].message.content
+            $err = [string]$r.error.message
+            if ($ans.Trim()) {
+                Record "TC-E15" "PASS" "Thinking budget answer" "$($ans.Length) chars"
+            } elseif ($err.Trim()) {
+                Warn "TC-E15: orchestrator returned structured error (acceptable): $err"
+                Record "TC-E15" "SKIP" "Thinking budget answer" "structured error (no model output)"
+            } else {
+                Record "TC-E15" "FAIL" "Thinking budget answer" "blank answer with no error (Fix #5b regression)"
+                Warn "TC-E15: budget path produced a silent blank"
+            }
+        } catch {
+            Record "TC-E15" "FAIL" "Thinking budget answer" $_.Exception.Message
+            Warn "TC-E15: request failed - $($_.Exception.Message)"
+        }
+    }
+
     Write-Host ""
     Write-Host "========== SUMMARY ==========" -ForegroundColor White
     $fail = 0

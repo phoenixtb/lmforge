@@ -22,6 +22,8 @@ param(
     [string]$Source = "",
     [switch]$Inference,
     [switch]$NoInference,
+    [switch]$Thinking,
+    [switch]$NoThinking,
     [switch]$WithUi,
     [switch]$NoUi,
     [switch]$VerifyAssets,
@@ -73,11 +75,12 @@ else {
 # UI default on. -Source local builds the UI from this checkout (tauri build) and
 # installs it; -Source release installs the published UI artifact.
 $RunInference = -not $NoInference
+$RunThinking = -not $NoThinking
 $RunUi = if ($NoUi) { $false } else { $true }
 
 . (Join-Path $PSScriptRoot "..\lib\e2e-lifecycle.ps1")
 
-Write-Host "LMForge E2E - source=$Source ui=$RunUi inference=$RunInference verify=$VerifyAssets keep=$KeepInstall"
+Write-Host "LMForge E2E - source=$Source ui=$RunUi inference=$RunInference thinking=$RunThinking verify=$VerifyAssets keep=$KeepInstall"
 
 # ── Asset verification (release only) ────────────────────────────────────────
 if ($VerifyAssets) {
@@ -133,6 +136,7 @@ if ($RunUi) {
 if ($RunInference) {
     E2eStep "engine preflight"      { E2eEnginePreflight }
     E2eStep "multi-model inference" { E2eInference }
+    if ($RunThinking) { E2eStep "thinking gate" { E2eThinking } }
 }
 
 # ── Teardown (full purge incl. models, unless -KeepInstall) ──────────────────

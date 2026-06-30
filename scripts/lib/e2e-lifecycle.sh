@@ -476,3 +476,32 @@ e2e_inference() {
     SKIP_START=1 SKIP_BUILD=1 LF_BIN="$E2E_BIN" \
         bash "$E2E_REPO_ROOT/tests/multi_model_e2e.sh" ${extra[@]+"${extra[@]}"} "$@"
 }
+
+# ── Thinking regression gate (delegates to think_bench.py --assert) ──────────
+# Validates the reasoning pipeline (ADR-007) against the running daemon:
+#   • think=off must produce a non-blank answer (Fix #3c plain-client default)
+#   • no reasoning==content duplication (Fix #5a)
+#   • no engine errors
+# Bounded by default to the e2e chat model so it stays fast; override the model
+# set with E2E_THINK_MODELS="a b c". Results go to a temp dir (not committed).
+# Requires python3; skips gracefully if absent.
+e2e_thinking() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "  python3 not found — skipping thinking gate"
+        return 0
+    fi
+    local models="${E2E_THINK_MODELS:-${CHAT_MODEL:-${E2E_CHAT_MODEL:-qwen3.5:2b:4bit}}}"
+    local outdir
+    outdir="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/lmforge-think-$$")"
+    local strict=()
+    [[ "${E2E_THINK_STRICT:-0}" == "1" ]] && strict+=(--assert-strict)
+    # shellcheck disable=SC2086
+    python3 "$E2E_REPO_ROOT/tests/bench/think_bench.py" \
+        --base "${E2E_API:-http://127.0.0.1:11430}" \
+        --models $models \
+        --quick --assert "${strict[@]}" \
+        --outdir "$outdir" --no-capture-logs
+    local rc=$?
+    rm -rf "$outdir" 2>/dev/null || true
+    return $rc
+}

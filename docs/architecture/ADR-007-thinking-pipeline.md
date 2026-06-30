@@ -58,20 +58,28 @@ comparisons with adapter calls.
 
 ### Phase 3 — Three bug fixes
 
-**Fix #1 — oMLX double-emit:** `stream_call1_accumulate` forwarded the raw SSE line
+> **Numbering note.** The original `docs/dev/THINKING_REFACTOR.md` playbook and
+> this ADR ended up with different Fix #1/#2 definitions. This ADR is the source
+> of truth; Phase 5 below folds in the remaining playbook fixes and reconciles
+> the two.
+
+**Fix #3a — oMLX double-emit:** `stream_call1_accumulate` forwarded the raw SSE line
 once per matched field. A chunk with both `reasoning_content` and `content` was sent
 twice. Fixed: accumulate both fields, forward the raw line exactly once.
 
-**Fix #2 — orchestrator empty-guard:** When Call-1 exhausts the budget but
+**Fix #3b — orchestrator empty-guard:** When Call-1 exhausts the budget but
 `reasoning_buf` is empty (engine produced no structured reasoning), Call-2 proceeded
-with a degenerate empty-reasoning directive. Fixed: skip Call-2, return `content_buf`
-with `finish_reason=length`. Applied to both streaming and non-streaming paths.
+with a degenerate empty-reasoning directive. Initial fix: skip Call-2, return
+`content_buf` with `finish_reason=length`. **Upgraded in Phase 5** to a true
+plain-answer fallback (see below).
 
-**Fix #3 — enable_thinking:false default:** On llama.cpp/SGLang with a thinking-capable
+**Fix #3c — enable_thinking:false default:** On llama.cpp/SGLang with a thinking-capable
 model and no think intent, the Qwen3 HF Jinja template defaults `enable_thinking=true`,
 burns `max_tokens` on reasoning, and returns no answer. Fixed: `apply_think_for_engine`
 now explicitly injects `enable_thinking:false` for this case, making thinking opt-in.
-oMLX is unaffected (no template, reasoning governed by model weights).
+oMLX is **deliberately excluded** — it has no Jinja template and reasoning is governed
+by model weights, so a natural-reasoning oMLX call stays bounded. (The playbook
+proposed applying it to oMLX too; we scoped it narrower on purpose.)
 
 ### Phase 4 — ThinkingContext + thin callers
 
@@ -86,6 +94,49 @@ the entire pre-routing preamble:
 
 `openai.rs::chat_completions` calls `prepare_request` once and reads from `ThinkingContext`
 for routing. The ~150 inline lines collapse to ~15.
+
+### Phase 5 — Playbook reconciliation (two remaining fixes)
+
+Phase 3 closed three bugs but left two items from the `THINKING_REFACTOR.md`
+playbook open. Phase 5 lands them with unit tests:
+
+**Fix #5a — native-reasoning truncation echo (the playbook's "Fix #1").**
+Native-reasoning models (`phi4:reasoning`, `qwen3:4b:thinking`) bypass the budget
+orchestrator and stream straight through. On oMLX, when generation hits
+`finish=length`, the engine emits the reasoning as `reasoning_content` deltas and
+then re-emits the **entire reasoning once more as a single `content` delta**
+(`r==c`). That echo is not an answer. Fix:
+- Streaming: `proxy::proxy_stream_dedup_native_reasoning` accumulates reasoning and
+  suppresses any `content` delta that is a verbatim, length-guarded copy of the
+  accumulated reasoning. Routed only for oMLX native-reasoning (`is_native_reasoning
+  && !inline_think`); every other engine/model keeps raw passthrough.
+- Non-streaming: `proxy_request_assembling_stream` drops `content` when
+  `finish=length && is_reasoning_echo(content, reasoning)`.
+- Shared predicate `is_reasoning_echo` (min 40 trimmed chars + exact match) guards
+  against false positives; natural `stop` is never touched. Unit-tested.
+
+**Fix #5b — orchestrator plain-answer fallback (upgrades Fix #3b).**
+The empty-guard now distinguishes three sub-cases after budget exhaustion:
+1. reasoning present → Call-2 (reasoning prefill + answer).
+2. reasoning empty, content present → return that content as the answer.
+3. reasoning empty **and** content empty (engine evicted/errored/empty) →
+   `build_plain_answer_body` re-issues the **original** messages with
+   `enable_thinking:false` and the full token budget (a single normal call). If
+   that *also* yields nothing, a structured error frame is emitted instead of a
+   silent blank stream. Applied to both streaming and non-streaming paths.
+
+### Deviation from the playbook design
+
+`THINKING_REFACTOR.md` proposed a heavier `ThinkingAdapter` (per-engine
+`call1_body`/`parse_delta`/`call2_body`/`finalize`), a dedicated `orchestrator.rs`,
+`adapters/{omlx,template}.rs`, and a `classify() → Plan` dispatcher with
+`thinking::handle()`. The shipped design is intentionally lighter: a 2-bool adapter
+(`supports_orchestrator` / `inline_think`) + `prepare_request() → ThinkingContext`,
+with the two-call loop remaining in `proxy.rs`. Rationale: the boolean adapter
+captures every routing decision the engines actually need today with far less code,
+and the orchestrator's `proxy.rs` home keeps the SSE plumbing in one place. The
+richer trait can be revisited if a future engine needs per-call body shaping that
+the booleans can't express.
 
 ---
 
@@ -109,19 +160,21 @@ Client → LMForge → Call-1 (engine): max_tokens = thinking_budget, enable_thi
 
 Natural finish (Call-1 `finish_reason != "length"`): skip Call-2; emit buffered content.
 
-Empty-guard: `reasoning_buf.is_empty()` after budget exhaustion → skip Call-2; return
-content as `finish_reason=length`. Prevents degenerate directive to engine.
+Empty-guard (Fix #5b): after budget exhaustion, if `reasoning_buf` is empty →
+return `content_buf` if present, else issue a plain-answer fallback call
+(`enable_thinking:false`, full budget, original messages); if the fallback also
+produces nothing, emit a structured error frame. Never a silent blank stream.
 
 ---
 
 ## Engine Matrix (post-Phase 4)
 
-| Engine | `supports_orchestrator` | `inline_think` | Fix #3 applies |
-|---|---|---|---|
-| oMLX | ✓ | ✗ | ✗ (natural reasoning) |
-| llama.cpp | ✓ | ✓ | ✓ |
-| SGLang | ✓ | ✓ | ✓ |
-| vLLM / others | ✗ | ✗ | ✗ |
+| Engine | `supports_orchestrator` | `inline_think` | Fix #3c (enable_thinking:false) | Fix #5a (echo dedup) |
+|---|---|---|---|---|
+| oMLX | ✓ | ✗ | ✗ (natural reasoning) | ✓ (native-reasoning models) |
+| llama.cpp | ✓ | ✓ | ✓ | ✗ (inline `<think>`) |
+| SGLang | ✓ | ✓ | ✓ | ✗ (inline `<think>`) |
+| vLLM / others | ✗ | ✗ | ✗ | ✗ |
 
 ---
 
@@ -131,7 +184,8 @@ content as `finish_reason=length`. Prevents degenerate directive to engine.
   Adding a new engine's thinking semantics requires only a new `ThinkingAdapter` impl
   and a match arm in `adapter_for_engine`.
 - **+** `openai.rs::chat_completions` is freed from thinking orchestration details.
-- **+** Three production bugs fixed (double-emit, empty-guard, blank reply).
+- **+** Five production bugs fixed: double-emit (#3a), empty-guard→fallback (#3b/#5b),
+  plain-client blank reply (#3c), native-reasoning truncation echo (#5a).
 - **−** `prepare_request` takes `model_caps: Option<&ModelCapabilities>` — callers
   that don't load the model index still get a correct (if conservative) context, but
   budget-defaulting and Fix #3 require the index to identify thinking models.

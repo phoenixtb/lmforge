@@ -5,6 +5,10 @@
 #
 #  Validates that an embed model and a chat model can be co-loaded by the same
 #  LMForge daemon and handle burst traffic without interfering with each other.
+#  TC-E01..E12 cover load/burst/concurrency/gate/VLM/rerank/MTP; TC-E13..E15
+#  cover the thinking pipeline (ADR-007): think=on reasoning+answer, think=off
+#  non-blank (Fix #3c), and the thinking_budget orchestrator (Fix #5b). The
+#  thinking cases auto-skip when the chat model isn't thinking-capable.
 #
 #  USAGE
 #  -----
@@ -752,6 +756,84 @@ if [[ "$DO_MTP" -eq 1 ]]; then
         mtp_warm_ms=$(timer_end "mtp_warm")
         warn "TC-E12 skipped: warm chat failed"
         record_skip "TC-E12" "MTP speculative" "warm failed after ${mtp_warm_ms}ms"
+    fi
+fi
+
+# ─── TC-E13..E15: thinking pipeline (ADR-007) ────────────────────────────────
+# Native, Python-free smoke of the reasoning fixes against the chat model.
+# Gracefully skipped when the chat model is not thinking-capable.
+sep
+think_capable=$(e2e_model_thinking_capable "$CHAT_MODEL")
+
+# TC-E14 always applies: think=off MUST yield a non-blank answer (Fix #3c —
+# plain-client default must not silently suppress the answer on thinking models).
+echo -e "\n${BOLD}TC-E14${NC}  Thinking off → non-blank answer (${CHAT_MODEL})"
+timer_start "think_off"
+if resp=$(e2e_api_chat_thinking_off "$CHAT_MODEL" "What is the capital of France? Answer in one word." 64 2>&1); then
+    think_off_ms=$(timer_end "think_off")
+    ans=$(echo "$resp" | jq -r '.choices[0].message.content // ""' 2>/dev/null)
+    if [[ -n "${ans// }" ]]; then
+        printf "  ${GREEN}✓${NC} answered (%s chars)  ${DIM}%sms${NC}\n" "${#ans}" "$think_off_ms"
+        record_pass "TC-E14" "Thinking off non-blank" "${think_off_ms}ms"
+    else
+        record_fail "TC-E14" "Thinking off non-blank" "blank answer (Fix #3c regression)"
+        warn "TC-E14: think=off produced a blank answer"
+    fi
+else
+    timer_end "think_off" >/dev/null
+    record_fail "TC-E14" "Thinking off non-blank" "request failed"
+    warn "TC-E14: request failed — $(e2e_chat_diag "$CHAT_MODEL" "ping")"
+fi
+
+if [[ "$think_capable" != "true" ]]; then
+    warn "TC-E13/E15: ${CHAT_MODEL} is not thinking-capable — skipping"
+    record_skip "TC-E13" "Thinking on → reasoning_content" "model not thinking-capable"
+    record_skip "TC-E15" "Thinking budget → answer" "model not thinking-capable"
+else
+    # TC-E13: think=true → reasoning_content present AND a non-blank answer.
+    echo -e "\n${BOLD}TC-E13${NC}  Thinking on → reasoning_content + answer (${CHAT_MODEL})"
+    timer_start "think_on"
+    if resp=$(e2e_api_chat_think_on "$CHAT_MODEL" "A bat and ball cost \$1.10. The bat costs \$1 more than the ball. How much is the ball? Think step by step." 512 2>&1); then
+        think_on_ms=$(timer_end "think_on")
+        reasoning=$(echo "$resp" | jq -r '.choices[0].message.reasoning_content // ""' 2>/dev/null)
+        ans=$(echo "$resp" | jq -r '.choices[0].message.content // ""' 2>/dev/null)
+        if [[ -n "${reasoning// }" && -n "${ans// }" ]]; then
+            printf "  ${GREEN}✓${NC} reasoning=%s chars, answer=%s chars  ${DIM}%sms${NC}\n" "${#reasoning}" "${#ans}" "$think_on_ms"
+            record_pass "TC-E13" "Thinking on reasoning+answer" "${think_on_ms}ms r=${#reasoning} a=${#ans}"
+        else
+            record_fail "TC-E13" "Thinking on reasoning+answer" "reasoning='${#reasoning}' answer='${#ans}' (expected both non-empty)"
+            warn "TC-E13: missing reasoning_content or answer"
+        fi
+    else
+        timer_end "think_on" >/dev/null
+        record_fail "TC-E13" "Thinking on reasoning+answer" "request failed"
+        warn "TC-E13: request failed"
+    fi
+
+    # TC-E15: think=true + thinking_budget → orchestrator must still yield an answer
+    # (empty-guard / plain-answer fallback must never produce a silent blank — Fix #5b).
+    echo -e "\n${BOLD}TC-E15${NC}  Thinking budget → non-blank answer (${CHAT_MODEL})"
+    timer_start "think_budget"
+    if resp=$(e2e_api_chat_think_budget "$CHAT_MODEL" "Explain why the sky appears blue, briefly." 512 256 2>&1); then
+        think_budget_ms=$(timer_end "think_budget")
+        ans=$(echo "$resp" | jq -r '.choices[0].message.content // ""' 2>/dev/null)
+        err=$(echo "$resp" | jq -r '.error.message // ""' 2>/dev/null)
+        if [[ -n "${ans// }" ]]; then
+            printf "  ${GREEN}✓${NC} answered (%s chars)  ${DIM}%sms${NC}\n" "${#ans}" "$think_budget_ms"
+            record_pass "TC-E15" "Thinking budget answer" "${think_budget_ms}ms a=${#ans}"
+        elif [[ -n "${err// }" ]]; then
+            # A structured error is the acceptable Fix #5b outcome when the model
+            # genuinely produces nothing — far better than a silent blank.
+            warn "TC-E15: orchestrator returned structured error (acceptable): $err"
+            record_skip "TC-E15" "Thinking budget answer" "structured error (no model output)"
+        else
+            record_fail "TC-E15" "Thinking budget answer" "blank answer with no error (Fix #5b regression)"
+            warn "TC-E15: budget path produced a silent blank"
+        fi
+    else
+        timer_end "think_budget" >/dev/null
+        record_fail "TC-E15" "Thinking budget answer" "request failed"
+        warn "TC-E15: request failed"
     fi
 fi
 

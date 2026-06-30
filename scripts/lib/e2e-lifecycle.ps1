@@ -308,3 +308,27 @@ function E2eInference {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $E2E_RepoRoot "tests\multi_model_e2e.ps1")
     if ($LASTEXITCODE -ne 0) { throw "multi_model_e2e.ps1 exited $LASTEXITCODE" }
 }
+
+# ── Thinking regression gate (delegates to think_bench.py --assert) ──────────
+# Validates the reasoning pipeline (ADR-007) against the running daemon:
+#   think=off non-blank (Fix #3c), no reasoning==content dup (Fix #5a), no errors.
+# Bounded to the e2e chat model; override with $env:E2E_THINK_MODELS. Requires
+# python; skips gracefully if absent.
+function E2eThinking {
+    $py = Get-Command python3 -ErrorAction SilentlyContinue
+    if (-not $py) { $py = Get-Command python -ErrorAction SilentlyContinue }
+    if (-not $py) { Write-Host "  python not found - skipping thinking gate"; return }
+    $models = if ($env:E2E_THINK_MODELS) { $env:E2E_THINK_MODELS }
+              elseif ($env:E2E_CHAT_MODEL) { $env:E2E_CHAT_MODEL }
+              else { "qwen3.5:2b:4bit" }
+    $base = if ($E2E_Api) { $E2E_Api } else { "http://127.0.0.1:11430" }
+    $outdir = Join-Path ([System.IO.Path]::GetTempPath()) "lmforge-think-$PID"
+    $bench = Join-Path $E2E_RepoRoot "tests\bench\think_bench.py"
+    $argv = @($bench, "--base", $base, "--models") + ($models -split '\s+') +
+            @("--quick", "--assert", "--outdir", $outdir, "--no-capture-logs")
+    if ($env:E2E_THINK_STRICT -eq "1") { $argv += "--assert-strict" }
+    & $py.Source @argv
+    $rc = $LASTEXITCODE
+    Remove-Item -Recurse -Force $outdir -ErrorAction SilentlyContinue
+    if ($rc -ne 0) { throw "think_bench.py --assert exited $rc" }
+}

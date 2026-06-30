@@ -177,9 +177,12 @@ sequenceDiagram
 
 - The proxy normalises engine quirks (strip `null` `reasoning_content`,
   inject missing `logprobs:null`, etc.) so clients see strict OpenAI shape.
-- The `thinking_budget` path goes through `server/thinking.rs` and issues
-  **two** proxied calls to the same engine port (reasoning phase then answer
-  phase with `enable_thinking: false`).
+- The `thinking_budget` path is owned by the `server/thinking/` module
+  (`prepare_request` → `ThinkingContext`, per-engine `ThinkingAdapter`) and the
+  two-call orchestrator in `server/proxy.rs`: a reasoning phase capped to the
+  budget, then an answer phase with `enable_thinking: false`. Empty/native-reasoning
+  edge cases (plain-answer fallback, oMLX truncation-echo dedup) are handled there.
+  See `docs/architecture/ADR-007-thinking-pipeline.md`.
 - Streaming responses (`stream: true`) hold the semaphore permit for the
   full duration of the stream — that's why `max_concurrent_requests` caps
   *active inference*, not "request rate".

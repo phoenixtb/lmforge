@@ -176,6 +176,9 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     let original_max_tokens = thinking_ctx.original_max_tokens;
     let can_use_budget = thinking_ctx.can_use_budget;
     let inline_think = thinking_ctx.inline_think;
+    // oMLX native-reasoning models (reasoning_content field, not inline <think>)
+    // need the Fix #1 truncation-dedup on the streaming passthrough path.
+    let native_reasoning_dedup = thinking_ctx.is_native_reasoning && !inline_think;
 
     // oMLX only stops on the configured eos_token. Models whose chat template
     // ends the assistant turn with a different token (e.g. Phi-4's `<|end|>` vs
@@ -314,7 +317,9 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
                 .await
             }
             _ => {
-                // Plain passthrough (non-think, or non-oMLX engine)
+                // Plain passthrough (non-think, or non-orchestrator engine).
+                // Native-reasoning oMLX models route through the dedup proxy to
+                // strip the truncation echo (Fix #1); everything else streams raw.
                 let forwarded_body = match serde_json::to_vec(&body_value) {
                     Ok(b) => Bytes::from(b),
                     Err(e) => {
@@ -324,8 +329,13 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
                             .unwrap();
                     }
                 };
-                proxy::proxy_stream(&client, engine_port, "/v1/chat/completions", forwarded_body)
-                    .await
+                if native_reasoning_dedup {
+                    proxy::proxy_stream_dedup_native_reasoning(&client, engine_port, "/v1/chat/completions", forwarded_body)
+                        .await
+                } else {
+                    proxy::proxy_stream(&client, engine_port, "/v1/chat/completions", forwarded_body)
+                        .await
+                }
             }
         };
         match stream_result {

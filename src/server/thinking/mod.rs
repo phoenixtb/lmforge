@@ -32,6 +32,10 @@ pub struct ThinkingContext {
     /// (llama.cpp / SGLang). False when the engine uses a dedicated `reasoning_content`
     /// field (oMLX).
     pub inline_think: bool,
+    /// True when the model is a native-reasoning model (e.g. `phi4:reasoning`,
+    /// `qwen3:4b:thinking`). These emit reasoning in a single call and stay off the
+    /// orchestrator; on oMLX they need the Fix #1 truncation-dedup.
+    pub is_native_reasoning: bool,
 }
 
 /// Prepare a chat-completions body for thinking orchestration.
@@ -108,6 +112,7 @@ pub fn prepare_request(
         original_max_tokens,
         can_use_budget,
         inline_think,
+        is_native_reasoning,
     }
 }
 

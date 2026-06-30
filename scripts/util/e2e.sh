@@ -19,6 +19,8 @@
 #  Flags:
 #    --source local|release[:TAG]   Install source (default: infer from env, else release:latest)
 #    --inference | --no-inference   Run tests/multi_model_e2e.sh (default: on)
+#    --thinking | --no-thinking     Run think_bench.py --assert reasoning gate after
+#                                   inference (default: on). Validates ADR-007 fixes.
 #    --no-burst | --burst           Low-memory inference mode: skip parallel /
 #                                   co-resident probes, check all capabilities
 #                                   sequentially. Default: auto — burst when total
@@ -39,6 +41,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 SOURCE=""
 INFERENCE=1
+THINKING=1          # run the think_bench --assert regression gate after inference
 WITH_UI=""          # empty = auto (on)
 VERIFY_ASSETS=0
 KEEP_INSTALL=0
@@ -53,6 +56,8 @@ while (($#)); do
         --source=*)      SOURCE="${1#*=}" ;;
         --inference)     INFERENCE=1 ;;
         --no-inference)  INFERENCE=0 ;;
+        --thinking)      THINKING=1 ;;
+        --no-thinking)   THINKING=0 ;;
         --no-burst)      NO_BURST=1; BURST_EXPLICIT=1 ;;
         --burst)         NO_BURST=0; BURST_EXPLICIT=1 ;;
         --with-ui)       WITH_UI=1 ;;
@@ -132,7 +137,7 @@ fi
 # shellcheck source=../lib/e2e-lifecycle.sh
 source "$REPO_ROOT/scripts/lib/e2e-lifecycle.sh"
 
-echo "LMForge E2E — source=$SOURCE ui=$WITH_UI inference=$INFERENCE burst=$(( ! NO_BURST ))${RAM_AUTO} verify=$VERIFY_ASSETS keep=$KEEP_INSTALL on $E2E_OS/$E2E_ARCH"
+echo "LMForge E2E — source=$SOURCE ui=$WITH_UI inference=$INFERENCE thinking=$THINKING burst=$(( ! NO_BURST ))${RAM_AUTO} verify=$VERIFY_ASSETS keep=$KEEP_INSTALL on $E2E_OS/$E2E_ARCH"
 
 # ── Prime sudo for unattended native UI install (Linux) ──────────────────────
 # The Linux UI ships as a native package (.rpm/.deb); installing it needs root,
@@ -208,6 +213,7 @@ if (( INFERENCE )); then
     inf_args=()
     (( NO_BURST )) && inf_args+=(--no-burst)
     e2e_step "multi-model inference" e2e_inference ${inf_args[@]+"${inf_args[@]}"}
+    (( THINKING )) && e2e_step "thinking gate" e2e_thinking
 fi
 
 # ── Teardown (full purge incl. models, unless --keep-install) ────────────────
