@@ -135,7 +135,19 @@ curl http://localhost:11430/v1/chat/completions \
 
 ---
 
-### 7. Hardware-aware, zero-config engine selection
+### 7. Reasoning ("thinking") models
+
+**What:** First-class support for reasoning models (Qwen3, DeepSeek-R1, Phi-4-reasoning). Turn thinking on or off per request, cap how long the model reasons with a token budget, and stream the reasoning live — kept separate from the final answer.
+
+**Why it matters:** You get visible chain-of-thought for hard problems without it bleeding into the answer, plus a budget knob to trade reasoning depth for speed — the same controls the big cloud APIs expose, running entirely on your machine.
+
+**Try it:** add `"think": true` (optionally `"thinking_budget": 4096`) to a `/v1/chat/completions` request, or use the bundled Playground's thinking profile.
+
+> **Small note — blank replies on reasoning models.** Reasoning tokens share the answer's token budget. Some models always reason and need room to finish; with too small a `max_tokens` they can spend it all thinking and return an empty answer. LMForge auto-raises the budget floor for these models to prevent that — the same headroom approach OpenAI and Anthropic use. A deliberately tiny limit can still truncate, so prefer a larger `max_tokens` (or a non-reasoning model) when you want short replies.
+
+---
+
+### 8. Hardware-aware, zero-config engine selection
 
 **What:** On first run, LMForge profiles your CPU, GPU, VRAM, and drivers, then selects and installs the optimal engine and build (CUDA vs Vulkan vs MLX) — including choosing the correct CUDA runtime for your NVIDIA driver.
 
@@ -145,7 +157,7 @@ curl http://localhost:11430/v1/chat/completions \
 
 ---
 
-### 8. Flexible storage management
+### 9. Flexible storage management
 
 **What:** Choose where models are stored. Move your model library to another drive at any time (e.g., from `C:` to a roomy `D:` drive), with three clear options for existing models:
 - **Adopt** — point at an existing folder of models.
@@ -160,7 +172,7 @@ curl http://localhost:11430/v1/chat/completions \
 
 ---
 
-### 9. Reliable background service + instant restart
+### 10. Reliable background service + instant restart
 
 **What:** LMForge runs as a lightweight background service that starts at login and stays out of your way (no console windows, no clutter). Restarting the engine from the app is fast and reliable on every platform.
 
@@ -170,7 +182,7 @@ curl http://localhost:11430/v1/chat/completions \
 
 ---
 
-### 10. Built-in observability
+### 11. Built-in observability
 
 **What:** An **Observability** dashboard with request metrics (throughput, latency, error rate), live log streaming, and a Prometheus-compatible `/metrics` endpoint.
 
@@ -180,7 +192,7 @@ curl http://localhost:11430/v1/chat/completions \
 
 ---
 
-### 11. Secure by default
+### 12. Secure by default
 
 **What:** LMForge binds to `localhost` only by default. To share it on a network, you explicitly enable access with an API key and/or trusted network ranges (CIDR allow-lists).
 

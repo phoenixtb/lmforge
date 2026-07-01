@@ -56,7 +56,8 @@ Two concrete strategies:
 - One OS process per loaded model.
 - LMForge manages VRAM admission (`evict_for_memory`), LRU TTL sweep, crash reaping,
   speculative-decoding S-2.8 retry, calibration feedback.
-- Used by: llama.cpp, SGLang, vLLM, TabbyAPI.
+- Used by: llama.cpp (Linux/Windows production default), vLLM, TabbyAPI.
+  SGLang reuses this path when explicitly installed (`tier = experimental`).
 
 ### `SharedServerResidency` (new, oMLX)
 

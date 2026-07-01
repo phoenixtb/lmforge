@@ -89,6 +89,10 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
     let model_caps = index.get(&model_id).map(|e| &e.capabilities);
     thinking::apply_think_for_engine(&mut openai_req, &state.engine_config.id, model_caps);
 
+    // Fix #5c: floor max_tokens for native-reasoning models so reasoning can't
+    // starve the answer (mirrors the OpenAI path's prepare_request).
+    thinking::apply_native_reasoning_floor(&mut openai_req, model_caps);
+
     if let Some(entry) = index.get(&model_id)
         && let Some(dir_name) = std::path::Path::new(&entry.path).file_name()
         && let Some(obj) = openai_req.as_object_mut()
@@ -108,13 +112,28 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
     let client = proxy::build_proxy_client();
 
     let thinking_adapter = thinking::adapter_for_engine(&state.engine_config.id);
+    // oMLX native-reasoning models (dedicated reasoning_content field, not inline
+    // <think>) re-emit the whole reasoning as a single content delta on
+    // finish=length. Route them through the dedup proxy so the echo is stripped
+    // here too (Fix #5a parity with the OpenAI path).
+    let native_reasoning_dedup =
+        model_caps.map(|c| c.native_reasoning).unwrap_or(false) && !thinking_adapter.inline_think();
 
     let response = if is_stream {
-        // For engines that support the orchestrator but don't embed reasoning as
-        // inline <think> tags (oMLX), run the SSE rewriter. All other combinations
-        // use plain passthrough — the Ollama path doesn't use the two-call budget
-        // orchestrator (that's OpenAI-path only).
-        let openai_stream = if has_think
+        // Streaming routing (the Ollama path does NOT use the two-call budget
+        // orchestrator — that's OpenAI-path only):
+        //   1. native-reasoning oMLX → dedup proxy (strip truncation echo, Fix #5a)
+        //   2. think + orchestrator engine + non-inline (oMLX) → SSE think rewriter
+        //   3. everything else → plain passthrough
+        let openai_stream = if native_reasoning_dedup {
+            proxy::proxy_stream_dedup_native_reasoning(
+                &client,
+                engine_port,
+                "/v1/chat/completions",
+                Bytes::from(openai_body),
+            )
+            .await
+        } else if has_think
             && thinking_adapter.supports_orchestrator()
             && !thinking_adapter.inline_think()
         {

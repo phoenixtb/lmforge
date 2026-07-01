@@ -7,9 +7,9 @@
 #  and multi-model inference.
 #
 #  Full pre-release cycle (default for --source local):
-#    full clean → build from current code → install locally (core + UI) →
-#    install lifecycle → multi-model inference → full purge (incl. models),
-#    unless --keep-install.
+#    clean (keep models) → build from current code → install locally (core + UI) →
+#    install lifecycle → multi-model inference → uninstall (keep models),
+#    unless --keep-install. Models are preserved by default; --purge-models wipes them.
 #
 #  Usage:
 #    scripts/util/e2e.sh --source local                 # full pre-release cycle
@@ -30,10 +30,13 @@
 #    --verify-assets                Release only: check published assets + scripts match this checkout
 #    --no-build                     Local only: reuse target/release binary (skip cargo build)
 #    --keep-install                 Skip teardown — leave core (+UI) + models installed
+#    --purge-models                 Wipe ~/.lmforge/models on clean AND teardown
+#                                   (default: models are preserved across runs)
 #    -h | --help
 #
-#  Teardown is a FULL purge (binary, service, UI, ~/.lmforge incl. models) unless
-#  --keep-install. Exit code 0 = all steps passed.
+#  Teardown removes the binary/service/UI/autostart but KEEPS ~/.lmforge/models
+#  unless --purge-models. --keep-install skips teardown entirely.
+#  Exit code 0 = all steps passed.
 # =============================================================================
 set -uo pipefail
 
@@ -45,6 +48,7 @@ THINKING=1          # run the think_bench --assert regression gate after inferen
 WITH_UI=""          # empty = auto (on)
 VERIFY_ASSETS=0
 KEEP_INSTALL=0
+PURGE_MODELS=0      # default: preserve ~/.lmforge/models across runs (avoid re-download)
 DO_BUILD=1
 NO_BURST="${NO_BURST:-0}"
 BURST_EXPLICIT=0     # set when the user passes --burst/--no-burst (disables RAM auto-detect)
@@ -65,6 +69,7 @@ while (($#)); do
         --verify-assets) VERIFY_ASSETS=1 ;;
         --no-build)      DO_BUILD=0 ;;
         --keep-install)  KEEP_INSTALL=1 ;;
+        --purge-models)  PURGE_MODELS=1 ;;
         -h|--help)       sed -n '2,/^# ===/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown flag: $1 (try --help)" >&2; exit 1 ;;
     esac
@@ -168,8 +173,14 @@ if (( VERIFY_ASSETS )); then
     fi
 fi
 
-# ── Full clean slate (any prior install: git script, dev symlink, …) ─────────
-e2e_step "full clean"           e2e_full_clean
+# ── Clean slate (any prior install: git script, dev symlink, …) ──────────────
+# Default preserves ~/.lmforge/models so local iteration doesn't re-download GBs;
+# --purge-models opts into a full wipe (models + config).
+if (( PURGE_MODELS )); then
+    e2e_step "full clean (incl. models)" e2e_full_clean
+else
+    e2e_step "clean (keep models)"       e2e_preclean
+fi
 
 # ── Build from current source (local only) ───────────────────────────────────
 if [[ "$KIND" == "local" && $DO_BUILD -eq 1 ]]; then
@@ -216,15 +227,20 @@ if (( INFERENCE )); then
     (( THINKING )) && e2e_step "thinking gate" e2e_thinking
 fi
 
-# ── Teardown (full purge incl. models, unless --keep-install) ────────────────
+# ── Teardown (removes install; models kept unless --purge-models) ────────────
 if (( ! KEEP_INSTALL )); then
     (( WITH_UI )) && e2e_step "uninstall-ui" e2e_uninstall_ui
-    export E2E_PURGE=1
-    e2e_step "uninstall-core (purge)" e2e_uninstall_core
+    if (( PURGE_MODELS )); then
+        export E2E_PURGE=1
+        e2e_step "uninstall-core (purge)" e2e_uninstall_core
+    else
+        export E2E_PURGE=0
+        e2e_step "uninstall-core (keep models)" e2e_uninstall_core
+    fi
     e2e_step "binary removed"     e2e_binary_removed
     e2e_step "daemon down"        e2e_daemon_down
     e2e_step "autostart removed"  e2e_autostart_removed
-    e2e_step "data/models removed" e2e_data_removed
+    (( PURGE_MODELS )) && e2e_step "data/models removed" e2e_data_removed
 else
     echo ""
     echo "  --keep-install: leaving core (+UI) + models in place."

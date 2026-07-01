@@ -34,7 +34,9 @@ pub struct ThinkingContext {
     pub inline_think: bool,
     /// True when the model is a native-reasoning model (e.g. `phi4:reasoning`,
     /// `qwen3:4b:thinking`). These emit reasoning in a single call and stay off the
-    /// orchestrator; on oMLX they need the Fix #1 truncation-dedup.
+    /// orchestrator; on oMLX they need the Fix #1 truncation-dedup, and they get a
+    /// `max_tokens` floor ([`NATIVE_REASONING_MIN_TOKENS`]) so reasoning cannot
+    /// starve the answer.
     pub is_native_reasoning: bool,
 }
 
@@ -95,6 +97,16 @@ pub fn prepare_request(
     let is_thinking_model = model_caps.map(|c| c.thinking).unwrap_or(false);
     let is_native_reasoning = model_caps.map(|c| c.native_reasoning).unwrap_or(false);
 
+    // 5b. Native-reasoning budget floor. These models ignore `enable_thinking`
+    //     and cannot be bounded by the two-call orchestrator, so a small
+    //     `max_tokens` lets reasoning consume the whole budget and the answer
+    //     never gets emitted (finish=length, empty content). Guarantee headroom
+    //     instead — the industry-standard remedy. Floor only (never lowers a
+    //     larger client value). Applies regardless of think on/off, since these
+    //     models reason in both modes.
+    let effective_max_tokens =
+        apply_native_reasoning_budget_floor(body, is_native_reasoning, original_max_tokens);
+
     let can_use_budget =
         has_think && supports_orchestrator && is_thinking_model && !is_native_reasoning;
 
@@ -109,11 +121,70 @@ pub fn prepare_request(
         has_think,
         thinking_budget,
         stream_reasoning_deltas,
-        original_max_tokens,
+        original_max_tokens: effective_max_tokens,
         can_use_budget,
         inline_think,
         is_native_reasoning,
     }
+}
+
+/// Minimum `max_tokens` floor applied to native-reasoning models.
+///
+/// Native-reasoning models (e.g. `phi4:reasoning`, `qwen3:Nb:thinking`) ignore
+/// the `enable_thinking` chat-template flag, so the two-call budget orchestrator
+/// cannot bound their reasoning. With a small `max_tokens` they spend the entire
+/// budget thinking and emit no answer (`finish=length`, empty `content`) — the
+/// blank-reply symptom.
+///
+/// The only robust remedy — and the one the entire industry uses — is to
+/// guarantee headroom for the answer rather than recover after the fact:
+///   • OpenAI: reserve ≥25k tokens for o-series reasoning + output.
+///   • Anthropic: enforce `max_tokens > budget_tokens` (validation error).
+///   • vLLM/llama.cpp/Qwen docs: publish per-task `max_tokens` minimums.
+/// No provider issues a second call to recover a truncated answer.
+///
+/// 4096 covers observed reasoning (~700–1200 tok) plus a full answer with margin.
+pub const NATIVE_REASONING_MIN_TOKENS: u32 = 4096;
+
+/// Apply the native-reasoning `max_tokens` floor to an already-translated body
+/// for callers that don't run the full [`prepare_request`] orchestration (e.g.
+/// the Ollama `/api/chat` path). Reads `max_tokens` from `body` (default 2048).
+pub fn apply_native_reasoning_floor(
+    body: &mut serde_json::Value,
+    model_caps: Option<&ModelCapabilities>,
+) {
+    let is_native_reasoning = model_caps.map(|c| c.native_reasoning).unwrap_or(false);
+    let current = body
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(2048)
+        .min(u32::MAX as u64) as u32;
+    apply_native_reasoning_budget_floor(body, is_native_reasoning, current);
+}
+
+/// Raise `max_tokens` to [`NATIVE_REASONING_MIN_TOKENS`] for native-reasoning
+/// models so reasoning cannot starve the answer. Floor only — a larger client
+/// value is never lowered. Returns the effective `max_tokens` after the floor.
+fn apply_native_reasoning_budget_floor(
+    body: &mut serde_json::Value,
+    is_native_reasoning: bool,
+    current_max_tokens: u32,
+) -> u32 {
+    if !is_native_reasoning || current_max_tokens >= NATIVE_REASONING_MIN_TOKENS {
+        return current_max_tokens;
+    }
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert(
+            "max_tokens".to_string(),
+            serde_json::Value::from(NATIVE_REASONING_MIN_TOKENS),
+        );
+    }
+    warn!(
+        client_max_tokens = current_max_tokens,
+        floored_max_tokens = NATIVE_REASONING_MIN_TOKENS,
+        "native-reasoning model: raised max_tokens to floor to avoid truncated-to-blank reply"
+    );
+    NATIVE_REASONING_MIN_TOKENS
 }
 
 /// Default reasoning-phase token cap applied when a client requests thinking
@@ -304,7 +375,14 @@ pub fn request_has_think(body: &serde_json::Value) -> bool {
 /// and causes non-deterministic infinite loops. Confirmed by live engine testing:
 ///   • `enable_thinking: true`  → infinite loop — NEVER send
 ///   • `enable_thinking: false` → 0 reasoning tokens, terminates cleanly ✓
-///   • no flag                  → natural Qwen3 reasoning, budget enforced by weights ✓
+///   • no flag                  → natural (template-default) reasoning — unbounded on
+///                                template-default-thinking Qwen3, causing truncated
+///                                reasoning echoed as answer / blanks
+///
+/// Effective intent → oMLX action (thinking-capable models):
+///   • `Some(false)` → `enable_thinking:false` (suppress)
+///   • `Some(true)`  → omit flag (natural reasoning; only bounded path is the orchestrator)
+///   • `None`        → `enable_thinking:false` (Fix #3c parity — thinking is opt-in)
 ///
 /// The `<nothink>` prefix approach was also tested empirically and does NOT work —
 /// oMLX renders the partial assistant message as a completed turn then generates a
@@ -426,9 +504,9 @@ pub fn apply_think_for_engine(
                         }
                     }
                 }
-                Some(true) | None => {
-                    // think:true or absent → omit enable_thinking flag; natural reasoning applies.
-                    // enable_thinking:true is NEVER forwarded to oMLX.
+                Some(true) => {
+                    // think:true → omit enable_thinking flag; natural reasoning applies.
+                    // enable_thinking:true is NEVER forwarded to oMLX (infinite-loop risk).
                     //
                     // Advisory: Qwen3 models require temperature >= 0.6 in thinking mode.
                     // Low temperature (< 0.6) causes deterministic repetition loops in reasoning.
@@ -451,6 +529,32 @@ pub fn apply_think_for_engine(
                                 "temperature below recommended minimum for Qwen3 thinking mode — \
                                      repetition loops are likely. Set llm_thinking_temperature >= 0.6 \
                                      in the calling client. LMForge will NOT override the client value."
+                            );
+                        }
+                    }
+                }
+                None => {
+                    // Fix #3c (oMLX parity): no think intent from any source + thinking-capable
+                    // model. Several Qwen chat templates default enable_thinking=true, so with
+                    // no flag the model reasons unprompted, truncates at max_tokens, and oMLX
+                    // echoes the whole reasoning as the answer (reasoning==content dup) or emits
+                    // a blank. `enable_thinking:false` is empirically confirmed to suppress
+                    // reasoning cleanly on oMLX (0 reasoning tokens), so make thinking opt-in —
+                    // matching the llamacpp/sglang path. Native-reasoning models ignore the flag
+                    // (bounded instead by the budget floor + echo dedup), so this is a safe no-op
+                    // there. enable_thinking:true is NEVER forwarded to oMLX.
+                    let is_thinking = model_caps.map(|c| c.thinking).unwrap_or(false);
+                    if is_thinking && let Some(obj) = body.as_object_mut() {
+                        debug!(
+                            "Fix #3c (oMLX): no think intent on thinking model — injecting enable_thinking:false"
+                        );
+                        let kwargs = obj
+                            .entry("chat_template_kwargs")
+                            .or_insert_with(|| serde_json::json!({}));
+                        if let Some(map) = kwargs.as_object_mut() {
+                            map.insert(
+                                "enable_thinking".to_string(),
+                                serde_json::Value::Bool(false),
                             );
                         }
                     }
@@ -709,16 +813,27 @@ mod tests {
         );
     }
 
-    // ── oMLX case 5: no think field → no flag ────────────────────────────────
+    // ── oMLX case 5: no think field ──────────────────────────────────────────
+    // Fix #3c parity: thinking-capable model → enable_thinking:false (opt-in);
+    // non-thinking model → flag is irrelevant, so none is added.
 
     #[test]
-    fn test_omlx_no_think_field_no_flag() {
-        for caps in [Some(thinking_caps()), Some(non_thinking_caps())] {
-            let mut body = serde_json::json!({"model": "test", "messages": []});
-            apply_think_for_engine(&mut body, "omlx", caps.as_ref());
-            assert!(body.get("think").is_none());
-            assert!(body.get("chat_template_kwargs").is_none());
-        }
+    fn test_omlx_no_think_field_thinking_model_suppresses() {
+        let mut body = serde_json::json!({"model": "test", "messages": []});
+        apply_think_for_engine(&mut body, "omlx", Some(&thinking_caps()));
+        assert!(body.get("think").is_none());
+        assert_eq!(
+            body["chat_template_kwargs"]["enable_thinking"], false,
+            "Fix #3c: no think intent on thinking model must inject enable_thinking:false"
+        );
+    }
+
+    #[test]
+    fn test_omlx_no_think_field_non_thinking_model_no_flag() {
+        let mut body = serde_json::json!({"model": "test", "messages": []});
+        apply_think_for_engine(&mut body, "omlx", Some(&non_thinking_caps()));
+        assert!(body.get("think").is_none());
+        assert!(body.get("chat_template_kwargs").is_none());
     }
 
     // ── oMLX case 6: direct kwargs.enable_thinking:true → strip (dangerous) ──
@@ -892,17 +1007,18 @@ mod tests {
     }
 
     #[test]
-    fn test_omlx_no_think_intent_thinking_model_no_flag() {
-        // oMLX with no flag → natural reasoning (model-weights governed).
-        // Fix #3 does not apply to oMLX (no HF template defaulting risk).
+    fn test_omlx_no_think_intent_thinking_model_injects_false() {
+        // Fix #3c parity: oMLX with no think intent on a thinking-capable model
+        // must inject enable_thinking:false so template-default-thinking models
+        // don't reason unprompted, truncate, and echo reasoning as the answer.
         let mut body = serde_json::json!({
             "model": "test",
             "messages": [{"role": "user", "content": "hi"}]
         });
         apply_think_for_engine(&mut body, "omlx", Some(&thinking_caps()));
-        assert!(
-            body.get("chat_template_kwargs").is_none(),
-            "oMLX no-think-intent must NOT inject enable_thinking:false (natural reasoning is safe)"
+        assert_eq!(
+            body["chat_template_kwargs"]["enable_thinking"], false,
+            "oMLX no-think-intent on a thinking model must inject enable_thinking:false (Fix #3c)"
         );
     }
 
@@ -1189,5 +1305,52 @@ mod tests {
     fn test_extract_stream_reasoning_deltas_wrong_type() {
         let body = serde_json::json!({"stream_reasoning_deltas": "true"});
         assert!(!extract_stream_reasoning_deltas(&body));
+    }
+
+    // ── native-reasoning budget floor ─────────────────────────────────────────
+
+    #[test]
+    fn test_native_reasoning_floor_bumps_small_max_tokens() {
+        let mut body = serde_json::json!({"model": "x", "messages": [], "max_tokens": 1024});
+        let eff = apply_native_reasoning_budget_floor(&mut body, true, 1024);
+        assert_eq!(eff, NATIVE_REASONING_MIN_TOKENS);
+        assert_eq!(body["max_tokens"], NATIVE_REASONING_MIN_TOKENS);
+    }
+
+    #[test]
+    fn test_native_reasoning_floor_never_lowers_larger_value() {
+        let mut body = serde_json::json!({"model": "x", "messages": [], "max_tokens": 8192});
+        let eff = apply_native_reasoning_budget_floor(&mut body, true, 8192);
+        assert_eq!(eff, 8192);
+        assert_eq!(body["max_tokens"], 8192, "client value above floor must be preserved");
+    }
+
+    #[test]
+    fn test_native_reasoning_floor_noop_for_non_native() {
+        let mut body = serde_json::json!({"model": "x", "messages": [], "max_tokens": 256});
+        let eff = apply_native_reasoning_budget_floor(&mut body, false, 256);
+        assert_eq!(eff, 256);
+        assert_eq!(body["max_tokens"], 256, "non-native models must not be floored");
+    }
+
+    #[test]
+    fn test_prepare_request_floors_native_reasoning() {
+        let caps = ModelCapabilities {
+            chat: true,
+            thinking: true,
+            native_reasoning: true,
+            ..Default::default()
+        };
+        // think:false (off mode) — floor must still apply since these models reason regardless.
+        let mut body = serde_json::json!({
+            "model": "phi4:reasoning",
+            "messages": [{"role": "user", "content": "hi"}],
+            "think": false,
+            "max_tokens": 1024
+        });
+        let ctx = prepare_request(&mut body, "omlx", Some(&caps));
+        assert_eq!(ctx.original_max_tokens, NATIVE_REASONING_MIN_TOKENS);
+        assert_eq!(body["max_tokens"], NATIVE_REASONING_MIN_TOKENS);
+        assert!(ctx.is_native_reasoning);
     }
 }

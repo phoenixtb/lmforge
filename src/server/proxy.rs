@@ -121,6 +121,13 @@ pub fn normalise_chat_response(text: String) -> String {
 /// of oMLX's truncation echo.
 const NATIVE_REASONING_DEDUP_MIN_CHARS: usize = 40;
 
+/// Per-chunk idle timeout for engine SSE streams. If the engine stops sending
+/// bytes for this long mid-stream (crash, stall — e.g. oMLX truncating its HTTP
+/// response under load), stop waiting and close the stream instead of hanging
+/// until the client gives up. Applies to the plain passthrough, and Call-1/Call-2
+/// of the thinking orchestrator.
+const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// True when `content` is the oMLX truncation echo of `reasoning` (Fix #1):
 /// a substantial, exact verbatim copy of the whole reasoning. Length-guarded to
 /// avoid false positives on short strings; both are compared trimmed.
@@ -157,15 +164,32 @@ pub async fn proxy_stream(
         return Err((status, text));
     }
 
-    // Stream the response body through
-    let stream = resp.bytes_stream().map(|chunk| {
-        chunk.map_err(|e| {
-            error!(error = %e, "Error reading stream from engine");
-            std::io::Error::other(e)
-        })
-    });
+    // Stream the response body through, bounded by a per-chunk idle timeout so a
+    // stalled/crashed engine mid-stream closes the connection fast instead of
+    // hanging the caller indefinitely.
+    let mut upstream = resp.bytes_stream();
+    let out = stream! {
+        loop {
+            match tokio::time::timeout(STREAM_IDLE_TIMEOUT, upstream.next()).await {
+                Ok(Some(Ok(bytes))) => yield Ok::<Bytes, std::io::Error>(bytes),
+                Ok(Some(Err(e))) => {
+                    error!(error = %e, "Error reading stream from engine");
+                    yield Err(std::io::Error::other(e));
+                    break;
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    warn!(
+                        idle_timeout_secs = STREAM_IDLE_TIMEOUT.as_secs(),
+                        "engine stream idle-timeout — closing passthrough"
+                    );
+                    break;
+                }
+            }
+        }
+    };
 
-    Ok(Body::from_stream(stream))
+    Ok(Body::from_stream(out))
 }
 
 /// For non-streaming callers that want thinking support:
@@ -608,6 +632,25 @@ fn build_plain_answer_body(original_body: &serde_json::Value, max_tokens: u32) -
     body
 }
 
+/// Decide whether Call-1 already produced the final answer (so Call-2 and the
+/// empty-guard are skipped).
+///
+/// - `Some("length")` → budget exhausted; the answer (if any) is incomplete →
+///   run Call-2 / guards. Returns `false`.
+/// - `Some(_)` (e.g. `"stop"`) → clean finish; Call-1 content is the answer →
+///   `true`.
+/// - `None` → engine omitted the marker. If content was streamed, treat it as a
+///   sloppy-but-complete natural finish (`true`); if NOT, the stream ended/aborted
+///   mid-reasoning with no answer → drop to the empty-guard path (`false`) so we
+///   recover an answer instead of emitting a silent blank (Fix #2 invariant).
+fn call1_finished_with_answer(finish_reason: Option<&str>, has_content: bool) -> bool {
+    match finish_reason {
+        Some("length") => false,
+        Some(_) => true,
+        None => has_content,
+    }
+}
+
 /// Consume Call 1's SSE stream:
 ///   - Accumulates `delta.reasoning_content` into a `reasoning_buf` string.
 ///   - If `stream_reasoning_deltas` is true AND a `tx` sender is provided,
@@ -657,7 +700,25 @@ async fn stream_call1_accumulate(
         ))
     };
 
-    while let Some(chunk) = stream.next().await {
+    // Defense-in-depth limits. Call-1 is token-capped by max_tokens=budget, but
+    // guard against an engine that ignores it (runaway loop) or stalls (dead
+    // connection) — neither should hang or balloon the orchestrator.
+    const CALL1_MAX_DATA_LINES: usize = 16384;
+    const CALL1_MAX_TOTAL_BYTES: usize = 1024 * 1024; // 1 MB reasoning+content
+    let mut data_line_count: usize = 0;
+
+    'outer: loop {
+        let next = match tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()).await {
+            Ok(n) => n,
+            Err(_) => {
+                warn!(
+                    idle_timeout_secs = STREAM_IDLE_TIMEOUT.as_secs(),
+                    "Call-1 stream idle-timeout — stopping accumulation"
+                );
+                break;
+            }
+        };
+        let Some(chunk) = next else { break };
         let bytes = match chunk {
             Ok(b) => b,
             Err(e) => {
@@ -677,7 +738,24 @@ async fn stream_call1_accumulate(
             };
 
             if data == "[DONE]" {
-                break;
+                break 'outer;
+            }
+
+            // Safety cap: stop on runaway generation (engine ignoring the budget).
+            data_line_count += 1;
+            if data_line_count > CALL1_MAX_DATA_LINES
+                || reasoning_buf.len() + content_buf.len() > CALL1_MAX_TOTAL_BYTES
+            {
+                warn!(
+                    data_line_count,
+                    reasoning_len = reasoning_buf.len(),
+                    content_len = content_buf.len(),
+                    "Call-1 safety limit reached — stopping accumulation (possible runaway reasoning)"
+                );
+                // Treat as budget exhaustion so the orchestrator runs Call-2 and
+                // still produces an answer instead of hanging.
+                finish_reason = Some("length".to_string());
+                break 'outer;
             }
 
             let Ok(val) = serde_json::from_str::<serde_json::Value>(data) else {
@@ -908,8 +986,13 @@ pub async fn proxy_stream_with_thinking_budget(
             "Call-1 accumulation complete"
         );
 
-        // 3. Natural finish — model stopped before exhausting the budget
-        if finish_reason.as_deref() != Some("length") {
+        // 3. Natural finish — Call-1 already produced the answer. Covers a clean
+        //    finish (finish_reason != "length") and the sloppy-but-complete case
+        //    where the engine omitted finish_reason but streamed content. A missing
+        //    marker with NO content is abnormal (mid-stream abort / engine error)
+        //    and drops to the empty-guard path below so we recover an answer rather
+        //    than emit a silent blank.
+        if call1_finished_with_answer(finish_reason.as_deref(), !content_buf_call1.is_empty()) {
             // Content was already streamed live if stream_reasoning_deltas=true.
             // If not, emit the buffered content now.
             if !stream_reasoning_deltas && !content_buf_call1.is_empty() {
@@ -925,11 +1008,14 @@ pub async fn proxy_stream_with_thinking_budget(
                 });
                 yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default())));
             }
+            // Normalise a missing marker to "stop" so clients never see a null
+            // finish_reason on the terminal chunk.
+            let fr_out = finish_reason.clone().unwrap_or_else(|| "stop".to_string());
             let final_chunk = serde_json::json!({
                 "id": completion_id,
                 "object": "chat.completion.chunk",
                 "model": model_name,
-                "choices": [{ "index": 0, "delta": {}, "finish_reason": finish_reason }]
+                "choices": [{ "index": 0, "delta": {}, "finish_reason": fr_out }]
             });
             yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&final_chunk).unwrap_or_default())));
             yield Ok(Bytes::from("data: [DONE]\n\n"));
@@ -1042,7 +1128,18 @@ pub async fn proxy_stream_with_thinking_budget(
         // silent empty stream when even the fallback yields nothing.
         let mut saw_content = false;
 
-        while let Some(chunk) = call2_stream.next().await {
+        loop {
+            let next = match tokio::time::timeout(STREAM_IDLE_TIMEOUT, call2_stream.next()).await {
+                Ok(n) => n,
+                Err(_) => {
+                    warn!(
+                        idle_timeout_secs = STREAM_IDLE_TIMEOUT.as_secs(),
+                        "Call-2 stream idle-timeout — stopping (engine stalled)"
+                    );
+                    break;
+                }
+            };
+            let Some(chunk) = next else { break };
             let bytes = match chunk {
                 Ok(b) => b,
                 Err(e) => {
@@ -1612,6 +1709,32 @@ mod tests {
     fn test_is_reasoning_echo_empty_reasoning() {
         assert!(!is_reasoning_echo("anything", ""));
         assert!(!is_reasoning_echo("", ""));
+    }
+
+    // ── Call-1 finish routing (mid-stream abort → no silent blank) ───────────
+
+    #[test]
+    fn test_call1_finished_clean_stop_is_answer() {
+        // Clean finish → Call-1 content is the answer, regardless of content.
+        assert!(call1_finished_with_answer(Some("stop"), true));
+        assert!(call1_finished_with_answer(Some("stop"), false));
+        assert!(call1_finished_with_answer(Some("eos"), false));
+    }
+
+    #[test]
+    fn test_call1_length_is_not_final_answer() {
+        // Budget exhausted → must run Call-2 / guards even if some content leaked.
+        assert!(!call1_finished_with_answer(Some("length"), true));
+        assert!(!call1_finished_with_answer(Some("length"), false));
+    }
+
+    #[test]
+    fn test_call1_missing_marker_routes_on_content() {
+        // Engine omitted finish_reason: complete iff content was produced.
+        assert!(call1_finished_with_answer(None, true));
+        // No marker AND no content = abnormal abort → drop to empty-guard (recover
+        // an answer) instead of emitting a silent blank.
+        assert!(!call1_finished_with_answer(None, false));
     }
 
     // ── ThinkSplitter SSE rewriter tests ─────────────────────────────────────

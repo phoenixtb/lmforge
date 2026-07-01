@@ -619,12 +619,22 @@ gap (typically 5–15 seconds for 4B models with a 4096-token budget). Clients c
 this to show a "Generating answer…" indicator. Standard OpenAI clients ignore the
 `lmforge` extension field — it is fully backward-compatible.
 
-> **Note:** The two-call orchestrator runs on **all** thinking engines — oMLX
-> (native `reasoning_content`) and llama.cpp / SGLang (inline `<think>` tags, which
-> the daemon splits into reasoning vs. answer). Running it everywhere guarantees an
-> answer phase even when the reasoning budget is exhausted, so the engine can't
-> return a blank answer (the prior single-call llama.cpp path could burn `max_tokens`
-> inside `<think>` and stream nothing).
+> **Note:** The two-call orchestrator runs on the thinking engines that respond to
+> `enable_thinking` — oMLX (native `reasoning_content`) and llama.cpp / SGLang
+> (inline `<think>` tags, which the daemon splits into reasoning vs. answer). It
+> guarantees an answer phase even when the reasoning budget is exhausted, so these
+> models can't return a blank answer (the prior single-call llama.cpp path could
+> burn `max_tokens` inside `<think>` and stream nothing).
+>
+> **Blank-reply caveat — native-reasoning models.** Models that *always* reason and
+> ignore `enable_thinking` (`phi4:reasoning`, `qwen3:Nb:thinking`, DeepSeek-R1
+> distills) stay on a single call — the orchestrator's `enable_thinking:false`
+> toggle is a no-op for them. With a small `max_tokens` they can spend the whole
+> budget thinking and emit no answer (`finish_reason:length`, empty content) — the
+> same way OpenAI's o-series and Anthropic's extended-thinking do. LMForge mitigates
+> this by flooring `max_tokens` to **4096** for these models (industry-standard
+> headroom; never lowers a larger value). A deliberately tiny `max_tokens` can still
+> truncate — that's inherent to reasoning models, not a recoverable error.
 
 #### Sampling (avoid reasoning loops)
 

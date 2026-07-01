@@ -13,10 +13,11 @@ The same three diagrams are exported for use in external documentation
 ## 1. System architecture
 
 The daemon is a single Rust binary that hosts an `axum` HTTP server, an
-`EngineManager` that spawns and supervises **engine subprocesses** (one per
-loaded model), and a `ModelIndex` over the on-disk model store. Clients of
-every flavour speak HTTP to the daemon on `127.0.0.1:11430` — the daemon
-proxies their requests to the appropriate engine subprocess.
+`EngineManager` that supervises inference backends via a **residency strategy**
+(ADR-006), and a `ModelIndex` over the on-disk model store. Clients of every
+flavour speak HTTP to the daemon on `127.0.0.1:11430` — the daemon proxies
+to the active engine (one shared oMLX server on macOS, or one `llama-server`
+process per loaded model on Linux/Windows).
 
 ```mermaid
 flowchart LR
@@ -60,11 +61,15 @@ flowchart LR
         end
     end
 
-    %% ── Engine subprocesses ──
-    subgraph Engines["Engine subprocesses (one process per loaded model, proxied via reqwest)"]
-        OMLX["oMLX server<br/>(Metal / MLX)<br/>Apple Silicon"]
-        SGL["SGLang server<br/>(CUDA)<br/>Linux NVIDIA"]
-        LCP["llama-server<br/>(CPU + CUDA)<br/>universal fallback"]
+    %% ── Engine backends (ADR-006 residency) ──
+    subgraph Engines["Engine backends (proxied via reqwest)"]
+        direction TB
+        subgraph SharedServer["SharedServer — oMLX · macOS default"]
+            OMLX["omlx serve<br/>one process · all models<br/>native in-process LRU"]
+        end
+        subgraph ProcessPool["ProcessPool — llama.cpp · Linux/Windows default"]
+            LCP["llama-server<br/>one process per loaded model<br/>LMForge LRU + VRAM admission"]
+        end
     end
 
     %% ── Storage ──
@@ -93,14 +98,18 @@ flowchart LR
     classDef store fill:#0b0d14,stroke:#5c6370,color:#9ca3b0
     classDef client fill:#0b0d14,stroke:#a78bfa,color:#f0f0f3
     class UI,IDE,APP,DOC client
-    class OMLX,SGL,LCP engine
+    class OMLX,LCP engine
     class CFG,MDLS,MIDX,LOGS,PIDS store
 ```
 
 ### Key invariants
 
-- **One engine subprocess per loaded model.** Each gets a unique TCP port
-  (`base_engine_port` + slot index). The daemon proxies HTTP to it.
+- **Residency strategy is engine-specific (ADR-006).** oMLX uses **SharedServer**
+  (one `omlx serve`, all models on one port; oMLX owns LRU). llama.cpp uses
+  **ProcessPool** (one `llama-server` per loaded model, each on its own port;
+  LMForge owns admission and LRU). See [ADR-008](./ADR-008-pool-residency.md).
+- **SGLang is not first-class.** It remains in the registry as experimental
+  opt-in only; production paths are oMLX (macOS) and llama.cpp (Linux/Windows).
 - **No model is preloaded.** Cold-load (3–60 s) is paid on first request,
   unless the operator opted into `[orchestrator] auto_load = [...]` or a
   consumer explicitly warmed via `POST /lf/model/switch`.
@@ -183,6 +192,16 @@ sequenceDiagram
   budget, then an answer phase with `enable_thinking: false`. Empty/native-reasoning
   edge cases (plain-answer fallback, oMLX truncation-echo dedup) are handled there.
   See `docs/architecture/ADR-007-thinking-pipeline.md`.
+- **Blank-reply caveat (reasoning models).** Reasoning tokens share the response's
+  `max_tokens` budget. A *native-reasoning* model (`phi4:reasoning`,
+  `qwen3:Nb:thinking` — those that ignore `enable_thinking`) can spend the whole
+  budget thinking and emit no answer (`finish=length`, empty `content`). The
+  two-call orchestrator cannot bound these models, so LMForge instead floors
+  `max_tokens` to `NATIVE_REASONING_MIN_TOKENS` (4096) for them — the
+  industry-standard headroom remedy (OpenAI reserves ≥25k; Anthropic enforces
+  `max_tokens > budget_tokens`). A pathologically small explicit `max_tokens` on
+  such a model can still truncate; this is an inherent property of reasoning models,
+  not a recoverable error (no provider does a second call to recover it).
 - Streaming responses (`stream: true`) hold the semaphore permit for the
   full duration of the stream — that's why `max_concurrent_requests` caps
   *active inference*, not "request rate".
@@ -250,9 +269,11 @@ stateDiagram-v2
     Pull → discovery requires a server restart (oMLX scans `--model-dir` once at
     startup); `ensure_model` detects newly-pulled models and restarts automatically.
     Set `LMFORGE_OMLX_SHARED=0` to revert to `ProcessPool` for debugging.
-  - **`ProcessPool` (llama.cpp / SGLang / all non-oMLX):** one OS process per loaded model,
-    each on its own port. LMForge owns admission (VRAM budgeting, `evict_for_memory`),
-    LRU TTL sweep, and crash reaping. This is the battle-tested path, unchanged.
+  - **`ProcessPool` (llama.cpp and all other non-oMLX engines):** one OS process per
+    loaded model, each on its own port. LMForge owns admission (VRAM budgeting,
+    `evict_for_memory`), LRU TTL sweep, and crash reaping. This is the production
+    path for Linux and Windows. Experimental engines (SGLang, vLLM, …) reuse the
+    same strategy when explicitly installed.
   - Both strategies return a uniform `ModelHandle { port, inflight }` to the proxy layer —
     callers are unaware of which strategy is active.
 - **`max_loaded_models = 0`** in config means unlimited — VRAM is the only

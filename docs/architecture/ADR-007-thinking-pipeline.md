@@ -73,13 +73,21 @@ with a degenerate empty-reasoning directive. Initial fix: skip Call-2, return
 `content_buf` with `finish_reason=length`. **Upgraded in Phase 5** to a true
 plain-answer fallback (see below).
 
-**Fix #3c — enable_thinking:false default:** On llama.cpp/SGLang with a thinking-capable
-model and no think intent, the Qwen3 HF Jinja template defaults `enable_thinking=true`,
-burns `max_tokens` on reasoning, and returns no answer. Fixed: `apply_think_for_engine`
-now explicitly injects `enable_thinking:false` for this case, making thinking opt-in.
-oMLX is **deliberately excluded** — it has no Jinja template and reasoning is governed
-by model weights, so a natural-reasoning oMLX call stays bounded. (The playbook
-proposed applying it to oMLX too; we scoped it narrower on purpose.)
+**Fix #3c — enable_thinking:false default (thinking opt-in):** On template-flag engines
+(llama.cpp; SGLang when explicitly selected) with a thinking-capable model and **no**
+think intent, the Qwen3 HF Jinja template defaults `enable_thinking=true`, burns
+`max_tokens` on reasoning, and returns no answer (or echoes reasoning as `content`).
+Fixed: `apply_think_for_engine` injects `enable_thinking:false` for this case.
+
+**Fix #3c (oMLX parity, 2026-07):** The same no-intent path on oMLX previously omitted
+the flag (“natural reasoning”), which let hybrid Qwen3 models reason unprompted;
+oMLX then truncated at `max_tokens` and echoed the reasoning blob as the answer
+(`reasoning==content` dup — 21 hits in think_bench pre-fix). Empirical oMLX testing
+already confirmed `enable_thinking:false` suppresses reasoning cleanly (0 reasoning
+tokens); only `enable_thinking:true` is forbidden (infinite-loop risk). oMLX now
+matches llamacpp: `Some(false)` and `None` (no intent) on hybrid thinking models →
+`enable_thinking:false`; `Some(true)` → omit flag (orchestrator path). Native-reasoning
+models ignore the flag (bounded by Fix #5c floor + Fix #5a dedup instead).
 
 ### Phase 4 — ThinkingContext + thin callers
 
@@ -125,6 +133,42 @@ The empty-guard now distinguishes three sub-cases after budget exhaustion:
    that *also* yields nothing, a structured error frame is emitted instead of a
    silent blank stream. Applied to both streaming and non-streaming paths.
 
+**Fix #5c — native-reasoning budget floor.**
+Native-reasoning models ignore `enable_thinking`, so the orchestrator can't bound
+their reasoning. With a small client `max_tokens` they spend the whole budget
+thinking and emit no answer (`finish=length`, empty `content`) — a true blank, not
+an echo (#5a). This is *not* recoverable by a second call: every major provider
+(OpenAI, Anthropic, vLLM, SGLang, llama.cpp) treats it as a budget problem and the
+fix is always headroom, never a continuation call (researched 2026-06-30). Fix:
+`thinking::prepare_request` raises `max_tokens` to `NATIVE_REASONING_MIN_TOKENS`
+(4096) for native-reasoning models — floor only (a larger client value is never
+lowered), applied regardless of think on/off since these models reason in both
+modes. Industry parallels: OpenAI reserves ≥25k tokens; Anthropic enforces
+`max_tokens > budget_tokens`; llama.cpp/Qwen publish per-task minimums. Unit-tested.
+
+### Phase 6 — orchestrator robustness hardening
+
+Closes the "Medium-confidence" gaps from the workstream review (first-class engines
+oMLX + llama.cpp; SGLang/vLLM are opt-in, not first-class):
+
+- **Mid-stream Call-1 abort → no silent blank.** `stream_call1_accumulate` could
+  return `finish_reason=None` (stream error / engine omitted the marker), which the
+  orchestrator treated as a natural finish and emitted an empty stream. Routing is
+  now via `call1_finished_with_answer(finish_reason, has_content)`: clean finish →
+  answer; `length` → Call-2/guards; `None` → complete only if content was produced,
+  otherwise drop to the empty-guard fallback. A missing marker is normalised to
+  `"stop"` on the terminal chunk. Unit-tested.
+- **Call-1 safety cap + idle timeout.** `stream_call1_accumulate` now bounds
+  accumulation (`CALL1_MAX_DATA_LINES=16384`, `CALL1_MAX_TOTAL_BYTES=1 MB`) and adds
+  a 120 s per-chunk idle timeout — mirroring the assemble/rewriter paths so a runaway
+  or stalled Call-1 can neither hang the stream nor balloon memory. Tripping the cap
+  is treated as `length` so Call-2 still recovers an answer. `[DONE]` now stops the
+  whole accumulator (was inner-loop only).
+- **Ollama native-reasoning dedup parity (Fix #5a).** `/api/chat` streaming now
+  routes native-reasoning oMLX models through `proxy_stream_dedup_native_reasoning`,
+  matching the OpenAI path; previously the truncation echo could reach
+  `message.thinking`/`content` via Ollama.
+
 ### Deviation from the playbook design
 
 `THINKING_REFACTOR.md` proposed a heavier `ThinkingAdapter` (per-engine
@@ -167,14 +211,17 @@ produces nothing, emit a structured error frame. Never a silent blank stream.
 
 ---
 
-## Engine Matrix (post-Phase 4)
+## Engine Matrix (post-Phase 6)
 
-| Engine | `supports_orchestrator` | `inline_think` | Fix #3c (enable_thinking:false) | Fix #5a (echo dedup) |
-|---|---|---|---|---|
-| oMLX | ✓ | ✗ | ✗ (natural reasoning) | ✓ (native-reasoning models) |
-| llama.cpp | ✓ | ✓ | ✓ | ✗ (inline `<think>`) |
-| SGLang | ✓ | ✓ | ✓ | ✗ (inline `<think>`) |
-| vLLM / others | ✗ | ✗ | ✗ | ✗ |
+First-class engines: **oMLX** (macOS) and **llama.cpp** (Linux/Windows). SGLang shares
+the llamacpp thinking adapter but is **experimental opt-in only** (see ADR-001).
+
+| Engine | Tier | `supports_orchestrator` | `inline_think` | Fix #3c (no think intent) | Fix #5a (echo dedup) | Fix #5c (budget floor) |
+|---|---|---|---|---|---|---|
+| oMLX | default (macOS) | ✓ | ✗ | ✓ (hybrid models; native-reasoning ignores flag) | ✓ (native-reasoning) | ✓ (native-reasoning) |
+| llama.cpp | default (Linux/Win) | ✓ | ✓ | ✓ | ✗ (inline tags, not field-echo) | ✓ (native-reasoning) |
+| SGLang | experimental | ✓ | ✓ | ✓ (same as llamacpp) | ✗ | ✓ (native-reasoning) |
+| vLLM / others | opt-in | ✗ | ✗ | ✗ | ✗ | ✓ (native-reasoning) |
 
 ---
 
@@ -184,8 +231,9 @@ produces nothing, emit a structured error frame. Never a silent blank stream.
   Adding a new engine's thinking semantics requires only a new `ThinkingAdapter` impl
   and a match arm in `adapter_for_engine`.
 - **+** `openai.rs::chat_completions` is freed from thinking orchestration details.
-- **+** Five production bugs fixed: double-emit (#3a), empty-guard→fallback (#3b/#5b),
-  plain-client blank reply (#3c), native-reasoning truncation echo (#5a).
+- **+** Six production bugs fixed: double-emit (#3a), empty-guard→fallback (#3b/#5b),
+  plain-client blank reply (#3c), native-reasoning truncation echo (#5a),
+  native-reasoning truncated-to-blank (#5c, budget floor).
 - **−** `prepare_request` takes `model_caps: Option<&ModelCapabilities>` — callers
   that don't load the model index still get a correct (if conservative) context, but
   budget-defaulting and Fix #3 require the index to identify thinking models.
@@ -201,3 +249,4 @@ produces nothing, emit a structured error frame. Never a silent blank stream.
 - `src/server/openai.rs` — `chat_completions` handler
 - `src/server/ollama.rs` — `chat` handler (Ollama compatibility layer)
 - `docs/dev/OMLX_SHARED_SERVER_FINDINGS.md` — oMLX engine behaviour reference
+- [ADR-008](./ADR-008-pool-residency.md) — residency terminology + platform validation matrix
