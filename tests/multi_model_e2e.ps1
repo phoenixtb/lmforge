@@ -200,6 +200,18 @@ try {
         Ok "Using running daemon"
     }
 
+    # Build-provenance gate: the daemon on the port MUST be the binary we just
+    # built. A stale installed/service daemon silently invalidates every result.
+    $binVer = (& $Bin --version 2>$null | Select-Object -First 1)
+    $binSha = if ($binVer -match '\(([^\s)]+)\s') { $Matches[1] } else { "" }
+    try {
+        $daemonSha = (Invoke-RestMethod -Uri "$($script:LfHost)/lf/status" -TimeoutSec 10).daemon_build.sha
+    } catch { $daemonSha = "missing" }
+    if ($binSha -and $daemonSha -ne $binSha) {
+        Fail "STALE DAEMON: port served by build '$daemonSha' but test binary is '$binSha'. Stop the installed daemon (lmforge stop / Stop-Service lmforge) and re-run."
+    }
+    Ok "Daemon build verified: $daemonSha"
+
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     try { $r = Invoke-E2eEmbed -Text $E2E_EMBED_COLD }
     catch { Fail "TC-E01: embed cold-load failed — $(Get-E2eEmbedDiag -Model $script:EmbedModel -Text $E2E_EMBED_COLD)" }

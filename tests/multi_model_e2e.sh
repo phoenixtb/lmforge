@@ -446,6 +446,17 @@ else
     e2e_health_ok || fail "Daemon at ${LF_HOST} is not healthy (HTTP non-200)"
     ok "Daemon healthy"
 fi
+
+# Build-provenance gate: the daemon answering on the port MUST be the binary we
+# just built. A stale installed/service daemon holding the port silently
+# invalidates every result (bit us twice already).
+bin_sha=$("$LF_BIN" --version 2>/dev/null | sed -n 's/.*(\([^ ]*\) .*/\1/p')
+daemon_sha=$(curl -sf "${LF_HOST}/lf/status" 2>/dev/null | jq -r '.daemon_build.sha // "missing"' 2>/dev/null)
+if [[ -n "$bin_sha" && "$daemon_sha" != "$bin_sha" ]]; then
+    fail "STALE DAEMON: port is served by build '${daemon_sha}' but test binary is '${bin_sha}'. \
+Stop the installed/service daemon (lmforge stop; systemctl --user stop lmforge 2>/dev/null; pkill -f 'lmforge start') and re-run."
+fi
+ok "Daemon build verified: ${daemon_sha}"
 sep
 
 # ─── Helpers: thin wrappers over scripts/lib/e2e-api.sh ───────────────────────
