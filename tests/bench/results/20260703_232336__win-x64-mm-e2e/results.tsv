@@ -1,0 +1,15 @@
+TC-E01	PASS	Sequential load embed+chat	embed=4075ms chat=6617ms (no-burst: co-residency not required)
+TC-E02	PASS	Sequential embed (10)	ok
+TC-E03	PASS	Sequential chat (10)	ok
+TC-E04	SKIP	Concurrent embed (10)	no-burst mode
+TC-E05	SKIP	Simultaneous embed+chat	no-burst mode
+TC-E06	PASS	Cross-endpoint rejection	embed@chat=400 chat@embed=400
+TC-E07	PASS	State consistency (sequential)	2 ready
+TC-E08	PASS	VLM text-only	8107ms
+TC-E09	PASS	VLM image_url (remote)	4321ms
+TC-E10	PASS	VLM image_url (base64)	3870ms
+TC-E11	SKIP	Rerank endpoint	HTTP 200 — {"model":"qwen3-reranker:0.6b:8bit","results":[],"usage":{"prompt_tokens":220,"total_tokens":220}}
+TC-E12	SKIP	MTP speculative	mode=off
+TC-E14	PASS	Thinking off non-blank	64 chars
+TC-E13	FAIL	Thinking on reasoning+answer	r='0' a='512' (expected both non-empty)
+TC-E15	PASS	Thinking budget answer	512 chars

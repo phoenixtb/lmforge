@@ -10,6 +10,7 @@ param(
     [switch]$WithVlm,
     [switch]$WithRerank,
     [switch]$WithMtp,
+    [switch]$NoBurst,
     [int]$N = $(if ($env:N_REQUESTS) { [int]$env:N_REQUESTS } else { 10 })
 )
 
@@ -20,6 +21,9 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $SkipPull    = ($env:SKIP_PULL -match '^(1|true|yes)$')
 $SkipStart   = ($env:SKIP_START -match '^(1|true|yes)$')
 $SkipBuild   = ($env:SKIP_BUILD -match '^(1|true|yes)$')
+# Low-memory mode: skip parallel/co-resident probes (TC-E04/E05) and don't
+# require co-residency in TC-E01/E07. Mirrors --no-burst in the bash script.
+$NoBurstMode = $NoBurst.IsPresent -or ($env:NO_BURST -match '^(1|true|yes)$')
 
 $DoVlm    = (Test-E2eSuiteEnabled "DO_VLM")    -and -not $SkipVlm.IsPresent
 $DoRerank = (Test-E2eSuiteEnabled "DO_RERANK") -and -not $SkipRerank.IsPresent
@@ -73,7 +77,7 @@ function Write-ReportFile {
         "- machine: **$ResultsSlug**"
         "- build: $(if ($ver) { $ver } else { 'unknown' }) | checkout: $sha"
         "- models: chat=$($script:ChatModel) embed=$($script:EmbedModel) vlm=$($script:VlmModel) rerank=$($script:RerankModel) mtp=$($script:MtpModel)"
-        "- config: N=$N vlm=$DoVlm rerank=$DoRerank mtp=$DoMtp chat_max_tokens=$E2E_CHAT_MAX_TOKENS"
+        "- config: N=$N no_burst=$NoBurstMode vlm=$DoVlm rerank=$DoRerank mtp=$DoMtp chat_max_tokens=$E2E_CHAT_MAX_TOKENS"
     )
     if ($AbortReason) {
         $lines += @("", "## ABORTED", "", '```', $AbortReason, '```')
@@ -134,7 +138,7 @@ try {
     Write-Host ""
     Write-Host "  LMForge Multi-Model E2E (Windows)" -ForegroundColor White
     Write-Host "  chat=$($script:ChatModel)  embed=$($script:EmbedModel)  burst=$N"
-    Write-Host "  suites: vlm=$DoVlm rerank=$DoRerank mtp=$DoMtp  chat_max_tokens=$E2E_CHAT_MAX_TOKENS"
+    Write-Host "  suites: vlm=$DoVlm rerank=$DoRerank mtp=$DoMtp  chat_max_tokens=$E2E_CHAT_MAX_TOKENS  no_burst=$NoBurstMode"
     Write-Host ""
 
     if ($SkipBuild) {
@@ -144,8 +148,17 @@ try {
     } else {
         Info "Building lmforge (release)..."
         Push-Location $RepoRoot
-        cargo build --release --bin lmforge 2>&1 | Select-Object -Last 3
+        # cargo writes progress to stderr; under EAP=Stop a 2>&1 pipe turns the
+        # first stderr line into a terminating NativeCommandError on PS 5.1.
+        # Relax EAP around the invocation and stringify records, then gate on
+        # the real exit code.
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        cargo build --release --bin lmforge 2>&1 | ForEach-Object { "$_" } | Select-Object -Last 3
+        $buildExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevEap
         Pop-Location
+        if ($buildExit -ne 0) { Fail "cargo build failed (exit $buildExit)" }
         $Bin = Resolve-E2eBin -RepoRoot $RepoRoot
         if (-not $Bin) { Fail "build finished but binary not found" }
         Ok "Build complete -> $Bin"
@@ -186,11 +199,15 @@ try {
     catch { Fail "TC-E01: chat cold-load failed — $(Get-E2eChatDiag -Model $script:ChatModel -Text $E2E_CHAT_COLD)" }
     $sw.Stop(); Assert-E2eChat $r "TC-E01 chat" 20
     $chatColdMs = $sw.ElapsedMilliseconds
-    $status = Get-E2eStatus
-    foreach ($m in @($script:EmbedModel, $script:ChatModel)) {
-        if (-not ($status.running_models | Where-Object { $_.model_id -eq $m })) { Fail "TC-E01: $m not in running_models" }
+    if ($NoBurstMode) {
+        Record "TC-E01" "PASS" "Sequential load embed+chat" "embed=${embedColdMs}ms chat=${chatColdMs}ms (no-burst: co-residency not required)"
+    } else {
+        $status = Get-E2eStatus
+        foreach ($m in @($script:EmbedModel, $script:ChatModel)) {
+            if (-not ($status.running_models | Where-Object { $_.model_id -eq $m })) { Fail "TC-E01: $m not in running_models (low memory? retry with -NoBurst)" }
+        }
+        Record "TC-E01" "PASS" "Cold-start co-load" "embed=${embedColdMs}ms chat=${chatColdMs}ms"
     }
-    Record "TC-E01" "PASS" "Cold-start co-load" "embed=${embedColdMs}ms chat=${chatColdMs}ms"
 
     for ($i = 1; $i -le $N; $i++) {
         $sw.Restart()
@@ -208,6 +225,10 @@ try {
     }
     Record "TC-E03" "PASS" "Sequential chat ($N)" "ok"
 
+    if ($NoBurstMode) {
+        Record "TC-E04" "SKIP" "Concurrent embed ($N)" "no-burst mode"
+        Record "TC-E05" "SKIP" "Simultaneous embed+chat" "no-burst mode"
+    } else {
     $sw.Restart()
     $jobs = 1..$N | ForEach-Object {
         $n = $_
@@ -249,6 +270,7 @@ try {
     Assert-E2eChat (Receive-Job $j2) "TC-E05 chat" 20
     Remove-Job $j1, $j2
     Record "TC-E05" "PASS" "Simultaneous embed+chat" "wall=$($sw.ElapsedMilliseconds)ms"
+    }
 
     $codeE = Get-E2eHttpPostCode -Path "/v1/chat/completions" -BodyJson (@{ model = $script:EmbedModel; messages = @(@{ role = "user"; content = "hi" }); stream = $false } | ConvertTo-Json -Compress)
     $codeC = Get-E2eHttpPostCode -Path "/v1/embeddings" -BodyJson (@{ model = $script:ChatModel; input = "test" } | ConvertTo-Json -Compress)
@@ -256,11 +278,19 @@ try {
     Record "TC-E06" "PASS" "Cross-endpoint rejection" "embed@chat=$codeE chat@embed=$codeC"
 
     $status = Get-E2eStatus
-    foreach ($m in @($script:EmbedModel, $script:ChatModel)) {
-        $slot = $status.running_models | Where-Object { $_.model_id -eq $m } | Select-Object -First 1
-        if (-not $slot -or $slot.status -ne "ready") { Fail "TC-E07: $m not ready" }
+    if ($NoBurstMode) {
+        # Models may evict each other on low-memory hosts; assert instead that
+        # every currently-resident slot is healthy.
+        $bad = @($status.running_models | Where-Object { $_.status -ne "ready" })
+        if ($bad.Count -gt 0) { Fail "TC-E07: $($bad.Count) resident slot(s) not ready" }
+        Record "TC-E07" "PASS" "State consistency (sequential)" "$(@($status.running_models).Count) ready"
+    } else {
+        foreach ($m in @($script:EmbedModel, $script:ChatModel)) {
+            $slot = $status.running_models | Where-Object { $_.model_id -eq $m } | Select-Object -First 1
+            if (-not $slot -or $slot.status -ne "ready") { Fail "TC-E07: $m not ready" }
+        }
+        Record "TC-E07" "PASS" "State consistency" "both ready"
     }
-    Record "TC-E07" "PASS" "State consistency" "both ready"
 
     if ($DoVlm) {
         Try-OptionalChat "TC-E08" "VLM text-only" { Invoke-E2eVlmText -Model $script:VlmModel } 20 { Get-E2eChatDiag -Model $script:VlmModel -Text $E2E_VLM_TEXT }
