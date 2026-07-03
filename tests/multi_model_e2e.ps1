@@ -28,6 +28,16 @@ if ($WithVlm.IsPresent -or $Full.IsPresent)    { $DoVlm = $true }
 if ($WithRerank.IsPresent -or $Full.IsPresent) { $DoRerank = $true }
 if ($WithMtp.IsPresent -or $Full.IsPresent)    { $DoMtp = $true }
 
+# Result capture: mirrors think_bench — artifacts land in tests/bench/results/
+# <ts>__win-<arch>-mm-e2e/ (report.md + results.tsv + daemon log tails) and are
+# written incrementally so a mid-suite abort still leaves them on disk.
+$ResultsTs   = Get-Date -Format "yyyyMMdd_HHmmss"
+$ResultsSlug = "win-$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLower())"
+$ResultsDir  = if ($env:E2E_RESULTS_DIR) { $env:E2E_RESULTS_DIR } else { Join-Path $RepoRoot "tests\bench\results" }
+$ResultsDir  = Join-Path $ResultsDir "${ResultsTs}__${ResultsSlug}-mm-e2e"
+New-Item -ItemType Directory -Force -Path $ResultsDir | Out-Null
+$AbortReason = ""
+
 $Results = [System.Collections.Generic.List[object]]::new()
 $Pulled = @{
     $script:EmbedModel  = $false
@@ -43,10 +53,45 @@ $Bin = $null
 function Ok($m)   { Write-Host "  [+] $m" -ForegroundColor Green }
 function Info($m) { Write-Host "  [*] $m" -ForegroundColor Cyan }
 function Warn($m) { Write-Host "  [!] $m" -ForegroundColor Yellow }
-function Fail($m) { Write-Host "  [x] $m" -ForegroundColor Red; throw $m }
+function Fail($m) { Write-Host "  [x] $m" -ForegroundColor Red; $script:AbortReason = "$m"; throw $m }
 
 function Record([string]$Id, [string]$Status, [string]$Desc, [string]$Detail) {
     $Results.Add([pscustomobject]@{ Id = $Id; Status = $Status; Desc = $Desc; Detail = $Detail })
+    "$Id`t$Status`t$Desc`t$Detail" | Add-Content -Path (Join-Path $ResultsDir "results.tsv")
+}
+
+# Render report.md from the ledger + provenance. Called from finally so it runs
+# on every exit path — pass, hard Fail(), or crash.
+function Write-ReportFile {
+    $ver = ""; $sha = "unknown"
+    if ($Bin) { try { $ver = (& $Bin --version 2>$null | Select-Object -First 1) } catch {} }
+    try { $sha = (git -C $RepoRoot rev-parse --short HEAD 2>$null) } catch {}
+    $lines = @(
+        "# multi_model_e2e report"
+        ""
+        "- when: $ResultsTs"
+        "- machine: **$ResultsSlug**"
+        "- build: $(if ($ver) { $ver } else { 'unknown' }) | checkout: $sha"
+        "- models: chat=$($script:ChatModel) embed=$($script:EmbedModel) vlm=$($script:VlmModel) rerank=$($script:RerankModel) mtp=$($script:MtpModel)"
+        "- config: N=$N vlm=$DoVlm rerank=$DoRerank mtp=$DoMtp chat_max_tokens=$E2E_CHAT_MAX_TOKENS"
+    )
+    if ($AbortReason) {
+        $lines += @("", "## ABORTED", "", '```', $AbortReason, '```')
+    }
+    $lines += @("", "| Test | Status | Description | Detail |", "|---|---|---|---|")
+    foreach ($row in $Results) {
+        $lines += "| $($row.Id) | $($row.Status) | $($row.Desc) | $($row.Detail) |"
+    }
+    Set-Content -Path (Join-Path $ResultsDir "report.md") -Value ($lines -join "`n")
+    $logDir = Join-Path $env:USERPROFILE ".lmforge\logs"
+    foreach ($pair in @(@("daemon.err.log", 400), @("daemon.out.log", 100))) {
+        $src = Join-Path $logDir $pair[0]
+        if (Test-Path $src) {
+            Get-Content $src -Tail $pair[1] |
+                Set-Content -Path (Join-Path $ResultsDir ($pair[0] -replace '\.log$', '.tail.log'))
+        }
+    }
+    Write-Host "  results captured: $ResultsDir" -ForegroundColor DarkGray
 }
 
 function Pull-Optional([string]$Model, [ref]$PulledFlag, [ref]$Enabled) {
@@ -342,6 +387,7 @@ try {
     if ($fail -gt 0) { exit 1 }
 }
 finally {
+    try { Write-ReportFile } catch { Warn "report capture failed: $($_.Exception.Message)" }
     if ($Bin) {
         $prevEap = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'

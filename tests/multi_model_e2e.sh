@@ -92,20 +92,68 @@ GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BLUE='\033[0;34m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
 
 ok()   { echo -e "${GREEN}✓${NC} $*"; }
-fail() { echo -e "${RED}✗${NC} $*"; exit 1; }
+fail() { echo -e "${RED}✗${NC} $*"; ABORT_REASON="$*"; exit 1; }
 info() { echo -e "${CYAN}ℹ${NC} $*"; }
 warn() { echo -e "${YELLOW}⚠${NC} $*"; }
 sep()  { echo -e "${DIM}────────────────────────────────────────────────────────────────────${NC}"; }
 hdr()  { echo -e "${CYAN}────────────────────────────────────────────────────────────────────${NC}"; }
+
+# ─── Result capture (file artifact) ───────────────────────────────────────────
+# Mirrors think_bench: results land in tests/bench/results/<ts>__<slug>-mm-e2e/
+# (report.md + results.tsv + daemon log tails) so runs are analyzable after the
+# terminal is gone. Written incrementally — a mid-suite abort still leaves the
+# ledger and provenance on disk.
+RESULTS_TS="$(date +%Y%m%d_%H%M%S)"
+RESULTS_SLUG="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | tr '[:upper:]' '[:lower:]')"
+RESULTS_DIR="${E2E_RESULTS_DIR:-$REPO_ROOT/tests/bench/results}/${RESULTS_TS}__${RESULTS_SLUG}-mm-e2e"
+mkdir -p "$RESULTS_DIR"
+ABORT_REASON=""
 
 # ─── Result ledger ────────────────────────────────────────────────────────────
 # TC_RESULTS stores lines: "ID|STATUS|DESC|DETAIL"
 # STATUS = PASS | FAIL | SKIP
 TC_RESULTS=()
 
-record_pass() { TC_RESULTS+=("$1|PASS|$2|$3"); }
-record_fail() { TC_RESULTS+=("$1|FAIL|$2|$3"); }
-record_skip() { TC_RESULTS+=("$1|SKIP|$2|$3"); }
+record_pass() { TC_RESULTS+=("$1|PASS|$2|$3"); printf '%s\tPASS\t%s\t%s\n' "$1" "$2" "$3" >> "$RESULTS_DIR/results.tsv"; }
+record_fail() { TC_RESULTS+=("$1|FAIL|$2|$3"); printf '%s\tFAIL\t%s\t%s\n' "$1" "$2" "$3" >> "$RESULTS_DIR/results.tsv"; }
+record_skip() { TC_RESULTS+=("$1|SKIP|$2|$3"); printf '%s\tSKIP\t%s\t%s\n' "$1" "$2" "$3" >> "$RESULTS_DIR/results.tsv"; }
+
+# Render report.md from the ledger + provenance. Called from the EXIT trap so it
+# runs on every exit path — pass, hard fail(), or crash.
+write_report_file() {
+    local ver="" sha=""
+    [[ -n "${LF_BIN:-}" ]] && ver="$("$LF_BIN" --version 2>/dev/null | head -1 || true)"
+    sha="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    {
+        echo "# multi_model_e2e report"
+        echo ""
+        echo "- when: $RESULTS_TS"
+        echo "- machine: **${RESULTS_SLUG}**"
+        echo "- build: ${ver:-unknown} | checkout: ${sha}"
+        echo "- models: chat=$CHAT_MODEL embed=$EMBED_MODEL vlm=$VLM_MODEL rerank=$RERANK_MODEL mtp=$MTP_MODEL"
+        echo "- config: N=$N no_burst=$NO_BURST vlm=$DO_VLM rerank=$DO_RERANK mtp=$DO_MTP chat_max_tokens=${E2E_CHAT_MAX_TOKENS:-128}"
+        if [[ -n "$ABORT_REASON" ]]; then
+            echo ""
+            echo "## ABORTED"
+            echo ""
+            echo '```'
+            echo "$ABORT_REASON"
+            echo '```'
+        fi
+        echo ""
+        echo "| Test | Status | Description | Detail |"
+        echo "|---|---|---|---|"
+        local line id status desc detail
+        for line in ${TC_RESULTS[@]+"${TC_RESULTS[@]}"}; do
+            IFS='|' read -r id status desc detail <<< "$line"
+            echo "| $id | $status | $desc | $detail |"
+        done
+    } > "$RESULTS_DIR/report.md"
+    # Daemon log tails for post-mortem (best-effort).
+    tail -n 400 "$HOME/.lmforge/logs/daemon.err.log" > "$RESULTS_DIR/daemon.err.tail.log" 2>/dev/null || true
+    tail -n 100 "$HOME/.lmforge/logs/daemon.out.log" > "$RESULTS_DIR/daemon.out.tail.log" 2>/dev/null || true
+    echo -e "${DIM}  results captured: $RESULTS_DIR${NC}"
+}
 
 # ─── Timing helper (bash 3.2 compatible — no associative arrays) ─────────────
 # Keys are sanitised to valid identifier chars and stored as TIMER_<key> vars.
@@ -318,6 +366,7 @@ pull_optional() {
 
 cleanup() {
     echo ""
+    write_report_file || true
     info "Cleaning up..."
     if [[ -n "$daemon_pid" ]] && [[ "$SKIP_START" -eq 0 ]]; then
         "$LF_BIN" stop 2>/dev/null || true
