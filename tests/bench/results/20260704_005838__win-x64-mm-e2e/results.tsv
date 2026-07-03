@@ -1,0 +1,15 @@
+TC-E01	PASS	Cold-start co-load	embed=5122ms chat=6223ms
+TC-E02	PASS	Sequential embed (10)	ok
+TC-E03	PASS	Sequential chat (10)	ok
+TC-E04	PASS	Concurrent embed (10)	wall=16974ms
+TC-E05	PASS	Simultaneous embed+chat	wall=1230ms
+TC-E06	PASS	Cross-endpoint rejection	embed@chat=400 chat@embed=400
+TC-E07	PASS	State consistency	both ready
+TC-E08	PASS	VLM text-only	9387ms
+TC-E09	PASS	VLM image_url (remote)	1317ms
+TC-E10	PASS	VLM image_url (base64)	862ms
+TC-E11	PASS	Rerank endpoint	5114ms
+TC-E12	PASS	MTP speculative	mode=mtp warm=14175ms
+TC-E14	PASS	Thinking off non-blank	5 chars
+TC-E13	PASS	Thinking on reasoning+answer	r=5988 a=200
+TC-E15	PASS	Thinking budget answer	442 chars
