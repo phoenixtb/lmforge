@@ -15,10 +15,14 @@
 /// `proxy_nonstream_with_thinking_budget`). Requires the model to also have
 /// `thinking` capability and the request to include `think: true`.
 ///
-/// **`inline_think`** — reasoning arrives as `<think>…</think>` tags embedded
+/// **`inline_think`** — reasoning MAY arrive as `<think>…</think>` tags embedded
 /// in `delta.content` (llama.cpp / SGLang). When false (oMLX) the engine emits
 /// `delta.reasoning_content` natively and call-1 of the orchestrator accumulates
 /// it directly.
+///
+/// Note: modern llama-server (`--jinja` default-on, b9xxx) parses reasoning
+/// itself and emits `delta.reasoning_content` — Call-1 accumulation therefore
+/// reads BOTH channels on the inline path (verified against b9351).
 pub trait ThinkingAdapter: Send + Sync {
     fn supports_orchestrator(&self) -> bool;
     fn inline_think(&self) -> bool;

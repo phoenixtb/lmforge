@@ -784,9 +784,26 @@ async fn stream_call1_accumulate(
 
                 if let Some(delta) = choice.get("delta") {
                     if inline_think {
-                        // llama.cpp / SGLang: reasoning is inline <think>…</think>
-                        // inside `content`. Split it so reasoning and answer go
-                        // to the right buffers (and the right SSE channel).
+                        // llama.cpp / SGLang. Two wire formats, handle both:
+                        //   • modern llama-server (--jinja default on, b9xxx):
+                        //     parses reasoning itself and emits it as
+                        //     `delta.reasoning_content` — same as oMLX.
+                        //   • legacy builds / raw templates: inline
+                        //     <think>…</think> tags inside `delta.content`,
+                        //     split by the ThinkSplitter below.
+                        if let Some(r) = delta.get("reasoning_content").and_then(|v| v.as_str())
+                            && !r.is_empty()
+                        {
+                            reasoning_buf.push_str(r);
+                            if let Some(ref tx) = tx
+                                && tx
+                                    .send(make_frame(&completion_id, &model_name, "reasoning_content", r))
+                                    .await
+                                    .is_err()
+                            {
+                                break;
+                            }
+                        }
                         if let Some(c) = delta.get("content").and_then(|v| v.as_str())
                             && !c.is_empty()
                         {
