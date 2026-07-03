@@ -72,6 +72,15 @@ function Invoke-Action([string]$Key) {
                 if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
                 $env:LMFORGE_LOCAL_BIN = (Join-Path $RepoRoot "target\release\lmforge.exe")
                 Invoke-Lf "install-core.ps1"
+                # Build + install the UI from this checkout too (parity with the
+                # bash path). Best-effort: a missing Node/Rust toolchain must not
+                # fail the core install — warn and continue.
+                try {
+                    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Util "build-ui-local.ps1")
+                    if ($LASTEXITCODE -ne 0) { Write-Host "  UI local build skipped (exit $LASTEXITCODE) — core install unaffected." -ForegroundColor Yellow }
+                } catch {
+                    Write-Host "  UI local build skipped: $($_.Exception.Message) — core install unaffected." -ForegroundColor Yellow
+                }
             } else {
                 $tag = $src -replace '^release:?', ''
                 if ($tag -and $tag -ne "latest") { $env:LMFORGE_VERSION = $tag }
