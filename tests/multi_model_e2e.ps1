@@ -87,13 +87,24 @@ function Write-ReportFile {
         $lines += "| $($row.Id) | $($row.Status) | $($row.Desc) | $($row.Detail) |"
     }
     Set-Content -Path (Join-Path $ResultsDir "report.md") -Value ($lines -join "`n")
+    # Log tails MUST live under logs\ — .gitignore blanket-ignores *.log but
+    # whitelists results/**/logs/.
     $logDir = Join-Path $env:USERPROFILE ".lmforge\logs"
+    $outLogs = Join-Path $ResultsDir "logs"
+    New-Item -ItemType Directory -Force -Path $outLogs | Out-Null
     foreach ($pair in @(@("daemon.err.log", 400), @("daemon.out.log", 100))) {
         $src = Join-Path $logDir $pair[0]
         if (Test-Path $src) {
-            Get-Content $src -Tail $pair[1] |
-                Set-Content -Path (Join-Path $ResultsDir ($pair[0] -replace '\.log$', '.tail.log'))
+            Get-Content $src -Tail $pair[1] | Set-Content -Path (Join-Path $outLogs $pair[0])
         }
+    }
+    # Engine stderr: head carries build/version + template init lines, tail the
+    # recent traffic — capture both.
+    Get-ChildItem -Path $logDir -Filter "engine-*.stderr.log" -ErrorAction SilentlyContinue | ForEach-Object {
+        $head = Get-Content $_.FullName -TotalCount 60
+        $tail = Get-Content $_.FullName -Tail 200
+        @($head; "----8<---- (head above / tail below) ----8<----"; $tail) |
+            Set-Content -Path (Join-Path $outLogs $_.Name)
     }
     Write-Host "  results captured: $ResultsDir" -ForegroundColor DarkGray
 }
@@ -376,6 +387,8 @@ try {
             } else {
                 Record "TC-E13" "FAIL" "Thinking on reasoning+answer" "r='$($reasoning.Length)' a='$($ans.Length)' (expected both non-empty)"
                 Warn "TC-E13: missing reasoning_content or answer"
+                # Preserve the raw response for post-mortem analysis.
+                try { $r | ConvertTo-Json -Depth 12 | Set-Content -Path (Join-Path $ResultsDir "tc-e13.response.json") } catch {}
             }
         } catch {
             Record "TC-E13" "FAIL" "Thinking on reasoning+answer" $_.Exception.Message

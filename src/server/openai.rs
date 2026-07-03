@@ -226,6 +226,20 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
         "Chat completion request"
     );
 
+    // Thinking requests are rare and the path taken is the #1 question in any
+    // cross-platform reasoning bug — log the routing decision at INFO.
+    if has_think {
+        tracing::info!(
+            model = %model_id,
+            stream = is_stream,
+            can_use_budget,
+            thinking_budget = ?thinking_budget,
+            inline_think,
+            native_reasoning = thinking_ctx.is_native_reasoning,
+            "Thinking request routing"
+        );
+    }
+
     // Capability gate: reject embedding and re-ranking models sent to the chat endpoint.
     // (index already loaded above)
     if let Err(resp) = check_model_role(&index, &model_id, true, false) {

@@ -149,9 +149,22 @@ write_report_file() {
             echo "| $id | $status | $desc | $detail |"
         done
     } > "$RESULTS_DIR/report.md"
-    # Daemon log tails for post-mortem (best-effort).
-    tail -n 400 "$HOME/.lmforge/logs/daemon.err.log" > "$RESULTS_DIR/daemon.err.tail.log" 2>/dev/null || true
-    tail -n 100 "$HOME/.lmforge/logs/daemon.out.log" > "$RESULTS_DIR/daemon.out.tail.log" 2>/dev/null || true
+    # Daemon + engine log tails for post-mortem (best-effort). MUST live under
+    # logs/ — .gitignore blanket-ignores *.log but whitelists results/**/logs/.
+    mkdir -p "$RESULTS_DIR/logs"
+    tail -n 400 "$HOME/.lmforge/logs/daemon.err.log" > "$RESULTS_DIR/logs/daemon.err.log" 2>/dev/null || true
+    tail -n 100 "$HOME/.lmforge/logs/daemon.out.log" > "$RESULTS_DIR/logs/daemon.out.log" 2>/dev/null || true
+    # Engine stderr: head carries build/version + template init lines, tail the
+    # recent traffic — capture both.
+    local eng
+    for eng in "$HOME"/.lmforge/logs/engine-*.stderr.log; do
+        [[ -f "$eng" ]] || continue
+        {
+            head -n 60 "$eng"
+            echo "----8<---- (head above / tail below) ----8<----"
+            tail -n 200 "$eng"
+        } > "$RESULTS_DIR/logs/$(basename "$eng")" 2>/dev/null || true
+    done
     echo -e "${DIM}  results captured: $RESULTS_DIR${NC}"
 }
 
@@ -852,6 +865,8 @@ else
         else
             record_fail "TC-E13" "Thinking on reasoning+answer" "reasoning='${#reasoning}' answer='${#ans}' (expected both non-empty)"
             warn "TC-E13: missing reasoning_content or answer"
+            # Preserve the raw response for post-mortem analysis.
+            echo "$resp" > "$RESULTS_DIR/tc-e13.response.json" 2>/dev/null || true
         fi
     else
         timer_end "think_on" >/dev/null

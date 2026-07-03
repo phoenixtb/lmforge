@@ -1281,6 +1281,12 @@ pub async fn proxy_nonstream_with_thinking_budget(
 
     // Natural finish — assemble from call-1 only
     if finish_reason.as_deref() != Some("length") {
+        info!(
+            finish = ?finish_reason,
+            reasoning_len = reasoning_buf.len(),
+            content_len = content_buf_call1.len(),
+            "Call-1 (non-stream) finished naturally; assembling from Call-1 only"
+        );
         let assembled = serde_json::json!({
             "id": completion_id,
             "object": "chat.completion",
@@ -1305,7 +1311,10 @@ pub async fn proxy_nonstream_with_thinking_budget(
     //
     //   b. reasoning empty, content present → return the content as the answer.
     if reasoning_buf.is_empty() && !content_buf_call1.is_empty() {
-        debug!("Call-1 budget exhausted, no reasoning but content present; returning content");
+        info!(
+            content_len = content_buf_call1.len(),
+            "Call-1 (non-stream) budget exhausted, no reasoning but content present; returning content"
+        );
         let assembled = serde_json::json!({
             "id": completion_id,
             "object": "chat.completion",
@@ -1333,6 +1342,12 @@ pub async fn proxy_nonstream_with_thinking_budget(
         build_plain_answer_body(&original_body, original_max_tokens)
     } else {
         let remaining = original_max_tokens.saturating_sub(thinking_budget).max(64);
+        info!(
+            thinking_budget,
+            reasoning_len = reasoning_buf.len(),
+            remaining_tokens = remaining,
+            "Call-1 (non-stream) budget exhausted; executing Call-2"
+        );
         build_call2_body(&original_body, &reasoning_buf, remaining, inline_think)
     };
 
