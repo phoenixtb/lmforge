@@ -1,0 +1,261 @@
+0.00.126.329 I log_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.126.341 I device_info:
+0.00.186.705 I   - CUDA0   : NVIDIA GeForce RTX 5060 Ti (16310 MiB, 15172 MiB free)
+0.00.186.725 I   - CPU     : Intel(R) Core(TM) Ultra 7 265K (12220 MiB, 5914 MiB free)
+0.00.186.830 I system_info: n_threads = 6 (n_threads_batch = 6) / 6 | CUDA : ARCHS = 750,800,860,890,900,1200,1210 | USE_GRAPHS = 1 | PEER_MAX_BATCH_SIZE = 128 | BLACKWELL_NATIVE_FP4 = 1 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX_VNNI = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+0.00.186.845 I srv  llama_server: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true
+0.00.186.901 I srv          init: running without SSL
+0.00.186.932 I srv          init: using 8 threads for HTTP server
+0.00.187.077 I srv         start: binding port with default address family
+0.00.193.519 I srv  llama_server: loading model
+0.00.193.540 I srv    load_model: loading model 'C:\Users\aist1-windows\.lmforge\models\qwen3-4b-thinking-2507-gguf\Qwen3-4B-Thinking-2507-UD-Q4_K_XL.gguf'
+0.00.193.620 I common_init_result: fitting params to device memory ...
+0.00.193.624 I common_init_result: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)
+0.00.981.175 W load: control-looking token: 128247 '</s>' was not control-type; this is probably a bug in the model. its type will be overridden
+0.03.748.551 W llama_context: n_ctx_seq (80128) < n_ctx_train (262144) -- the full capacity of the model will not be utilized
+0.09.600.526 I common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+0.09.876.157 I srv    load_model: initializing slots, n_slots = 4
+0.09.992.610 W common_speculative_init: no implementations specified for speculative decoding
+0.09.992.626 I slot   load_model: id  0 | task -1 | new slot, n_ctx = 80128
+0.09.992.637 I slot   load_model: id  1 | task -1 | new slot, n_ctx = 80128
+0.09.992.638 I slot   load_model: id  2 | task -1 | new slot, n_ctx = 80128
+0.09.992.638 I slot   load_model: id  3 | task -1 | new slot, n_ctx = 80128
+0.09.992.771 I srv    load_model: prompt cache is enabled, size limit: 1024 MiB
+0.09.992.777 I srv    load_model: use `--cache-ram 0` to disable the prompt cache
+0.09.992.779 I srv    load_model: for more info see https://github.com/ggml-org/llama.cpp/pull/16391
+0.09.992.780 I srv    load_model: context checkpoints enabled, max = 32, min spacing = 256
+0.09.993.883 I srv          init: idle slots will be saved to prompt cache and cleared upon starting a new task
+0.10.010.857 I init: chat template, example_format: '<|im_start|>system
+You are a helpful assistant<|im_end|>
+<|im_start|>user
+Hello<|im_end|>
+<|im_start|>assistant
+Hi there<|im_end|>
+<|im_start|>user
+How are you?<|im_end|>
+<|im_start|>assistant
+<think>
+'
+0.10.016.399 I srv          init: init: chat template, thinking = 1
+0.10.016.769 I srv  llama_server: model loaded
+0.10.016.784 I srv  llama_server: server is listening on http://127.0.0.1:11432
+0.10.016.969 I srv  update_slots: all slots are idle
+0.10.730.860 I srv  params_from_: Chat format: peg-native
+0.10.732.001 I slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1
+0.10.732.006 I srv  get_availabl: updating prompt cache
+0.10.732.015 I srv          load:  - looking for better prompt, base f_keep = -1.000, sim = 0.000
+0.10.732.020 I srv        update:  - cache state: 0 prompts, 0.000 MiB (limits: 1024.000 MiB, 80128 tokens, 1073741824 est)
+0.10.732.023 I srv  get_availabl: prompt cache update took 0.01 ms
+0.10.732.666 I slot launch_slot_: id  3 | task 0 | processing task, is_child = 0
+0.17.313.952 I slot print_timing: id  3 | task 0 | n_decoded =    100, tg =  15.66 t/s
+0.20.325.263 I slot print_timing: id  3 | task 0 | n_decoded =    146, tg =  15.54 t/s
+0.23.331.002 I slot print_timing: id  3 | task 0 | n_decoded =    192, tg =  15.48 t/s
+0.26.358.690 I slot print_timing: id  3 | task 0 | n_decoded =    238, tg =  15.42 t/s
+0.29.402.727 I slot print_timing: id  3 | task 0 | n_decoded =    284, tg =  15.37 t/s
+0.32.454.760 I slot print_timing: id  3 | task 0 | n_decoded =    330, tg =  15.33 t/s
+0.35.479.550 I slot print_timing: id  3 | task 0 | n_decoded =    376, tg =  15.31 t/s
+0.38.519.049 I slot print_timing: id  3 | task 0 | n_decoded =    422, tg =  15.29 t/s
+0.41.560.495 I slot print_timing: id  3 | task 0 | n_decoded =    468, tg =  15.28 t/s
+0.44.563.743 I slot print_timing: id  3 | task 0 | n_decoded =    513, tg =  15.25 t/s
+0.47.568.971 I slot print_timing: id  3 | task 0 | n_decoded =    558, tg =  15.23 t/s
+----8<---- (head above / tail below) ----8<----
+2.39.606.787 I srv  params_from_: Chat format: peg-native
+2.39.606.907 I slot get_availabl: id  1 | task -1 | selected slot by LCP similarity, sim_best = 1.000 (> 0.100 thold), f_keep = 0.037
+2.39.606.907 I srv  get_availabl: updating prompt cache
+2.39.607.017 W srv   prompt_save:  - saving prompt with length 1062, total state size = 149.357 MiB (draft: 0.000 MiB)
+2.39.667.896 I srv          load:  - looking for better prompt, base f_keep = 0.037, sim = 1.000
+2.39.667.909 W srv        update:  - cache size limit reached, removing oldest entry (size = 256.944 MiB)
+2.39.683.485 I srv        update:  - cache state: 4 prompts, 812.601 MiB (limits: 1024.000 MiB, 80128 tokens, 80128 est)
+2.39.683.497 I srv        update:    - prompt 00000200A95F7BB0:    1827 tokens, checkpoints:  0,   256.944 MiB
+2.39.683.498 I srv        update:    - prompt 00000200A95F7A00:    1827 tokens, checkpoints:  0,   256.944 MiB
+2.39.683.498 I srv        update:    - prompt 00000200A95F78E0:    1062 tokens, checkpoints:  0,   149.357 MiB
+2.39.683.499 I srv        update:    - prompt 00000200A95F7850:    1062 tokens, checkpoints:  0,   149.357 MiB
+2.39.683.502 I srv  get_availabl: prompt cache update took 76.59 ms
+2.39.683.777 I slot launch_slot_: id  1 | task 18526 | processing task, is_child = 0
+2.39.683.860 W slot update_slots: id  1 | task 18526 | need to evaluate at least 1 token for each active slot (n_past = 39, task.n_tokens() = 39)
+2.39.683.863 W slot update_slots: id  1 | task 18526 | n_past was set to 38
+2.41.787.465 I slot print_timing: id  1 | task 18526 | n_decoded =    246, tg = 117.73 t/s
+2.44.788.822 I slot print_timing: id  1 | task 18526 | n_decoded =    604, tg = 118.65 t/s
+2.47.790.458 I slot print_timing: id  1 | task 18526 | n_decoded =    957, tg = 118.26 t/s
+2.50.797.355 I slot print_timing: id  1 | task 18526 | n_decoded =   1303, tg = 117.39 t/s
+2.53.802.240 I slot print_timing: id  1 | task 18526 | n_decoded =   1644, tg = 116.56 t/s
+2.55.054.380 I slot print_timing: id  1 | task 18526 | prompt eval time =      14.14 ms /     1 tokens (   14.14 ms per token,    70.74 tokens per second)
+2.55.054.388 I slot print_timing: id  1 | task 18526 |        eval time =   15356.37 ms /  1784 tokens (    8.61 ms per token,   116.17 tokens per second)
+2.55.054.389 I slot print_timing: id  1 | task 18526 |       total time =   15370.50 ms /  1785 tokens
+2.55.054.390 I slot print_timing: id  1 | task 18526 |    graphs reused =      20196
+2.55.054.411 I slot      release: id  1 | task 18526 | stop processing: n_tokens = 1822, truncated = 0
+2.55.054.439 I srv  update_slots: all slots are idle
+2.55.072.156 I srv  params_from_: Chat format: peg-native
+2.55.072.264 I slot get_availabl: id  1 | task -1 | selected slot by LCP similarity, sim_best = 1.000 (> 0.100 thold), f_keep = 0.021
+2.55.072.269 I srv  get_availabl: updating prompt cache
+2.55.072.391 W srv   prompt_save:  - saving prompt with length 1822, total state size = 256.240 MiB (draft: 0.000 MiB)
+2.55.155.010 I srv          load:  - looking for better prompt, base f_keep = 0.021, sim = 1.000
+2.55.155.025 W srv        update:  - cache size limit reached, removing oldest entry (size = 256.944 MiB)
+2.55.162.074 I srv        update:  - cache state: 4 prompts, 811.898 MiB (limits: 1024.000 MiB, 80128 tokens, 80128 est)
+2.55.162.087 I srv        update:    - prompt 00000200A95F7A00:    1827 tokens, checkpoints:  0,   256.944 MiB
+2.55.162.088 I srv        update:    - prompt 00000200A95F78E0:    1062 tokens, checkpoints:  0,   149.357 MiB
+2.55.162.089 I srv        update:    - prompt 00000200A95F7850:    1062 tokens, checkpoints:  0,   149.357 MiB
+2.55.162.090 I srv        update:    - prompt 00000200A95F7A90:    1822 tokens, checkpoints:  0,   256.240 MiB
+2.55.162.095 I srv  get_availabl: prompt cache update took 89.82 ms
+2.55.162.336 I slot launch_slot_: id  1 | task 20311 | processing task, is_child = 0
+2.55.162.357 W slot update_slots: id  1 | task 20311 | need to evaluate at least 1 token for each active slot (n_past = 39, task.n_tokens() = 39)
+2.55.162.358 W slot update_slots: id  1 | task 20311 | n_past was set to 38
+2.56.806.803 I slot print_timing: id  1 | task 20311 | n_decoded =    198, tg = 121.36 t/s
+2.59.806.818 I slot print_timing: id  1 | task 20311 | n_decoded =    556, tg = 120.05 t/s
+3.02.808.391 I slot print_timing: id  1 | task 20311 | n_decoded =    909, tg = 119.09 t/s
+3.05.810.896 I slot print_timing: id  1 | task 20311 | n_decoded =   1255, tg = 118.00 t/s
+3.08.818.653 I slot print_timing: id  1 | task 20311 | n_decoded =   1595, tg = 116.91 t/s
+3.10.581.107 I slot print_timing: id  1 | task 20311 | prompt eval time =      12.92 ms /     1 tokens (   12.92 ms per token,    77.41 tokens per second)
+3.10.581.117 I slot print_timing: id  1 | task 20311 |        eval time =   15405.80 ms /  1792 tokens (    8.60 ms per token,   116.32 tokens per second)
+3.10.581.118 I slot print_timing: id  1 | task 20311 |       total time =   15418.72 ms /  1793 tokens
+3.10.581.119 I slot print_timing: id  1 | task 20311 |    graphs reused =      21980
+3.10.581.142 I slot      release: id  1 | task 20311 | stop processing: n_tokens = 1830, truncated = 0
+3.10.581.174 I srv  update_slots: all slots are idle
+3.10.607.341 I srv  params_from_: Chat format: peg-native
+3.10.607.440 I slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = -1
+3.10.607.445 I srv  get_availabl: updating prompt cache
+3.10.607.450 I srv          load:  - looking for better prompt, base f_keep = -1.000, sim = 0.000
+3.10.607.454 I srv        update:  - cache state: 4 prompts, 811.898 MiB (limits: 1024.000 MiB, 80128 tokens, 80128 est)
+3.10.607.455 I srv        update:    - prompt 00000200A95F7A00:    1827 tokens, checkpoints:  0,   256.944 MiB
+3.10.607.456 I srv        update:    - prompt 00000200A95F78E0:    1062 tokens, checkpoints:  0,   149.357 MiB
+3.10.607.457 I srv        update:    - prompt 00000200A95F7850:    1062 tokens, checkpoints:  0,   149.357 MiB
+3.10.607.458 I srv        update:    - prompt 00000200A95F7A90:    1822 tokens, checkpoints:  0,   256.240 MiB
+3.10.607.459 I srv  get_availabl: prompt cache update took 0.01 ms
+3.10.607.520 I slot launch_slot_: id  0 | task 22104 | processing task, is_child = 0
+3.10.607.522 I slot slot_save_an: id  1 | task -1 | saving idle slot to prompt cache
+3.10.607.653 W srv   prompt_save:  - saving prompt with length 1830, total state size = 257.366 MiB (draft: 0.000 MiB)
+3.10.689.992 I slot prompt_clear: id  1 | task -1 | clearing prompt with 1830 tokens
+3.10.690.287 W srv        update:  - cache size limit reached, removing oldest entry (size = 256.944 MiB)
+3.10.699.875 I srv        update:  - cache state: 4 prompts, 812.319 MiB (limits: 1024.000 MiB, 80128 tokens, 80128 est)
+3.10.699.883 I srv        update:    - prompt 00000200A95F78E0:    1062 tokens, checkpoints:  0,   149.357 MiB
+3.10.699.884 I srv        update:    - prompt 00000200A95F7850:    1062 tokens, checkpoints:  0,   149.357 MiB
+3.10.699.885 I srv        update:    - prompt 00000200A95F7A90:    1822 tokens, checkpoints:  0,   256.240 MiB
+3.10.699.886 I srv        update:    - prompt 00000200A95F7970:    1830 tokens, checkpoints:  0,   257.366 MiB
+3.11.503.229 I slot print_timing: id  0 | task 22104 | n_decoded =    100, tg = 127.32 t/s
+3.14.513.016 I slot print_timing: id  0 | task 22104 | n_decoded =    474, tg = 124.89 t/s
+3.17.515.459 I slot print_timing: id  0 | task 22104 | n_decoded =    842, tg = 123.87 t/s
+3.19.020.843 I slot print_timing: id  0 | task 22104 | prompt eval time =      17.86 ms /    40 tokens (    0.45 ms per token,  2239.64 tokens per second)
+3.19.020.851 I slot print_timing: id  0 | task 22104 |        eval time =    8303.05 ms /  1024 tokens (    8.11 ms per token,   123.33 tokens per second)
+3.19.020.852 I slot print_timing: id  0 | task 22104 |       total time =    8320.91 ms /  1064 tokens
+3.19.020.853 I slot print_timing: id  0 | task 22104 |    graphs reused =      22998
+3.19.020.874 I slot      release: id  0 | task 22104 | stop processing: n_tokens = 1063, truncated = 0
+3.19.020.894 I srv  update_slots: all slots are idle
+3.19.036.608 I srv  params_from_: Chat format: peg-native
+3.19.036.707 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, sim_best = 1.000 (> 0.100 thold), f_keep = 0.038
+3.19.036.711 I srv  get_availabl: updating prompt cache
+3.19.036.806 W srv   prompt_save:  - saving prompt with length 1063, total state size = 149.497 MiB (draft: 0.000 MiB)
+3.19.085.579 I srv          load:  - looking for better prompt, base f_keep = 0.038, sim = 1.000
+3.19.085.594 I srv        update:  - cache state: 5 prompts, 961.817 MiB (limits: 1024.000 MiB, 80128 tokens, 80128 est)
+3.19.085.596 I srv        update:    - prompt 00000200A95F78E0:    1062 tokens, checkpoints:  0,   149.357 MiB
+3.19.085.597 I srv        update:    - prompt 00000200A95F7850:    1062 tokens, checkpoints:  0,   149.357 MiB
+3.19.085.598 I srv        update:    - prompt 00000200A95F7A90:    1822 tokens, checkpoints:  0,   256.240 MiB
+3.19.085.598 I srv        update:    - prompt 00000200A95F7970:    1830 tokens, checkpoints:  0,   257.366 MiB
+3.19.085.599 I srv        update:    - prompt 00000200A95F7C40:    1063 tokens, checkpoints:  0,   149.497 MiB
+3.19.085.618 I srv  get_availabl: prompt cache update took 48.89 ms
+3.19.085.806 I slot launch_slot_: id  0 | task 23129 | processing task, is_child = 0
+3.19.085.830 W slot update_slots: id  0 | task 23129 | need to evaluate at least 1 token for each active slot (n_past = 40, task.n_tokens() = 40)
+3.19.085.832 W slot update_slots: id  0 | task 23129 | n_past was set to 39
+3.20.521.675 I slot print_timing: id  0 | task 23129 | n_decoded =    182, tg = 127.85 t/s
+3.23.527.883 I slot print_timing: id  0 | task 23129 | n_decoded =    555, tg = 125.29 t/s
+3.26.532.083 I slot print_timing: id  0 | task 23129 | n_decoded =    923, tg = 124.16 t/s
+3.27.367.062 I slot print_timing: id  0 | task 23129 | prompt eval time =      12.25 ms /     1 tokens (   12.25 ms per token,    81.61 tokens per second)
+3.27.367.069 I slot print_timing: id  0 | task 23129 |        eval time =    8268.96 ms /  1024 tokens (    8.08 ms per token,   123.84 tokens per second)
+3.27.367.070 I slot print_timing: id  0 | task 23129 |       total time =    8281.21 ms /  1025 tokens
+3.27.367.071 I slot print_timing: id  0 | task 23129 |    graphs reused =      24017
+3.27.367.090 I slot      release: id  0 | task 23129 | stop processing: n_tokens = 1063, truncated = 0
+3.27.367.116 I srv  update_slots: all slots are idle
+3.27.385.898 I srv  params_from_: Chat format: peg-native
+3.27.386.015 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, sim_best = 1.000 (> 0.100 thold), f_keep = 0.038
+3.27.386.015 I srv  get_availabl: updating prompt cache
+3.27.386.115 W srv   prompt_save:  - saving prompt with length 1063, total state size = 149.497 MiB (draft: 0.000 MiB)
+3.27.437.601 I srv          load:  - looking for better prompt, base f_keep = 0.038, sim = 1.000
+3.27.437.614 W srv        update:  - cache size limit reached, removing oldest entry (size = 149.357 MiB)
+3.27.442.240 I srv        update:  - cache state: 5 prompts, 961.958 MiB (limits: 1024.000 MiB, 80128 tokens, 80128 est)
+3.27.442.248 I srv        update:    - prompt 00000200A95F7850:    1062 tokens, checkpoints:  0,   149.357 MiB
+3.27.442.249 I srv        update:    - prompt 00000200A95F7A90:    1822 tokens, checkpoints:  0,   256.240 MiB
+3.27.442.250 I srv        update:    - prompt 00000200A95F7970:    1830 tokens, checkpoints:  0,   257.366 MiB
+3.27.442.250 I srv        update:    - prompt 00000200A95F7C40:    1063 tokens, checkpoints:  0,   149.497 MiB
+3.27.442.251 I srv        update:    - prompt 00000200A95F7730:    1063 tokens, checkpoints:  0,   149.497 MiB
+3.27.442.254 I srv  get_availabl: prompt cache update took 56.24 ms
+3.27.442.535 I slot launch_slot_: id  0 | task 24154 | processing task, is_child = 0
+3.27.442.577 W slot update_slots: id  0 | task 24154 | need to evaluate at least 1 token for each active slot (n_past = 40, task.n_tokens() = 40)
+3.27.442.594 W slot update_slots: id  0 | task 24154 | n_past was set to 39
+3.29.536.274 I slot print_timing: id  0 | task 24154 | n_decoded =    254, tg = 122.07 t/s
+3.32.540.529 I slot print_timing: id  0 | task 24154 | n_decoded =    613, tg = 120.55 t/s
+3.35.544.314 I slot print_timing: id  0 | task 24154 | n_decoded =    966, tg = 119.42 t/s
+3.38.546.607 I slot print_timing: id  0 | task 24154 | n_decoded =   1311, tg = 118.20 t/s
+3.41.549.920 I slot print_timing: id  0 | task 24154 | n_decoded =   1650, tg = 117.07 t/s
+3.42.814.193 I slot print_timing: id  0 | task 24154 | prompt eval time =      12.86 ms /     1 tokens (   12.86 ms per token,    77.76 tokens per second)
+3.42.814.201 I slot print_timing: id  0 | task 24154 |        eval time =   15358.74 ms /  1792 tokens (    8.57 ms per token,   116.68 tokens per second)
+3.42.814.202 I slot print_timing: id  0 | task 24154 |       total time =   15371.60 ms /  1793 tokens
+3.42.814.203 I slot print_timing: id  0 | task 24154 |    graphs reused =      25801
+3.42.814.223 I slot      release: id  0 | task 24154 | stop processing: n_tokens = 1831, truncated = 0
+3.42.814.253 I srv  update_slots: all slots are idle
+3.42.830.517 I srv  params_from_: Chat format: peg-native
+3.42.830.646 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, sim_best = 1.000 (> 0.100 thold), f_keep = 0.022
+3.42.830.649 I srv  get_availabl: updating prompt cache
+3.42.830.808 W srv   prompt_save:  - saving prompt with length 1831, total state size = 257.506 MiB (draft: 0.000 MiB)
+3.42.950.073 I srv          load:  - looking for better prompt, base f_keep = 0.022, sim = 1.000
+3.42.950.099 W srv        update:  - cache size limit reached, removing oldest entry (size = 149.357 MiB)
+3.42.956.911 W srv        update:  - cache size limit reached, removing oldest entry (size = 256.240 MiB)
+3.42.966.638 I srv        update:  - cache state: 4 prompts, 813.866 MiB (limits: 1024.000 MiB, 80128 tokens, 80128 est)
+3.42.966.657 I srv        update:    - prompt 00000200A95F7970:    1830 tokens, checkpoints:  0,   257.366 MiB
+3.42.966.658 I srv        update:    - prompt 00000200A95F7C40:    1063 tokens, checkpoints:  0,   149.497 MiB
+3.42.966.659 I srv        update:    - prompt 00000200A95F7730:    1063 tokens, checkpoints:  0,   149.497 MiB
+3.42.966.660 I srv        update:    - prompt 00000200AC4AD6E0:    1831 tokens, checkpoints:  0,   257.506 MiB
+3.42.966.670 I srv  get_availabl: prompt cache update took 136.02 ms
+3.42.966.994 I slot launch_slot_: id  0 | task 25947 | processing task, is_child = 0
+3.42.967.162 W slot update_slots: id  0 | task 25947 | need to evaluate at least 1 token for each active slot (n_past = 40, task.n_tokens() = 40)
+3.42.967.164 W slot update_slots: id  0 | task 25947 | n_past was set to 39
+3.44.550.075 I slot print_timing: id  0 | task 25947 | n_decoded =    189, tg = 120.48 t/s
+3.47.550.915 I slot print_timing: id  0 | task 25947 | n_decoded =    546, tg = 119.49 t/s
+3.50.553.525 I slot print_timing: id  0 | task 25947 | n_decoded =    898, tg = 118.59 t/s
+3.53.491.032 I slot print_timing: id  0 | task 25947 | prompt eval time =      14.21 ms /     1 tokens (   14.21 ms per token,    70.36 tokens per second)
+3.53.491.040 I slot print_timing: id  0 | task 25947 |        eval time =   10509.64 ms /  1238 tokens (    8.49 ms per token,   117.80 tokens per second)
+3.53.491.041 I slot print_timing: id  0 | task 25947 |       total time =   10523.85 ms /  1239 tokens
+3.53.491.042 I slot print_timing: id  0 | task 25947 |    graphs reused =      27034
+3.53.491.062 I slot      release: id  0 | task 25947 | stop processing: n_tokens = 1277, truncated = 0
+3.53.491.087 I srv  update_slots: all slots are idle
+3.53.507.883 I srv  params_from_: Chat format: peg-native
+3.53.507.996 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, sim_best = 0.150 (> 0.100 thold), f_keep = 0.002
+3.53.508.000 I srv  get_availabl: updating prompt cache
+3.53.508.101 W srv   prompt_save:  - saving prompt with length 1277, total state size = 179.594 MiB (draft: 0.000 MiB)
+3.53.567.145 I srv          load:  - looking for better prompt, base f_keep = 0.002, sim = 0.150
+3.53.567.160 I srv        update:  - cache state: 5 prompts, 993.460 MiB (limits: 1024.000 MiB, 80128 tokens, 80128 est)
+3.53.567.161 I srv        update:    - prompt 00000200A95F7970:    1830 tokens, checkpoints:  0,   257.366 MiB
+3.53.567.163 I srv        update:    - prompt 00000200A95F7C40:    1063 tokens, checkpoints:  0,   149.497 MiB
+3.53.567.163 I srv        update:    - prompt 00000200A95F7730:    1063 tokens, checkpoints:  0,   149.497 MiB
+3.53.567.164 I srv        update:    - prompt 00000200AC4AD6E0:    1831 tokens, checkpoints:  0,   257.506 MiB
+3.53.567.165 I srv        update:    - prompt 00000200AC4AD920:    1277 tokens, checkpoints:  0,   179.594 MiB
+3.53.567.166 I srv  get_availabl: prompt cache update took 59.16 ms
+3.53.567.372 I slot launch_slot_: id  0 | task 27186 | processing task, is_child = 0
+3.54.373.794 I slot print_timing: id  0 | task 27186 | n_decoded =    100, tg = 126.47 t/s
+3.55.785.198 I slot print_timing: id  0 | task 27186 | prompt eval time =      15.62 ms /    17 tokens (    0.92 ms per token,  1088.14 tokens per second)
+3.55.785.206 I slot print_timing: id  0 | task 27186 |        eval time =    2202.11 ms /   277 tokens (    7.95 ms per token,   125.79 tokens per second)
+3.55.785.207 I slot print_timing: id  0 | task 27186 |       total time =    2217.74 ms /   294 tokens
+3.55.785.208 I slot print_timing: id  0 | task 27186 |    graphs reused =      27308
+3.55.785.229 I slot      release: id  0 | task 27186 | stop processing: n_tokens = 296, truncated = 0
+3.55.785.251 I srv  update_slots: all slots are idle
+3.55.800.346 I srv  params_from_: Chat format: peg-native
+3.55.800.561 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, sim_best = 1.000 (> 0.100 thold), f_keep = 0.068
+3.55.800.563 I srv  get_availabl: updating prompt cache
+3.55.800.621 W srv   prompt_save:  - saving prompt with length 296, total state size = 41.629 MiB (draft: 0.000 MiB)
+3.55.816.892 I srv          load:  - looking for better prompt, base f_keep = 0.068, sim = 1.000
+3.55.816.903 W srv        update:  - cache size limit reached, removing oldest entry (size = 257.366 MiB)
+3.55.823.156 I srv        update:  - cache state: 5 prompts, 777.724 MiB (limits: 1024.000 MiB, 80128 tokens, 80128 est)
+3.55.823.167 I srv        update:    - prompt 00000200A95F7C40:    1063 tokens, checkpoints:  0,   149.497 MiB
+3.55.823.168 I srv        update:    - prompt 00000200A95F7730:    1063 tokens, checkpoints:  0,   149.497 MiB
+3.55.823.169 I srv        update:    - prompt 00000200AC4AD6E0:    1831 tokens, checkpoints:  0,   257.506 MiB
+3.55.823.170 I srv        update:    - prompt 00000200AC4AD920:    1277 tokens, checkpoints:  0,   179.594 MiB
+3.55.823.171 I srv        update:    - prompt 00000200AC4ADEC0:     296 tokens, checkpoints:  0,    41.629 MiB
+3.55.823.174 I srv  get_availabl: prompt cache update took 22.61 ms
+3.55.823.390 I slot launch_slot_: id  0 | task 27464 | processing task, is_child = 0
+3.55.823.418 W slot update_slots: id  0 | task 27464 | need to evaluate at least 1 token for each active slot (n_past = 20, task.n_tokens() = 20)
+3.55.823.419 W slot update_slots: id  0 | task 27464 | n_past was set to 19
+3.57.379.713 I slot print_timing: id  0 | task 27464 | n_decoded =    188, tg = 121.80 t/s
+3.57.859.444 I slot print_timing: id  0 | task 27464 | prompt eval time =      12.79 ms /     1 tokens (   12.79 ms per token,    78.21 tokens per second)
+3.57.859.453 I slot print_timing: id  0 | task 27464 |        eval time =    2023.22 ms /   245 tokens (    8.26 ms per token,   121.09 tokens per second)
+3.57.859.454 I slot print_timing: id  0 | task 27464 |       total time =    2036.01 ms /   246 tokens
+3.57.859.454 I slot print_timing: id  0 | task 27464 |    graphs reused =      27551
+3.57.859.477 I slot      release: id  0 | task 27464 | stop processing: n_tokens = 264, truncated = 0
+3.57.859.498 I srv  update_slots: all slots are idle
