@@ -1,0 +1,402 @@
+# tail -n 400 /home/phoenixt/.lmforge/logs/engine-qwen3-embed_0.6b_8bit.stderr.log
+------------------------------------------------------------------------
+0.18.362.966 I srv  update_slots: all slots are idle
+0.18.363.197 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, sim_best = 0.130 (> 0.100 thold), f_keep = 0.132
+0.18.363.199 I slot launch_slot_: id  0 | task 33 | processing task, is_child = 0
+0.18.363.200 I slot slot_save_an: id  3 | task -1 | saving idle slot to prompt cache
+0.18.363.215 W srv   prompt_save:  - saving prompt with length 53, total state size = 5.798 MiB (draft: 0.000 MiB)
+0.18.368.348 I slot prompt_clear: id  3 | task -1 | clearing prompt with 53 tokens
+0.18.368.369 I srv        update:  - cache state: 4 prompts, 22.427 MiB (limits: 8192.000 MiB, 32768 tokens, 74881 est)
+0.18.368.371 I srv        update:    - prompt 0x5eebf4dc8b00:      46 tokens, checkpoints:  0,     5.032 MiB
+0.18.368.371 I srv        update:    - prompt 0x5eebf4de0240:      53 tokens, checkpoints:  0,     5.798 MiB
+0.18.368.371 I srv        update:    - prompt 0x5eebf4de0820:      53 tokens, checkpoints:  0,     5.798 MiB
+0.18.368.371 I srv        update:    - prompt 0x5eebf4ddfbc0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.18.368.373 I slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = 10212164408
+0.18.368.377 I slot launch_slot_: id  2 | task 34 | processing task, is_child = 0
+0.18.394.725 I slot      release: id  0 | task 33 | stop processing: n_tokens = 54, truncated = 0
+0.18.394.734 I slot      release: id  2 | task 34 | stop processing: n_tokens = 53, truncated = 0
+0.18.394.739 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.130
+0.18.394.741 I slot launch_slot_: id  0 | task 36 | processing task, is_child = 0
+0.18.394.741 I slot slot_save_an: id  2 | task -1 | saving idle slot to prompt cache
+0.18.394.757 W srv   prompt_save:  - saving prompt with length 53, total state size = 5.798 MiB (draft: 0.000 MiB)
+0.18.399.543 I slot prompt_clear: id  2 | task -1 | clearing prompt with 53 tokens
+0.18.399.562 I srv        update:  - cache state: 5 prompts, 28.225 MiB (limits: 8192.000 MiB, 32768 tokens, 74881 est)
+0.18.399.564 I srv        update:    - prompt 0x5eebf4dc8b00:      46 tokens, checkpoints:  0,     5.032 MiB
+0.18.399.564 I srv        update:    - prompt 0x5eebf4de0240:      53 tokens, checkpoints:  0,     5.798 MiB
+0.18.399.564 I srv        update:    - prompt 0x5eebf4de0820:      53 tokens, checkpoints:  0,     5.798 MiB
+0.18.399.564 I srv        update:    - prompt 0x5eebf4ddfbc0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.18.399.565 I srv        update:    - prompt 0x5eebf5a0b470:      53 tokens, checkpoints:  0,     5.798 MiB
+0.18.406.567 I slot      release: id  0 | task 36 | stop processing: n_tokens = 53, truncated = 0
+0.18.406.573 I srv  update_slots: all slots are idle
+0.18.467.379 I slot get_availabl: id  1 | task -1 | selected slot by LRU, t_last = 10212182786
+0.18.467.391 I slot launch_slot_: id  1 | task 38 | processing task, is_child = 0
+0.18.467.391 I slot slot_save_an: id  0 | task -1 | saving idle slot to prompt cache
+0.18.467.424 W srv   prompt_save:  - saving prompt with length 53, total state size = 5.798 MiB (draft: 0.000 MiB)
+0.18.473.062 I slot prompt_clear: id  0 | task -1 | clearing prompt with 53 tokens
+0.18.473.090 I srv        update:  - cache state: 6 prompts, 34.023 MiB (limits: 8192.000 MiB, 32768 tokens, 74881 est)
+0.18.473.092 I srv        update:    - prompt 0x5eebf4dc8b00:      46 tokens, checkpoints:  0,     5.032 MiB
+0.18.473.092 I srv        update:    - prompt 0x5eebf4de0240:      53 tokens, checkpoints:  0,     5.798 MiB
+0.18.473.092 I srv        update:    - prompt 0x5eebf4de0820:      53 tokens, checkpoints:  0,     5.798 MiB
+0.18.473.093 I srv        update:    - prompt 0x5eebf4ddfbc0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.18.473.093 I srv        update:    - prompt 0x5eebf5a0b470:      53 tokens, checkpoints:  0,     5.798 MiB
+0.18.473.093 I srv        update:    - prompt 0x5eebf2f63db0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.18.481.152 I slot      release: id  1 | task 38 | stop processing: n_tokens = 44, truncated = 0
+0.18.481.164 I srv  update_slots: all slots are idle
+0.39.431.598 I srv    operator(): operator(): cleaning up before exit...
+0.00.039.488 I log_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.039.492 I device_info:
+0.00.039.600 I   - Vulkan0 : NVIDIA GeForce RTX 5060 Ti (16311 MiB, 14954 MiB free)
+0.00.039.605 I   - CPU     : Intel(R) Core(TM) Ultra 7 265K (15923 MiB, 15923 MiB free)
+0.00.039.623 I system_info: n_threads = 6 (n_threads_batch = 6) / 6 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX_VNNI = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+0.00.039.627 W srv  llama_server: embeddings enabled with n_batch (2048) > n_ubatch (512)
+0.00.039.627 W srv  llama_server: setting n_batch = n_ubatch = 512 to avoid assertion failure
+0.00.039.627 I srv  llama_server: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true
+0.00.039.646 I srv          init: running without SSL
+0.00.039.666 I srv          init: using 8 threads for HTTP server
+0.00.039.723 I srv         start: binding port with default address family
+0.00.040.849 I srv  llama_server: loading model
+0.00.040.858 I srv    load_model: loading model '/home/phoenixt/.lmforge/models/qwen3-embedding-0.6b-gguf/Qwen3-Embedding-0.6B-Q8_0.gguf'
+0.00.040.876 I common_init_result: fitting params to device memory ...
+0.00.040.876 I common_init_result: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)
+0.00.322.943 W load: control-looking token: 128247 '</s>' was not control-type; this is probably a bug in the model. its type will be overridden
+0.00.692.256 I common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+0.00.752.321 I srv    load_model: initializing slots, n_slots = 4
+0.00.856.187 W common_speculative_init: no implementations specified for speculative decoding
+0.00.856.192 I slot   load_model: id  0 | task -1 | new slot, n_ctx = 32768
+0.00.856.197 I slot   load_model: id  1 | task -1 | new slot, n_ctx = 32768
+0.00.856.198 I slot   load_model: id  2 | task -1 | new slot, n_ctx = 32768
+0.00.856.198 I slot   load_model: id  3 | task -1 | new slot, n_ctx = 32768
+0.00.856.212 I srv    load_model: prompt cache is enabled, size limit: 8192 MiB
+0.00.856.212 I srv    load_model: use `--cache-ram 0` to disable the prompt cache
+0.00.856.212 I srv    load_model: for more info see https://github.com/ggml-org/llama.cpp/pull/16391
+0.00.856.213 I srv    load_model: context checkpoints enabled, max = 32, min spacing = 256
+0.00.856.231 I srv          init: idle slots will be saved to prompt cache and cleared upon starting a new task
+0.00.860.616 I init: chat template, example_format: '<|im_start|>system
+You are a helpful assistant<|im_end|>
+<|im_start|>user
+Hello<|im_end|>
+<|im_start|>assistant
+Hi there<|im_end|>
+<|im_start|>user
+How are you?<|im_end|>
+<|im_start|>assistant
+'
+0.00.863.223 I srv          init: init: chat template, thinking = 1
+0.00.863.251 I srv  llama_server: model loaded
+0.00.863.254 I srv  llama_server: server is listening on http://127.0.0.1:11431
+0.00.863.258 I srv  update_slots: all slots are idle
+0.01.052.250 I slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1
+0.01.052.272 I slot launch_slot_: id  3 | task 0 | processing task, is_child = 0
+0.01.066.575 I slot      release: id  3 | task 0 | stop processing: n_tokens = 46, truncated = 0
+0.01.066.582 I srv  update_slots: all slots are idle
+0.04.557.451 I slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = -1
+0.04.557.458 I slot launch_slot_: id  2 | task 2 | processing task, is_child = 0
+0.04.557.459 I slot slot_save_an: id  3 | task -1 | saving idle slot to prompt cache
+0.04.557.497 W srv   prompt_save:  - saving prompt with length 46, total state size = 5.032 MiB (draft: 0.000 MiB)
+0.04.562.301 I slot prompt_clear: id  3 | task -1 | clearing prompt with 46 tokens
+0.04.562.325 I srv        update:  - cache state: 1 prompts, 5.032 MiB (limits: 8192.000 MiB, 32768 tokens, 74880 est)
+0.04.562.327 I srv        update:    - prompt 0x561f4cde5f20:      46 tokens, checkpoints:  0,     5.032 MiB
+0.04.577.806 I slot      release: id  2 | task 2 | stop processing: n_tokens = 53, truncated = 0
+0.04.577.817 I srv  update_slots: all slots are idle
+0.04.608.021 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.04.608.030 I slot launch_slot_: id  2 | task 4 | processing task, is_child = 0
+0.04.615.936 I slot      release: id  2 | task 4 | stop processing: n_tokens = 53, truncated = 0
+0.04.615.945 I srv  update_slots: all slots are idle
+0.04.645.190 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.04.645.197 I slot launch_slot_: id  2 | task 6 | processing task, is_child = 0
+0.04.652.822 I slot      release: id  2 | task 6 | stop processing: n_tokens = 53, truncated = 0
+0.04.652.828 I srv  update_slots: all slots are idle
+0.04.681.910 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.04.681.916 I slot launch_slot_: id  2 | task 8 | processing task, is_child = 0
+0.04.689.051 I slot      release: id  2 | task 8 | stop processing: n_tokens = 53, truncated = 0
+0.04.689.058 I srv  update_slots: all slots are idle
+0.04.718.023 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.04.718.029 I slot launch_slot_: id  2 | task 10 | processing task, is_child = 0
+0.04.725.177 I slot      release: id  2 | task 10 | stop processing: n_tokens = 53, truncated = 0
+0.04.725.184 I srv  update_slots: all slots are idle
+0.04.754.215 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.04.754.230 I slot launch_slot_: id  2 | task 12 | processing task, is_child = 0
+0.04.761.426 I slot      release: id  2 | task 12 | stop processing: n_tokens = 53, truncated = 0
+0.04.761.432 I srv  update_slots: all slots are idle
+0.04.789.968 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.04.789.975 I slot launch_slot_: id  2 | task 14 | processing task, is_child = 0
+0.04.797.375 I slot      release: id  2 | task 14 | stop processing: n_tokens = 53, truncated = 0
+0.04.797.383 I srv  update_slots: all slots are idle
+0.04.826.449 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.04.826.456 I slot launch_slot_: id  2 | task 16 | processing task, is_child = 0
+0.04.833.969 I slot      release: id  2 | task 16 | stop processing: n_tokens = 53, truncated = 0
+0.04.833.978 I srv  update_slots: all slots are idle
+0.04.863.228 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.04.863.236 I slot launch_slot_: id  2 | task 18 | processing task, is_child = 0
+0.04.870.380 I slot      release: id  2 | task 18 | stop processing: n_tokens = 53, truncated = 0
+0.04.870.386 I srv  update_slots: all slots are idle
+0.04.899.172 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.130 (> 0.100 thold), f_keep = 0.132
+0.04.899.180 I slot launch_slot_: id  2 | task 20 | processing task, is_child = 0
+0.04.906.546 I slot      release: id  2 | task 20 | stop processing: n_tokens = 54, truncated = 0
+0.04.906.551 I srv  update_slots: all slots are idle
+0.12.107.873 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.130
+0.12.107.880 I slot launch_slot_: id  2 | task 22 | processing task, is_child = 0
+0.12.115.695 I slot      release: id  2 | task 22 | stop processing: n_tokens = 53, truncated = 0
+0.12.116.885 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.130 (> 0.100 thold), f_keep = 0.132
+0.12.116.888 I slot launch_slot_: id  2 | task 24 | processing task, is_child = 0
+0.12.126.858 I slot      release: id  2 | task 24 | stop processing: n_tokens = 54, truncated = 0
+0.12.127.003 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.130
+0.12.127.042 I slot launch_slot_: id  2 | task 26 | processing task, is_child = 0
+0.12.127.066 I slot get_availabl: id  1 | task -1 | selected slot by LRU, t_last = -1
+0.12.127.091 I slot launch_slot_: id  1 | task 27 | processing task, is_child = 0
+0.12.154.249 I slot      release: id  1 | task 27 | stop processing: n_tokens = 53, truncated = 0
+0.12.154.258 I slot      release: id  2 | task 26 | stop processing: n_tokens = 53, truncated = 0
+0.12.154.269 I slot get_availabl: id  1 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.12.154.271 I slot launch_slot_: id  1 | task 29 | processing task, is_child = 0
+0.12.154.272 I slot slot_save_an: id  2 | task -1 | saving idle slot to prompt cache
+0.12.154.302 W srv   prompt_save:  - saving prompt with length 53, total state size = 5.798 MiB (draft: 0.000 MiB)
+0.12.162.172 I slot prompt_clear: id  2 | task -1 | clearing prompt with 53 tokens
+0.12.162.204 I srv        update:  - cache state: 2 prompts, 10.831 MiB (limits: 8192.000 MiB, 32768 tokens, 74881 est)
+0.12.162.206 I srv        update:    - prompt 0x561f4cde5f20:      46 tokens, checkpoints:  0,     5.032 MiB
+0.12.162.206 I srv        update:    - prompt 0x561f4cdfd6f0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.12.162.211 I slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = -1
+0.12.162.216 I slot launch_slot_: id  0 | task 30 | processing task, is_child = 0
+0.12.175.572 I slot      release: id  0 | task 30 | stop processing: n_tokens = 53, truncated = 0
+0.12.175.577 I slot      release: id  1 | task 29 | stop processing: n_tokens = 53, truncated = 0
+0.12.175.582 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.12.175.584 I slot launch_slot_: id  0 | task 32 | processing task, is_child = 0
+0.12.175.584 I slot slot_save_an: id  1 | task -1 | saving idle slot to prompt cache
+0.12.175.604 W srv   prompt_save:  - saving prompt with length 53, total state size = 5.798 MiB (draft: 0.000 MiB)
+0.12.183.052 I slot prompt_clear: id  1 | task -1 | clearing prompt with 53 tokens
+0.12.183.078 I srv        update:  - cache state: 3 prompts, 16.629 MiB (limits: 8192.000 MiB, 32768 tokens, 74881 est)
+0.12.183.080 I srv        update:    - prompt 0x561f4cde5f20:      46 tokens, checkpoints:  0,     5.032 MiB
+0.12.183.080 I srv        update:    - prompt 0x561f4cdfd6f0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.12.183.080 I srv        update:    - prompt 0x561f4cdfdcd0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.12.183.083 I slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = 12627583337
+0.12.183.087 I slot launch_slot_: id  3 | task 33 | processing task, is_child = 0
+0.12.195.454 I slot      release: id  0 | task 32 | stop processing: n_tokens = 53, truncated = 0
+0.12.195.508 I slot      release: id  3 | task 33 | stop processing: n_tokens = 53, truncated = 0
+0.12.195.513 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.12.195.515 I slot launch_slot_: id  0 | task 35 | processing task, is_child = 0
+0.12.195.515 I slot slot_save_an: id  3 | task -1 | saving idle slot to prompt cache
+0.12.195.533 W srv   prompt_save:  - saving prompt with length 53, total state size = 5.798 MiB (draft: 0.000 MiB)
+0.12.200.839 I slot prompt_clear: id  3 | task -1 | clearing prompt with 53 tokens
+0.12.200.860 I srv        update:  - cache state: 4 prompts, 22.427 MiB (limits: 8192.000 MiB, 32768 tokens, 74881 est)
+0.12.200.862 I srv        update:    - prompt 0x561f4cde5f20:      46 tokens, checkpoints:  0,     5.032 MiB
+0.12.200.862 I srv        update:    - prompt 0x561f4cdfd6f0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.12.200.862 I srv        update:    - prompt 0x561f4cdfdcd0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.12.200.862 I srv        update:    - prompt 0x561f4cdfcfd0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.12.200.865 I slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = 12638671018
+0.12.200.869 I slot launch_slot_: id  2 | task 36 | processing task, is_child = 0
+0.12.212.991 I slot      release: id  0 | task 35 | stop processing: n_tokens = 53, truncated = 0
+0.12.212.998 I slot      release: id  2 | task 36 | stop processing: n_tokens = 53, truncated = 0
+0.12.213.001 I srv  update_slots: all slots are idle
+0.12.273.587 I slot get_availabl: id  1 | task -1 | selected slot by LRU, t_last = 12638692337
+0.12.273.593 I slot launch_slot_: id  1 | task 38 | processing task, is_child = 0
+0.12.273.594 I slot slot_save_an: id  0 | task -1 | saving idle slot to prompt cache
+0.12.273.626 W srv   prompt_save:  - saving prompt with length 53, total state size = 5.798 MiB (draft: 0.000 MiB)
+0.12.278.629 I slot prompt_clear: id  0 | task -1 | clearing prompt with 53 tokens
+0.12.278.652 I srv        update:  - cache state: 5 prompts, 28.225 MiB (limits: 8192.000 MiB, 32768 tokens, 74881 est)
+0.12.278.654 I srv        update:    - prompt 0x561f4cde5f20:      46 tokens, checkpoints:  0,     5.032 MiB
+0.12.278.654 I srv        update:    - prompt 0x561f4cdfd6f0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.12.278.654 I srv        update:    - prompt 0x561f4cdfdcd0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.12.278.655 I srv        update:    - prompt 0x561f4cdfcfd0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.12.278.655 I srv        update:    - prompt 0x561f4adf0730:      53 tokens, checkpoints:  0,     5.798 MiB
+0.12.278.656 I slot slot_save_an: id  2 | task -1 | saving idle slot to prompt cache
+0.12.278.669 W srv   prompt_save:  - saving prompt with length 53, total state size = 5.798 MiB (draft: 0.000 MiB)
+0.12.284.036 I slot prompt_clear: id  2 | task -1 | clearing prompt with 53 tokens
+0.12.284.054 I srv        update:  - cache state: 6 prompts, 34.023 MiB (limits: 8192.000 MiB, 32768 tokens, 74881 est)
+0.12.284.058 I srv        update:    - prompt 0x561f4cde5f20:      46 tokens, checkpoints:  0,     5.032 MiB
+0.12.284.058 I srv        update:    - prompt 0x561f4cdfd6f0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.12.284.058 I srv        update:    - prompt 0x561f4cdfdcd0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.12.284.059 I srv        update:    - prompt 0x561f4cdfcfd0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.12.284.059 I srv        update:    - prompt 0x561f4adf0730:      53 tokens, checkpoints:  0,     5.798 MiB
+0.12.284.059 I srv        update:    - prompt 0x561f4ce04410:      53 tokens, checkpoints:  0,     5.798 MiB
+0.12.291.885 I slot      release: id  1 | task 38 | stop processing: n_tokens = 44, truncated = 0
+0.12.291.893 I srv  update_slots: all slots are idle
+0.20.408.536 I srv    operator(): operator(): cleaning up before exit...
+0.00.012.206 I log_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.012.208 I device_info:
+0.00.084.950 I   - CUDA0   : NVIDIA GeForce RTX 5060 Ti (15843 MiB, 14740 MiB free)
+0.00.084.961 I   - CPU     : Intel(R) Core(TM) Ultra 7 265K (15923 MiB, 15923 MiB free)
+0.00.085.023 I system_info: n_threads = 6 (n_threads_batch = 6) / 6 | CUDA : ARCHS = 860,890,900,1200 | USE_GRAPHS = 1 | PEER_MAX_BATCH_SIZE = 128 | FA_ALL_QUANTS = 1 | BLACKWELL_NATIVE_FP4 = 1 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+0.00.085.031 W srv  llama_server: embeddings enabled with n_batch (2048) > n_ubatch (512)
+0.00.085.031 W srv  llama_server: setting n_batch = n_ubatch = 512 to avoid assertion failure
+0.00.085.031 I srv  llama_server: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true
+0.00.085.082 I srv          init: using 8 threads for HTTP server
+0.00.085.155 I srv         start: binding port with default address family
+0.00.086.343 I srv  llama_server: loading model
+0.00.086.348 I srv    load_model: loading model '/home/phoenixt/.lmforge/models/qwen3-embedding-0.6b-gguf/Qwen3-Embedding-0.6B-Q8_0.gguf'
+0.00.086.387 I common_init_result: fitting params to device memory ...
+0.00.086.388 I common_init_result: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)
+0.00.317.304 W load: control-looking token: 128247 '</s>' was not control-type; this is probably a bug in the model. its type will be overridden
+0.00.684.583 I common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+0.00.721.230 I srv    load_model: initializing slots, n_slots = 4
+0.00.748.595 W common_speculative_init: no implementations specified for speculative decoding
+0.00.748.598 I slot   load_model: id  0 | task -1 | new slot, n_ctx = 32768
+0.00.748.602 I slot   load_model: id  1 | task -1 | new slot, n_ctx = 32768
+0.00.748.603 I slot   load_model: id  2 | task -1 | new slot, n_ctx = 32768
+0.00.748.603 I slot   load_model: id  3 | task -1 | new slot, n_ctx = 32768
+0.00.748.618 I srv    load_model: prompt cache is enabled, size limit: 8192 MiB
+0.00.748.619 I srv    load_model: use `--cache-ram 0` to disable the prompt cache
+0.00.748.619 I srv    load_model: for more info see https://github.com/ggml-org/llama.cpp/pull/16391
+0.00.748.619 I srv    load_model: context checkpoints enabled, max = 32, min spacing = 256
+0.00.748.643 I srv          init: idle slots will be saved to prompt cache and cleared upon starting a new task
+0.00.753.542 I init: chat template, example_format: '<|im_start|>system
+You are a helpful assistant<|im_end|>
+<|im_start|>user
+Hello<|im_end|>
+<|im_start|>assistant
+Hi there<|im_end|>
+<|im_start|>user
+How are you?<|im_end|>
+<|im_start|>assistant
+'
+0.00.756.103 I srv          init: init: chat template, thinking = 1
+0.00.756.130 I srv  llama_server: model loaded
+0.00.756.133 I srv  llama_server: server is listening on http://127.0.0.1:11431
+0.00.756.138 I srv  update_slots: all slots are idle
+0.00.982.840 I slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1
+0.00.982.862 I slot launch_slot_: id  3 | task 0 | processing task, is_child = 0
+0.01.002.226 I slot      release: id  3 | task 0 | stop processing: n_tokens = 46, truncated = 0
+0.01.002.235 I srv  update_slots: all slots are idle
+0.04.427.303 I slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = -1
+0.04.427.308 I slot launch_slot_: id  2 | task 2 | processing task, is_child = 0
+0.04.427.309 I slot slot_save_an: id  3 | task -1 | saving idle slot to prompt cache
+0.04.427.342 W srv   prompt_save:  - saving prompt with length 46, total state size = 5.032 MiB (draft: 0.000 MiB)
+0.04.430.611 I slot prompt_clear: id  3 | task -1 | clearing prompt with 46 tokens
+0.04.430.632 I srv        update:  - cache state: 1 prompts, 5.032 MiB (limits: 8192.000 MiB, 32768 tokens, 74880 est)
+0.04.430.633 I srv        update:    - prompt 0x2a4a8fa0:      46 tokens, checkpoints:  0,     5.032 MiB
+0.04.447.465 I slot      release: id  2 | task 2 | stop processing: n_tokens = 53, truncated = 0
+0.04.447.476 I srv  update_slots: all slots are idle
+0.04.460.590 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.04.460.599 I slot launch_slot_: id  2 | task 4 | processing task, is_child = 0
+0.04.467.992 I slot      release: id  2 | task 4 | stop processing: n_tokens = 53, truncated = 0
+0.04.468.000 I srv  update_slots: all slots are idle
+0.04.481.054 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.04.481.059 I slot launch_slot_: id  2 | task 6 | processing task, is_child = 0
+0.04.490.461 I slot      release: id  2 | task 6 | stop processing: n_tokens = 53, truncated = 0
+0.04.490.470 I srv  update_slots: all slots are idle
+0.04.502.955 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.04.502.959 I slot launch_slot_: id  2 | task 8 | processing task, is_child = 0
+0.04.509.150 I slot      release: id  2 | task 8 | stop processing: n_tokens = 53, truncated = 0
+0.04.509.156 I srv  update_slots: all slots are idle
+0.04.520.931 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.04.520.937 I slot launch_slot_: id  2 | task 10 | processing task, is_child = 0
+0.04.527.142 I slot      release: id  2 | task 10 | stop processing: n_tokens = 53, truncated = 0
+0.04.527.149 I srv  update_slots: all slots are idle
+0.04.538.845 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.04.538.851 I slot launch_slot_: id  2 | task 12 | processing task, is_child = 0
+0.04.545.013 I slot      release: id  2 | task 12 | stop processing: n_tokens = 53, truncated = 0
+0.04.545.020 I srv  update_slots: all slots are idle
+0.04.556.744 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.04.556.749 I slot launch_slot_: id  2 | task 14 | processing task, is_child = 0
+0.04.562.989 I slot      release: id  2 | task 14 | stop processing: n_tokens = 53, truncated = 0
+0.04.562.995 I srv  update_slots: all slots are idle
+0.04.575.361 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.04.575.367 I slot launch_slot_: id  2 | task 16 | processing task, is_child = 0
+0.04.581.851 I slot      release: id  2 | task 16 | stop processing: n_tokens = 53, truncated = 0
+0.04.581.857 I srv  update_slots: all slots are idle
+0.04.593.461 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.04.593.465 I slot launch_slot_: id  2 | task 18 | processing task, is_child = 0
+0.04.599.885 I slot      release: id  2 | task 18 | stop processing: n_tokens = 53, truncated = 0
+0.04.599.891 I srv  update_slots: all slots are idle
+0.04.611.788 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.130 (> 0.100 thold), f_keep = 0.132
+0.04.611.793 I slot launch_slot_: id  2 | task 20 | processing task, is_child = 0
+0.04.618.488 I slot      release: id  2 | task 20 | stop processing: n_tokens = 54, truncated = 0
+0.04.618.494 I srv  update_slots: all slots are idle
+0.11.116.259 I slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.130
+0.11.116.264 I slot launch_slot_: id  2 | task 22 | processing task, is_child = 0
+0.11.116.265 I slot get_availabl: id  1 | task -1 | selected slot by LRU, t_last = -1
+0.11.116.266 I slot launch_slot_: id  1 | task 23 | processing task, is_child = 0
+0.11.153.276 I slot      release: id  1 | task 23 | stop processing: n_tokens = 53, truncated = 0
+0.11.153.313 I slot      release: id  2 | task 22 | stop processing: n_tokens = 53, truncated = 0
+0.11.153.330 I slot get_availabl: id  1 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.11.153.334 I slot launch_slot_: id  1 | task 25 | processing task, is_child = 0
+0.11.153.334 I slot slot_save_an: id  2 | task -1 | saving idle slot to prompt cache
+0.11.153.363 W srv   prompt_save:  - saving prompt with length 53, total state size = 5.798 MiB (draft: 0.000 MiB)
+0.11.159.116 I slot prompt_clear: id  2 | task -1 | clearing prompt with 53 tokens
+0.11.159.139 I srv        update:  - cache state: 2 prompts, 10.831 MiB (limits: 8192.000 MiB, 32768 tokens, 74881 est)
+0.11.159.140 I srv        update:    - prompt 0x2a4a8fa0:      46 tokens, checkpoints:  0,     5.032 MiB
+0.11.159.141 I srv        update:    - prompt 0x29b1b100:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.159.143 I slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = -1
+0.11.159.147 I slot launch_slot_: id  0 | task 26 | processing task, is_child = 0
+0.11.159.148 I slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = 548250287
+0.11.159.149 I slot launch_slot_: id  3 | task 28 | processing task, is_child = 0
+0.11.159.152 I slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = 558401378
+0.11.159.152 I slot launch_slot_: id  2 | task 27 | processing task, is_child = 0
+0.11.227.183 I slot      release: id  0 | task 26 | stop processing: n_tokens = 53, truncated = 0
+0.11.227.460 I slot      release: id  1 | task 25 | stop processing: n_tokens = 53, truncated = 0
+0.11.227.520 I slot      release: id  2 | task 27 | stop processing: n_tokens = 53, truncated = 0
+0.11.227.531 I slot      release: id  3 | task 28 | stop processing: n_tokens = 53, truncated = 0
+0.11.227.536 I srv  update_slots: all slots are idle
+0.11.231.907 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, sim_best = 0.132 (> 0.100 thold), f_keep = 0.132
+0.11.231.911 I slot launch_slot_: id  0 | task 31 | processing task, is_child = 0
+0.11.231.911 I slot slot_save_an: id  1 | task -1 | saving idle slot to prompt cache
+0.11.231.938 W srv   prompt_save:  - saving prompt with length 53, total state size = 5.798 MiB (draft: 0.000 MiB)
+0.11.236.651 I slot prompt_clear: id  1 | task -1 | clearing prompt with 53 tokens
+0.11.236.672 I srv        update:  - cache state: 3 prompts, 16.629 MiB (limits: 8192.000 MiB, 32768 tokens, 74881 est)
+0.11.236.673 I srv        update:    - prompt 0x2a4a8fa0:      46 tokens, checkpoints:  0,     5.032 MiB
+0.11.236.674 I srv        update:    - prompt 0x29b1b100:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.236.674 I srv        update:    - prompt 0x20cb67a0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.236.674 I slot slot_save_an: id  2 | task -1 | saving idle slot to prompt cache
+0.11.236.685 W srv   prompt_save:  - saving prompt with length 53, total state size = 5.798 MiB (draft: 0.000 MiB)
+0.11.241.893 I slot prompt_clear: id  2 | task -1 | clearing prompt with 53 tokens
+0.11.241.910 I srv        update:  - cache state: 4 prompts, 22.427 MiB (limits: 8192.000 MiB, 32768 tokens, 74881 est)
+0.11.241.911 I srv        update:    - prompt 0x2a4a8fa0:      46 tokens, checkpoints:  0,     5.032 MiB
+0.11.241.911 I srv        update:    - prompt 0x29b1b100:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.241.911 I srv        update:    - prompt 0x20cb67a0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.241.911 I srv        update:    - prompt 0x292fd170:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.241.912 I slot slot_save_an: id  3 | task -1 | saving idle slot to prompt cache
+0.11.241.922 W srv   prompt_save:  - saving prompt with length 53, total state size = 5.798 MiB (draft: 0.000 MiB)
+0.11.247.140 I slot prompt_clear: id  3 | task -1 | clearing prompt with 53 tokens
+0.11.247.159 I srv        update:  - cache state: 5 prompts, 28.225 MiB (limits: 8192.000 MiB, 32768 tokens, 74881 est)
+0.11.247.159 I srv        update:    - prompt 0x2a4a8fa0:      46 tokens, checkpoints:  0,     5.032 MiB
+0.11.247.159 I srv        update:    - prompt 0x29b1b100:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.247.159 I srv        update:    - prompt 0x20cb67a0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.247.159 I srv        update:    - prompt 0x292fd170:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.247.160 I srv        update:    - prompt 0x292ed780:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.247.162 I slot get_availabl: id  1 | task -1 | selected slot by LRU, t_last = 558475522
+0.11.247.166 I slot launch_slot_: id  1 | task 32 | processing task, is_child = 0
+0.11.247.166 I slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = 558475581
+0.11.247.167 I slot launch_slot_: id  2 | task 30 | processing task, is_child = 0
+0.11.247.168 I slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = 558475590
+0.11.247.168 I slot launch_slot_: id  3 | task 33 | processing task, is_child = 0
+0.11.297.089 I slot      release: id  0 | task 31 | stop processing: n_tokens = 53, truncated = 0
+0.11.297.098 I slot      release: id  1 | task 32 | stop processing: n_tokens = 53, truncated = 0
+0.11.297.101 I slot      release: id  2 | task 30 | stop processing: n_tokens = 53, truncated = 0
+0.11.297.103 I slot      release: id  3 | task 33 | stop processing: n_tokens = 54, truncated = 0
+0.11.297.118 I srv  update_slots: all slots are idle
+0.11.340.074 I slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = 558545151
+0.11.340.080 I slot launch_slot_: id  0 | task 35 | processing task, is_child = 0
+0.11.340.080 I slot slot_save_an: id  1 | task -1 | saving idle slot to prompt cache
+0.11.340.108 W srv   prompt_save:  - saving prompt with length 53, total state size = 5.798 MiB (draft: 0.000 MiB)
+0.11.345.128 I slot prompt_clear: id  1 | task -1 | clearing prompt with 53 tokens
+0.11.345.150 I srv        update:  - cache state: 6 prompts, 34.023 MiB (limits: 8192.000 MiB, 32768 tokens, 74881 est)
+0.11.345.150 I srv        update:    - prompt 0x2a4a8fa0:      46 tokens, checkpoints:  0,     5.032 MiB
+0.11.345.150 I srv        update:    - prompt 0x29b1b100:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.345.151 I srv        update:    - prompt 0x20cb67a0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.345.151 I srv        update:    - prompt 0x292fd170:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.345.151 I srv        update:    - prompt 0x292ed780:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.345.153 I srv        update:    - prompt 0x292f2970:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.345.154 I slot slot_save_an: id  2 | task -1 | saving idle slot to prompt cache
+0.11.345.164 W srv   prompt_save:  - saving prompt with length 53, total state size = 5.798 MiB (draft: 0.000 MiB)
+0.11.350.210 I slot prompt_clear: id  2 | task -1 | clearing prompt with 53 tokens
+0.11.350.229 I srv        update:  - cache state: 7 prompts, 39.821 MiB (limits: 8192.000 MiB, 32768 tokens, 74881 est)
+0.11.350.231 I srv        update:    - prompt 0x2a4a8fa0:      46 tokens, checkpoints:  0,     5.032 MiB
+0.11.350.231 I srv        update:    - prompt 0x29b1b100:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.350.231 I srv        update:    - prompt 0x20cb67a0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.350.231 I srv        update:    - prompt 0x292fd170:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.350.231 I srv        update:    - prompt 0x292ed780:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.350.232 I srv        update:    - prompt 0x292f2970:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.350.232 I srv        update:    - prompt 0x29330fb0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.350.232 I slot slot_save_an: id  3 | task -1 | saving idle slot to prompt cache
+0.11.350.243 W srv   prompt_save:  - saving prompt with length 54, total state size = 5.908 MiB (draft: 0.000 MiB)
+0.11.355.670 I slot prompt_clear: id  3 | task -1 | clearing prompt with 54 tokens
+0.11.355.691 I srv        update:  - cache state: 8 prompts, 45.729 MiB (limits: 8192.000 MiB, 32768 tokens, 74881 est)
+0.11.355.694 I srv        update:    - prompt 0x2a4a8fa0:      46 tokens, checkpoints:  0,     5.032 MiB
+0.11.355.694 I srv        update:    - prompt 0x29b1b100:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.355.694 I srv        update:    - prompt 0x20cb67a0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.355.694 I srv        update:    - prompt 0x292fd170:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.355.695 I srv        update:    - prompt 0x292ed780:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.355.695 I srv        update:    - prompt 0x292f2970:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.355.695 I srv        update:    - prompt 0x29330fb0:      53 tokens, checkpoints:  0,     5.798 MiB
+0.11.355.695 I srv        update:    - prompt 0x2931e300:      54 tokens, checkpoints:  0,     5.908 MiB
+0.11.362.219 I slot      release: id  0 | task 35 | stop processing: n_tokens = 44, truncated = 0
+0.11.362.229 I srv  update_slots: all slots are idle
+0.17.244.281 I srv    operator(): operator(): cleaning up before exit...
