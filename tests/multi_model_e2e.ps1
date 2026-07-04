@@ -92,7 +92,9 @@ function Write-ReportFile {
     $logDir = Join-Path $env:USERPROFILE ".lmforge\logs"
     $outLogs = Join-Path $ResultsDir "logs"
     New-Item -ItemType Directory -Force -Path $outLogs | Out-Null
-    foreach ($pair in @(@("daemon.err.log", 400), @("daemon.out.log", 100))) {
+    # daemon.err/out only exist where a service manager redirects stdio
+    # (launchd/systemd); the Windows daemon logs to lmforge.log directly.
+    foreach ($pair in @(@("daemon.err.log", 400), @("daemon.out.log", 100), @("lmforge.log", 400))) {
         $src = Join-Path $logDir $pair[0]
         if (Test-Path $src) {
             Get-Content $src -Tail $pair[1] | Set-Content -Path (Join-Path $outLogs $pair[0])
