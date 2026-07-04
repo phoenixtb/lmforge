@@ -225,7 +225,9 @@ for platform in "${PLATFORMS[@]}"; do
                 \( -iname 'llama-*.exe' ! -iname 'llama-server.exe' \) -delete
             ;;
         *)
-            find "$stage_dir" -maxdepth 1 -type f -executable \
+            # No -executable: GNU-only, breaks on macOS/BSD find. The name
+            # filter alone is sufficient — libs are lib*-prefixed.
+            find "$stage_dir" -maxdepth 1 -type f \
                 \( -name 'llama-*' ! -name 'llama-server' ! -name 'lib*' \) -delete
             # Also remove standalone helper binaries that aren't llama-*-named.
             for extra in rpc-server llama; do

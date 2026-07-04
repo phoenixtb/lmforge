@@ -107,7 +107,13 @@ name            = "llama.cpp"
 # Pinned release. Bump together with the release_url + asset_pattern lines
 # below AND regenerate data/engines/llamacpp/SHA256SUMS via:
 #   scripts/bundle-llamacpp.sh --refresh-sums
-version         = "b9351"
+# b9351 → b9861: upstream moved Windows CUDA prebuilts from the 13.1 to the
+# 13.3 toolkit and picked up months of Blackwell (sm_120) runtime fixes —
+# candidate fix for the intermittent garbage-output-per-engine-launch seen on
+# RTX 5060 Ti (win-cuda-13.1 build, driver 610.x). NOTE: the Linux CUDA R2
+# archives (variants-manifest.json) are still b9351 — rebuild them to match
+# before a release ships this pin.
+version         = "b9861"
 tier            = "default"
 # macOS intentionally omitted — Apple Silicon uses omlx (MLX) as default.
 # Linux GPU variants use upstream's Vulkan build (one binary covers NVIDIA +
@@ -117,11 +123,11 @@ supported_os_families = ["linux", "windows-native", "windows-wsl2"]
 matches_fallback = true
 install_method  = "binary"
 binary          = "llama-server"
-release_url     = "https://github.com/ggml-org/llama.cpp/releases/download/b9351"
+release_url     = "https://github.com/ggml-org/llama.cpp/releases/download/b9861"
 # {platform} is resolved by the installer; extension (.tar.gz or .zip) is appended by OS
-asset_pattern   = "llama-b9351-bin-{platform}"
+asset_pattern   = "llama-b9861-bin-{platform}"
 # Windows + NVIDIA only: companion zip with the CUDA runtime DLLs. The
-# installer picks {cuda_variant} = 12.4 or 13.1 based on the driver's
+# installer picks {cuda_variant} = 12.4 or 13.3 based on the driver's
 # reported CUDA runtime version via nvidia-smi.
 cudart_pattern  = "cudart-llama-bin-win-cuda-{cuda_variant}-x64"
 model_format    = "gguf"
