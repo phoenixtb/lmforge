@@ -314,10 +314,37 @@ function E2eInference {
 #   think=off non-blank (Fix #3c), no reasoning==content dup (Fix #5a), no errors.
 # Bounded to the e2e chat model; override with $env:E2E_THINK_MODELS. Requires
 # python; skips gracefully if absent.
+# Resolve a launcher for stdlib-only python tools. Probes candidates with
+# `-c "import sys"` because on Windows the Microsoft Store alias stub IS found
+# by Get-Command but exits 9009 ("Python was not found"). Falls back to uv
+# (lmforge-bundled or system) whose `uv run` auto-provisions a managed Python.
+# Returns a string[] of launcher words, or $null.
+function Resolve-E2ePython {
+    foreach ($c in @("python3", "python")) {
+        $cmd = Get-Command $c -ErrorAction SilentlyContinue
+        if ($cmd) {
+            & $cmd.Source -c "import sys" 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { return @($cmd.Source) }
+        }
+    }
+    $candidates = @((Join-Path $env:USERPROFILE ".lmforge\bin\uv.exe"))
+    $sysUv = Get-Command uv -ErrorAction SilentlyContinue
+    if ($sysUv) { $candidates += $sysUv.Source }
+    foreach ($c in $candidates) {
+        if (Test-Path $c) { return @($c, "run", "--no-project", "--") }
+    }
+    return $null
+}
+
 function E2eThinking {
-    $py = Get-Command python3 -ErrorAction SilentlyContinue
-    if (-not $py) { $py = Get-Command python -ErrorAction SilentlyContinue }
-    if (-not $py) { Write-Host "  python not found - skipping thinking gate"; return }
+    # Fail-fast prerequisite check — a silent skip would hide reasoning
+    # regressions on boxes without python (exactly what a gate must not do).
+    $launcher = Resolve-E2ePython
+    if (-not $launcher) {
+        Write-Host "  FAIL: thinking gate needs a working python or uv." -ForegroundColor Red
+        Write-Host "  Install uv:  powershell -c `"irm https://astral.sh/uv/install.ps1 | iex`""
+        throw "thinking gate: no python/uv available"
+    }
     $models = if ($env:E2E_THINK_MODELS) { $env:E2E_THINK_MODELS }
               elseif ($env:E2E_CHAT_MODEL) { $env:E2E_CHAT_MODEL }
               else { "qwen3.5:2b:4bit" }
@@ -327,7 +354,9 @@ function E2eThinking {
     $argv = @($bench, "--base", $base, "--models") + ($models -split '\s+') +
             @("--quick", "--assert", "--outdir", $outdir, "--no-capture-logs")
     if ($env:E2E_THINK_STRICT -eq "1") { $argv += "--assert-strict" }
-    & $py.Source @argv
+    $exe = $launcher[0]
+    $argv = @($launcher | Select-Object -Skip 1) + $argv
+    & $exe @argv
     $rc = $LASTEXITCODE
     Remove-Item -Recurse -Force $outdir -ErrorAction SilentlyContinue
     if ($rc -ne 0) { throw "think_bench.py --assert exited $rc" }

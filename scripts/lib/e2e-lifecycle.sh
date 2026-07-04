@@ -485,10 +485,35 @@ e2e_inference() {
 # Bounded by default to the e2e chat model so it stays fast; override the model
 # set with E2E_THINK_MODELS="a b c". Results go to a temp dir (not committed).
 # Requires python3; skips gracefully if absent.
+# Resolve a launcher for stdlib-only python tools: a WORKING python (probed via
+# `-c "import sys"` — `command -v` alone passes broken shims), else uv
+# (lmforge-bundled or system; `uv run` auto-provisions a managed Python).
+# Echoes the launcher words; rc=1 when nothing usable exists.
+e2e_resolve_python() {
+    local c
+    for c in python3 python; do
+        if command -v "$c" >/dev/null 2>&1 && "$c" -c "import sys" >/dev/null 2>&1; then
+            echo "$c"
+            return 0
+        fi
+    done
+    for c in "$HOME/.lmforge/bin/uv" uv; do
+        if command -v "$c" >/dev/null 2>&1; then
+            echo "$c run --no-project --"
+            return 0
+        fi
+    done
+    return 1
+}
+
 e2e_thinking() {
-    if ! command -v python3 >/dev/null 2>&1; then
-        echo "  python3 not found — skipping thinking gate"
-        return 0
+    # Fail-fast prerequisite check — a silent skip here would hide reasoning
+    # regressions on boxes without python (exactly what a gate must not do).
+    local launcher
+    if ! launcher=$(e2e_resolve_python); then
+        echo "  FAIL: thinking gate needs python3 or uv. Install uv:"
+        echo "    curl -LsSf https://astral.sh/uv/install.sh | sh"
+        return 1
     fi
     local models="${E2E_THINK_MODELS:-${CHAT_MODEL:-${E2E_CHAT_MODEL:-qwen3.5:2b:4bit}}}"
     local outdir
@@ -498,7 +523,7 @@ e2e_thinking() {
     # NB: ${strict[@]+"${strict[@]}"} — guard empty-array expansion under `set -u`
     # (macOS ships bash 3.2, where a bare "${strict[@]}" on an empty array errors).
     # shellcheck disable=SC2086
-    python3 "$E2E_REPO_ROOT/tests/bench/think_bench.py" \
+    $launcher "$E2E_REPO_ROOT/tests/bench/think_bench.py" \
         --base "${E2E_API:-http://127.0.0.1:11430}" \
         --models $models \
         --quick --assert ${strict[@]+"${strict[@]}"} \
