@@ -309,8 +309,9 @@ try {
         Record "TC-E07" "PASS" "State consistency (sequential)" "$(@($status.running_models).Count) ready"
     } else {
         foreach ($m in @($script:EmbedModel, $script:ChatModel)) {
-            $slot = $status.running_models | Where-Object { $_.model_id -eq $m } | Select-Object -First 1
-            if (-not $slot -or $slot.status -ne "ready") { Fail "TC-E07: $m not ready" }
+            if (-not (Wait-E2eSlotReady -ModelId $m -TimeoutSec 90)) {
+                Fail "TC-E07: $m not status=ready within 90s"
+            }
         }
         Record "TC-E07" "PASS" "State consistency" "both ready"
     }

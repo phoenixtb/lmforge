@@ -93,6 +93,19 @@ e2e_wait_model_ready() {
     return 1
 }
 
+# Poll until a resident slot reports status=ready (handles post-burst warm-up).
+e2e_wait_slot_ready() {
+    local id="$1" max_secs="${2:-90}" i status
+    for (( i = 1; i <= max_secs; i++ )); do
+        status=$(curl -sf "${LF_HOST}/lf/status" 2>/dev/null | jq -r --arg m "$id" \
+            '.running_models[]? | select(.model_id == $m) | .status // empty' | head -1)
+        [[ "$status" == "ready" ]] && return 0
+        [[ -z "$status" ]] && return 1
+        sleep 1
+    done
+    return 1
+}
+
 # ── API calls (stdout = JSON body) ───────────────────────────────────────────
 
 e2e_lf_status() { curl -sf "${LF_HOST}/lf/status"; }

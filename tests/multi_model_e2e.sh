@@ -676,6 +676,10 @@ state_ok=true
 for _label_model in "embed:${EMBED_MODEL}" "chat:${CHAT_MODEL}"; do
     _label="${_label_model%%:*}"
     _model="${_label_model#*:}"
+    if ! e2e_wait_slot_ready "$_model" 90; then
+        warn "TC-E07: ${_label} model '${_model}' not status=ready within 90s"
+        state_ok=false
+    fi
     _slot=$(lf_status | jq -c --arg m "$_model" '.running_models[] | select(.model_id == $m)' 2>/dev/null)
     if [[ -z "$_slot" ]]; then
         warn "TC-E07: ${_label} model '${_model}' missing from running_models"

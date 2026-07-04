@@ -32,6 +32,21 @@ function Wait-E2eHealth {
     return $false
 }
 
+# Poll until a resident slot reports status=ready (handles post-burst warm-up).
+function Wait-E2eSlotReady {
+    param([string]$ModelId, [int]$TimeoutSec = 90, [string]$HostUrl = $script:LfHost)
+    for ($i = 1; $i -le $TimeoutSec; $i++) {
+        try {
+            $slot = (Invoke-RestMethod -Uri "$HostUrl/lf/status" -TimeoutSec 10).running_models |
+                Where-Object { $_.model_id -eq $ModelId } | Select-Object -First 1
+            if (-not $slot) { return $false }
+            if ($slot.status -eq "ready") { return $true }
+        } catch {}
+        Start-Sleep -Seconds 1
+    }
+    return $false
+}
+
 function Resolve-E2eBin {
     param([string]$RepoRoot)
     $candidates = @(
