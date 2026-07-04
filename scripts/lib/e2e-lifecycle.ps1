@@ -339,8 +339,11 @@ function Resolve-E2ePython {
 function E2eThinking {
     # Fail-fast prerequisite check — a silent skip would hide reasoning
     # regressions on boxes without python (exactly what a gate must not do).
-    $launcher = Resolve-E2ePython
-    if (-not $launcher) {
+    # NB: @(...) re-wraps the return — PowerShell unwraps a single-element array
+    # into a scalar string, and then $launcher[0] would index the FIRST CHAR
+    # (e.g. 'C' of 'C:\python.exe'). Forcing an array keeps $launcher[0] whole.
+    $launcher = @(Resolve-E2ePython)
+    if ($launcher.Count -eq 0 -or -not $launcher[0]) {
         Write-Host "  FAIL: thinking gate needs a working python or uv." -ForegroundColor Red
         Write-Host "  Install uv:  powershell -c `"irm https://astral.sh/uv/install.ps1 | iex`""
         throw "thinking gate: no python/uv available"
