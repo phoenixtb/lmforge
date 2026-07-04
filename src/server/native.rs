@@ -97,6 +97,13 @@ pub async fn status(State(state): State<AppState>) -> impl IntoResponse {
 
     let resp = serde_json::json!({
         "overall_status": engine_state.overall_status,
+        // Build provenance of the *serving* daemon. Tests assert this matches
+        // the binary they built — catches a stale installed daemon holding the
+        // port while a fresh test binary thinks it started one.
+        "daemon_build": {
+            "version": env!("CARGO_PKG_VERSION"),
+            "sha": env!("LMFORGE_GIT_SHA"),
+        },
         "engine": {
             "id": engine_state.engine_id,
             "version": engine_state.engine_version,

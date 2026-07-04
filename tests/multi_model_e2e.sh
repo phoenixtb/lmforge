@@ -149,9 +149,22 @@ write_report_file() {
             echo "| $id | $status | $desc | $detail |"
         done
     } > "$RESULTS_DIR/report.md"
-    # Daemon log tails for post-mortem (best-effort).
-    tail -n 400 "$HOME/.lmforge/logs/daemon.err.log" > "$RESULTS_DIR/daemon.err.tail.log" 2>/dev/null || true
-    tail -n 100 "$HOME/.lmforge/logs/daemon.out.log" > "$RESULTS_DIR/daemon.out.tail.log" 2>/dev/null || true
+    # Daemon + engine log tails for post-mortem (best-effort). MUST live under
+    # logs/ — .gitignore blanket-ignores *.log but whitelists results/**/logs/.
+    mkdir -p "$RESULTS_DIR/logs"
+    tail -n 400 "$HOME/.lmforge/logs/daemon.err.log" > "$RESULTS_DIR/logs/daemon.err.log" 2>/dev/null || true
+    tail -n 100 "$HOME/.lmforge/logs/daemon.out.log" > "$RESULTS_DIR/logs/daemon.out.log" 2>/dev/null || true
+    # Engine stderr: head carries build/version + template init lines, tail the
+    # recent traffic — capture both.
+    local eng
+    for eng in "$HOME"/.lmforge/logs/engine-*.stderr.log; do
+        [[ -f "$eng" ]] || continue
+        {
+            head -n 60 "$eng"
+            echo "----8<---- (head above / tail below) ----8<----"
+            tail -n 200 "$eng"
+        } > "$RESULTS_DIR/logs/$(basename "$eng")" 2>/dev/null || true
+    done
     echo -e "${DIM}  results captured: $RESULTS_DIR${NC}"
 }
 
@@ -433,6 +446,17 @@ else
     e2e_health_ok || fail "Daemon at ${LF_HOST} is not healthy (HTTP non-200)"
     ok "Daemon healthy"
 fi
+
+# Build-provenance gate: the daemon answering on the port MUST be the binary we
+# just built. A stale installed/service daemon holding the port silently
+# invalidates every result (bit us twice already).
+bin_sha=$("$LF_BIN" --version 2>/dev/null | sed -n 's/.*(\([^ ]*\) .*/\1/p')
+daemon_sha=$(curl -sf "${LF_HOST}/lf/status" 2>/dev/null | jq -r '.daemon_build.sha // "missing"' 2>/dev/null)
+if [[ -n "$bin_sha" && "$daemon_sha" != "$bin_sha" ]]; then
+    fail "STALE DAEMON: port is served by build '${daemon_sha}' but test binary is '${bin_sha}'. \
+Stop the installed/service daemon (lmforge stop; systemctl --user stop lmforge 2>/dev/null; pkill -f 'lmforge start') and re-run."
+fi
+ok "Daemon build verified: ${daemon_sha}"
 sep
 
 # ─── Helpers: thin wrappers over scripts/lib/e2e-api.sh ───────────────────────
@@ -852,6 +876,8 @@ else
         else
             record_fail "TC-E13" "Thinking on reasoning+answer" "reasoning='${#reasoning}' answer='${#ans}' (expected both non-empty)"
             warn "TC-E13: missing reasoning_content or answer"
+            # Preserve the raw response for post-mortem analysis.
+            echo "$resp" > "$RESULTS_DIR/tc-e13.response.json" 2>/dev/null || true
         fi
     else
         timer_end "think_on" >/dev/null
