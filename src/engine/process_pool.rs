@@ -244,11 +244,43 @@ impl ProcessPoolResidency {
                 free_gb, needed_gb, victim
             );
             if let Some(mut slot) = self.active_slots.remove(&victim) {
+                let victim_gb = crate::hardware::vram::estimate_model_vram(slot.size_bytes);
                 let _ = self.stop_slot(&mut slot).await;
                 self.state.write().await.running_models.remove(&victim);
+                self.wait_for_memory_release(&profile, free_gb, victim_gb, needed_gb)
+                    .await;
             }
         }
         Ok(())
+    }
+
+    /// Block briefly until an eviction is actually reflected in the free-memory
+    /// probe. The OS releases a killed engine's memory asynchronously (WDDM in
+    /// particular lags process exit), so re-reading free memory immediately
+    /// after `stop_slot` sees a stale figure — the eviction loop then either
+    /// over-evicts or the admission gate below rejects a load that would fit.
+    /// Exits as soon as free memory covers the need or shows a meaningful chunk
+    /// of the victim's footprint back; gives up after ~3s and lets the caller
+    /// proceed with whatever the probe reports.
+    async fn wait_for_memory_release(
+        &self,
+        profile: &crate::hardware::probe::HardwareProfile,
+        free_before_gb: f32,
+        victim_gb: f32,
+        needed_gb: f32,
+    ) {
+        let target = free_before_gb + (victim_gb * 0.5).max(0.1);
+        for _ in 0..10 {
+            let free = self.memory_free_gb(profile);
+            if free >= needed_gb || free >= target {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+        warn!(
+            free_before_gb,
+            victim_gb, "Evicted model's memory not yet visible as free after 3s — proceeding"
+        );
     }
 
     async fn spawn_adapter_process(
@@ -457,7 +489,10 @@ impl ProcessPoolResidency {
                     .await;
                     return Err(combined);
                 }
-                info!(model_id, "Spec-dec retry succeeded — slot is Ready with spec=off");
+                info!(
+                    model_id,
+                    "Spec-dec retry succeeded — slot is Ready with spec=off"
+                );
                 Ok(retry_engine)
             }
             Err(e2) => {
@@ -659,6 +694,30 @@ impl ProcessPoolResidency {
             plan.footprint.calibrated_total_gb = None;
         }
 
+        // Discrete-GPU hard gate on the FULL footprint (weights + KV + scratch,
+        // spec already degraded above), not just `base`. Proceeding when the KV
+        // and compute buffers don't fit doesn't fail cleanly on Windows — WDDM
+        // silently pages the overflow into shared system RAM, which costs 4-6x
+        // decode throughput and has corrupted engine output on Blackwell
+        // (2026-07-06 incident). Reject loudly instead; the eviction pass above
+        // already freed everything idle. Apple unified memory is exempt (Metal
+        // paging is safe and the historical behaviour is correct there), as is
+        // CPU-only (its admission maths live in `cpu_residency_free`).
+        let needed_final = plan.footprint.effective_total_gb();
+        let discrete_gpu = !matches!(profile.gpu_vendor, crate::hardware::probe::GpuVendor::None)
+            && !profile.unified_mem;
+        if discrete_gpu && free_now < needed_final {
+            bail!(
+                "Insufficient VRAM to load '{}': needs ~{:.1} GB (weights + KV cache \
+                 + compute buffers) but only {:.1} GB free after evicting idle models. \
+                 Loading anyway would spill into system memory (slow, and unstable on \
+                 some drivers). Unload a model or wait for busy ones to go idle.",
+                model_id,
+                needed_final,
+                free_now
+            );
+        }
+
         let vram_est_gb = plan.footprint.effective_total_gb();
         let port = self.allocate_port();
 
@@ -716,7 +775,8 @@ impl ProcessPoolResidency {
                     )
                     .await?;
             } else {
-                self.fail_load(model_id, &e, LoadErrorSeverity::Transient, load_started).await;
+                self.fail_load(model_id, &e, LoadErrorSeverity::Transient, load_started)
+                    .await;
                 return Err(e);
             }
         }
@@ -724,12 +784,8 @@ impl ProcessPoolResidency {
         if on_gpu {
             let free_after = self.memory_free_gb(&profile);
             let measured = free_pre_spawn - free_after;
-            let key = crate::engine::calibration::signature(
-                model_id,
-                cal_ctx,
-                engine.spec_mode,
-                role,
-            );
+            let key =
+                crate::engine::calibration::signature(model_id, cal_ctx, engine.spec_mode, role);
             self.calibration.record(key, measured);
         }
 
