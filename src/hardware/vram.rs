@@ -65,44 +65,19 @@ pub fn get_free_vram(profile: &HardwareProfile) -> f32 {
         GpuVendor::Intel => get_free_intel_vram(profile),
         GpuVendor::None => 0.0,
     };
-    let free_vram = free_vram - wddm_reserve_gb(profile);
-    let free_vram = free_vram.max(0.0);
     debug!(gpu_vendor = ?profile.gpu_vendor, free_vram_gb = free_vram, "Free VRAM probed");
     free_vram
 }
 
-/// Extra VRAM held back on Windows discrete GPUs, on top of the per-vendor
-/// probe's own pad.
-///
-/// WDDM manages VRAM elastically: the compositor/apps hold committed
-/// allocations that `memory.free` reports as available, and when a CUDA
-/// process allocates into that zone the driver silently pages GPU memory to
-/// shared system RAM ("sysmem fallback") instead of failing. On llama.cpp
-/// that spill costs 4-6x decode throughput and — observed on Blackwell with
-/// the 610.x driver (2026-07-06 incident) — can corrupt the engine's output
-/// for its whole lifetime. Reserving headroom makes LMForge evict co-resident
-/// models *before* the driver starts paging.
-fn wddm_reserve_gb(profile: &HardwareProfile) -> f32 {
-    windows_discrete_reserve_gb(
-        profile.os == crate::hardware::probe::Os::Windows,
-        profile.gpu_vendor,
-        profile.unified_mem,
-    )
-}
-
-/// Pure policy for [`wddm_reserve_gb`], split out for unit tests.
-pub(crate) fn windows_discrete_reserve_gb(
-    is_windows: bool,
-    vendor: GpuVendor,
-    unified_mem: bool,
-) -> f32 {
-    const WDDM_RESERVE_GB: f32 = 1.25;
-    if is_windows && !unified_mem && !matches!(vendor, GpuVendor::None) {
-        WDDM_RESERVE_GB
-    } else {
-        0.0
-    }
-}
+// NOTE on Windows/WDDM: no static VRAM reserve is applied here. WDDM pages
+// GPU allocations into shared system RAM based on its own heuristics — the
+// 2026-07-06 spill incident happened while nvidia-smi still reported ample
+// free VRAM, so a fixed reserve wouldn't have prevented it, while it *would*
+// block legitimate small-model co-loads on tight cards. The real mitigations
+// are the full-footprint admission gate (process_pool), the decode-speed
+// spill sentinel (engine::throughput), and the user-side driver setting
+// 'CUDA - Sysmem Fallback Policy = Prefer No Sysmem Fallback' surfaced by
+// `lmforge init` / `lmforge doctor` and docs/dev/INSTALL_WINDOWS.md.
 
 /// Estimate the VRAM required for a model (in GB)
 pub fn estimate_model_vram(size_bytes: u64) -> f32 {
@@ -462,28 +437,6 @@ mod tests {
         // live: 11 - 2.4 = 8.6 ; cap: 7.2 - 6 = 1.2 ; min = 1.2.
         // The footprint cap wins, bounding residency despite a rosy `available`.
         assert!((cpu_residency_free(11.0, 6.0, 12.0) - 1.2).abs() < 1e-2);
-    }
-
-    #[test]
-    fn wddm_reserve_applies_only_to_windows_discrete_gpus() {
-        // Windows + discrete NVIDIA/AMD/Intel → reserve held back.
-        assert!(windows_discrete_reserve_gb(true, GpuVendor::Nvidia, false) > 1.0);
-        assert!(windows_discrete_reserve_gb(true, GpuVendor::Amd, false) > 1.0);
-        // CPU-only Windows: no VRAM to reserve.
-        assert_eq!(
-            windows_discrete_reserve_gb(true, GpuVendor::None, false),
-            0.0
-        );
-        // Non-Windows (no WDDM): untouched.
-        assert_eq!(
-            windows_discrete_reserve_gb(false, GpuVendor::Nvidia, false),
-            0.0
-        );
-        // Unified memory: paging semantics differ, no reserve.
-        assert_eq!(
-            windows_discrete_reserve_gb(true, GpuVendor::Intel, true),
-            0.0
-        );
     }
 
     #[test]
