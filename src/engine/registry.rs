@@ -1054,7 +1054,7 @@ mod tests {
     fn test_pinned_versions() {
         let registry = EngineRegistry::load(None).unwrap();
         assert_eq!(registry.get("omlx").unwrap().version, "0.4.4");
-        assert_eq!(registry.get("llamacpp").unwrap().version, "b9351");
+        assert_eq!(registry.get("llamacpp").unwrap().version, "b9861");
         assert_eq!(registry.get("sglang").unwrap().version, "0.5.10.post1");
     }
 

@@ -840,6 +840,18 @@ def main() -> int:
                     f"{mid} [on]: {a['blank']} blank answer(s) > "
                     f"{args.assert_max_blank_on} allowed"
                 )
+            # Total wipeout: 0 correct answers AND every run degenerate
+            # (looped or length-capped). Occasional loops/wrong answers on
+            # small models are normal and stay ungated, but a model that
+            # can't produce a single real answer while every run spins to
+            # the token cap is systemically broken (e.g. the Blackwell CUDA
+            # corrupted-engine-launch failure: one junk token repeated from
+            # token 1 until the length limit, all reps).
+            if a["n"] > 0 and a["correct"] == 0 and (a["looped"] + a["length"]) >= a["n"]:
+                failures.append(
+                    f"{mid} [{mode}]: 0/{a['n']} correct with all runs "
+                    f"looped/length-capped (degenerate output — engine-level fault?)"
+                )
         for w in warnings:
             print(f"  ! {w}")
         if failures:
@@ -847,8 +859,8 @@ def main() -> int:
             for f in failures:
                 print(f"  ✗ {f}")
             return 1
-        print("\nASSERT PASSED: no errors, dups, or off-mode blanks "
-              "(native_reasoning budget-exhaustion blanks excluded).")
+        print("\nASSERT PASSED: no errors, dups, off-mode blanks, or degenerate "
+              "wipeouts (native_reasoning budget-exhaustion blanks excluded).")
     return 0
 
 

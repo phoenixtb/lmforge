@@ -1161,16 +1161,18 @@ fn vulkan_loader_available(os: Os) -> bool {
 /// Pick the Windows llama.cpp CUDA variant for this NVIDIA box, or `None` to
 /// fall back to the universal Vulkan build.
 ///
-/// Upstream b9351 ships exactly two Windows CUDA prebuilts:
+/// Upstream b9861 ships exactly two Windows CUDA prebuilts:
 ///   - `win-cuda-12.4-x64` — CUDA 12.4 toolkit, arch matrix tops out at sm_90.
-///   - `win-cuda-13.1-x64` — CUDA 13.1 toolkit, adds sm_100 / sm_120 (Blackwell).
+///   - `win-cuda-13.3-x64` — CUDA 13.3 toolkit, adds sm_100 / sm_120 (Blackwell).
+///     (Upstream replaced the 13.1 asset with 13.3 around b9400; 13.3 also
+///     carries NVIDIA's fix for the 13.2 cicc quant-kernel miscompile.)
 ///
 /// There is **no 12.8 Windows prebuilt** (that exists only in our self-built
 /// Linux tarball), so Blackwell-class cards (compute capability ≥ sm_100, i.e.
 /// cc major ≥ 10 — covers sm_100 B200 and sm_120/sm_121 consumer) MUST take the
-/// 13.1 build; the 12.4 build has no kernels for them. We never request a 13.3+
-/// asset — 13.1 is the ceiling per the compatibility policy; a newer driver
-/// (e.g. CUDA 13.3) runs the 13.1 build via in-major forward compatibility.
+/// 13.3 build; the 12.4 build has no kernels for them. A 13.3-built binary runs
+/// on any CUDA 13.x driver via minor-version compatibility (we bundle the 13.3
+/// cudart DLLs next to it), so the driver floor is 13.0.
 ///
 /// `cc_major` = GPU compute-capability major; `driver_cuda` = the max CUDA
 /// runtime the *driver* supports (from nvidia-smi), `None` if undetectable.
@@ -1184,9 +1186,10 @@ fn pick_win_cuda_variant(
     match driver_cuda {
         Some(dc) => {
             if needs_cuda13 {
-                // Blackwell: only the 13.1 build works. If the driver can't run
-                // CUDA 13.1, Vulkan is the only functional path (12.4 is useless).
-                (dc >= (13, 1)).then_some("13.1")
+                // Blackwell: only the 13.3 build works. Minor-version compat +
+                // bundled cudart means any 13.x driver runs it; below 13.0,
+                // Vulkan is the only functional path (12.4 is useless).
+                (dc >= (13, 0)).then_some("13.3")
             } else if dc >= (12, 4) {
                 // Ampere/Ada/Hopper: stick to the stable 12.x line even on a
                 // CUDA 13.x driver (12.4 build runs fine; policy default is 12.x).
@@ -1863,8 +1866,12 @@ mod tests {
 
     #[test]
     fn win_variant_blackwell_consumer_on_cuda13_driver() {
-        // RTX 5060 Ti (sm_120) + driver CUDA 13.3 → 13.1 build.
-        assert_eq!(pick_win_cuda_variant(Some(12), Some((13, 3))), Some("13.1"));
+        // RTX 5060 Ti (sm_120) + driver CUDA 13.3 → 13.3 build.
+        assert_eq!(pick_win_cuda_variant(Some(12), Some((13, 3))), Some("13.3"));
+        // 13.x drivers below 13.3 still run the 13.3 build (minor-version
+        // compat with bundled cudart) — e.g. the 610.x driver reports 13.2.
+        assert_eq!(pick_win_cuda_variant(Some(12), Some((13, 2))), Some("13.3"));
+        assert_eq!(pick_win_cuda_variant(Some(12), Some((13, 0))), Some("13.3"));
     }
 
     #[test]
@@ -1872,7 +1879,6 @@ mod tests {
         // Blackwell but the driver only supports CUDA 12.4 → 12.4 build has no
         // sm_120 kernels, so Vulkan is the only working path.
         assert_eq!(pick_win_cuda_variant(Some(12), Some((12, 4))), None);
-        assert_eq!(pick_win_cuda_variant(Some(12), Some((13, 0))), None);
     }
 
     #[test]
@@ -1883,7 +1889,7 @@ mod tests {
 
     #[test]
     fn win_variant_b200_datacenter_blackwell_needs_cuda13() {
-        assert_eq!(pick_win_cuda_variant(Some(10), Some((13, 1))), Some("13.1"));
+        assert_eq!(pick_win_cuda_variant(Some(10), Some((13, 1))), Some("13.3"));
         assert_eq!(pick_win_cuda_variant(Some(10), Some((12, 9))), None);
     }
 
@@ -2398,7 +2404,7 @@ mod tests {
     fn cudart_pattern_matches_upstream_asset_format() {
         // The llama.cpp release page ships:
         //   cudart-llama-bin-win-cuda-12.4-x64.zip
-        //   cudart-llama-bin-win-cuda-13.1-x64.zip
+        //   cudart-llama-bin-win-cuda-13.3-x64.zip
         // The pattern in engines.toml must expand to those names byte-exact
         // or Windows installs will 404 silently.
         let registry = crate::engine::EngineRegistry::load(None).unwrap();
@@ -2407,7 +2413,7 @@ mod tests {
             .cudart_pattern
             .as_ref()
             .expect("cudart_pattern must be set for Windows NVIDIA installs");
-        for variant in &["12.4", "13.1"] {
+        for variant in &["12.4", "13.3"] {
             let resolved = format!("{}.zip", pattern.replace("{cuda_variant}", variant));
             let expected = format!("cudart-llama-bin-win-cuda-{}-x64.zip", variant);
             assert_eq!(resolved, expected, "cudart pattern drift detected");

@@ -6,17 +6,17 @@
 #  and multi-model inference.
 #
 #  Full pre-release cycle (default for -Source local):
-#    full clean -> build from current code -> install locally (core + UI) ->
-#    install lifecycle -> multi-model inference -> full purge (incl. models),
-#    unless -KeepInstall.
+#    clean (keep models) -> build from current code -> install locally (core + UI) ->
+#    install lifecycle -> multi-model inference -> uninstall (keep models),
+#    unless -KeepInstall. Models preserved by default; -Purge wipes them.
 #
 #  Usage:
 #    scripts\util\e2e.ps1 -Source local
 #    scripts\util\e2e.ps1 -Source release:v0.1.5 -KeepInstall
 #    scripts\util\e2e.ps1 -Source release:v0.1.5 -VerifyAssets -NoInference   # release smoke
 #
-#  Teardown is a FULL purge (binary, service, UI, ~\.lmforge incl. models) unless
-#  -KeepInstall.
+#  Teardown removes binary/service/UI/autostart but KEEPS ~\.lmforge\models
+#  unless -Purge. -KeepInstall skips teardown entirely.
 # =============================================================================
 param(
     [string]$Source = "",
@@ -28,7 +28,8 @@ param(
     [switch]$NoUi,
     [switch]$VerifyAssets,
     [switch]$NoBuild,
-    [switch]$KeepInstall
+    [switch]$KeepInstall,
+    [switch]$Purge
 )
 
 $ErrorActionPreference = "Continue"
@@ -80,7 +81,7 @@ $RunUi = if ($NoUi) { $false } else { $true }
 
 . (Join-Path $PSScriptRoot "..\lib\e2e-lifecycle.ps1")
 
-Write-Host "LMForge E2E - source=$Source ui=$RunUi inference=$RunInference thinking=$RunThinking verify=$VerifyAssets keep=$KeepInstall"
+Write-Host "LMForge E2E - source=$Source ui=$RunUi inference=$RunInference thinking=$RunThinking verify=$VerifyAssets keep=$KeepInstall purge=$Purge"
 
 # ── Asset verification (release only) ────────────────────────────────────────
 if ($VerifyAssets) {
@@ -92,8 +93,14 @@ if ($VerifyAssets) {
     }
 }
 
-# ── Full clean slate (any prior install: GitHub script, dev build, …) ────────
-E2eStep "full clean"           { E2eFullClean }
+# ── Clean slate (any prior install: GitHub script, dev build, …) ────────
+# Default preserves ~\.lmforge\models so local iteration doesn't re-download;
+# -Purge opts into a full wipe (models + config).
+if ($Purge) {
+    E2eStep "full clean (incl. models)" { E2eFullClean }
+} else {
+    E2eStep "clean (keep models)"       { E2ePreclean }
+}
 
 # ── Build from current source (local only) ───────────────────────────────────
 if ($Kind -eq "local" -and -not $NoBuild) {
@@ -139,15 +146,20 @@ if ($RunInference) {
     if ($RunThinking) { E2eStep "thinking gate" { E2eThinking } }
 }
 
-# ── Teardown (full purge incl. models, unless -KeepInstall) ──────────────────
+# ── Teardown (removes install; models kept unless -Purge) ──────────────────
 if (-not $KeepInstall) {
     if ($RunUi) { E2eStep "uninstall-ui" { E2eUninstallUi } }
-    $env:E2E_PURGE = "1"
-    E2eStep "uninstall-core (purge)" { E2eUninstallCore }
+    if ($Purge) {
+        $env:E2E_PURGE = "1"
+        E2eStep "uninstall-core (purge)" { E2eUninstallCore }
+    } else {
+        $env:E2E_PURGE = "0"
+        E2eStep "uninstall-core (keep models)" { E2eUninstallCore }
+    }
     E2eStep "binary removed"     { E2eBinaryRemoved }
     E2eStep "daemon down"        { E2eDaemonDown }
     E2eStep "autostart removed"  { E2eAutostartRemoved }
-    E2eStep "data/models removed" { E2eDataRemoved }
+    if ($Purge) { E2eStep "data/models removed" { E2eDataRemoved } }
     Remove-Item Env:\E2E_PURGE -EA SilentlyContinue
 } else {
     Write-Host ""
