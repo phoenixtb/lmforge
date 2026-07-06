@@ -436,6 +436,27 @@ async fn install_via_brew(
         if already {
             info!("Tap {} already added", brew_tap);
         }
+
+        // Newer Homebrew refuses to load formulae from untrusted third-party
+        // taps ("Refusing to load formula ... from untrusted tap") unless the
+        // tap is explicitly trusted. Best-effort: older brew has no `trust`
+        // subcommand and exits non-zero — that's fine, those versions don't
+        // enforce trust either.
+        let trust_out = tokio::process::Command::new("brew")
+            .args(["trust", brew_tap])
+            .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+            .env("HOMEBREW_NO_ENV_HINTS", "1")
+            .output()
+            .await;
+        match trust_out {
+            Ok(o) if o.status.success() => info!("Tap {} trusted", brew_tap),
+            Ok(o) => info!(
+                "brew trust {} skipped ({})",
+                brew_tap,
+                String::from_utf8_lossy(&o.stderr).trim()
+            ),
+            Err(e) => info!("brew trust {} skipped ({})", brew_tap, e),
+        }
     }
 
     // ── 3. Install the formula ────────────────────────────────────────────────
