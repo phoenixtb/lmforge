@@ -94,6 +94,10 @@
   // toggle is shown locked-on and no think flag / budget goes on the wire (the
   // daemon splits their inline <think> output on the passthrough path).
   $: nativeReasoning = !!selModel?.capabilities.native_reasoning;
+  $: if (nativeReasoning) {
+    thinking = true;
+    applyProfile(true);
+  }
   $: chatModels = models.filter(isChatCapable);
   $: canSend = !busy && !!selected && (input.trim().length > 0 || pendingImages.length > 0);
 
@@ -314,12 +318,13 @@
           onclick={toggleThinking}
           disabled={busy || nativeReasoning}
           title={nativeReasoning
-            ? 'This model always reasons — thinking is built into its template and cannot be toggled off'
+            ? 'Always-on reasoning model — thinking cannot be turned off'
             : 'Toggle the model\'s reasoning/thinking mode (snaps sampling to the thinking profile)'}
           aria-pressed={thinking || nativeReasoning}
+          aria-disabled={nativeReasoning}
         >
           <span class="knob"></span>
-          think
+          think{#if nativeReasoning}<span class="lock-hint">locked</span>{/if}
         </button>
       {/if}
       <label class="ctl" title="Sampling temperature">
@@ -592,9 +597,30 @@
   }
   .toggle.on .knob { background: var(--accent); }
   .toggle.on .knob::after { transform: translateX(6px); }
-  .toggle:disabled { opacity: 0.5; cursor: not-allowed; }
-  /* Native-reasoning models: toggle locked on — full on-state visuals, just not clickable. */
-  .toggle.locked:disabled { opacity: 1; cursor: default; }
+  .toggle:disabled:not(.locked) { opacity: 0.5; cursor: not-allowed; }
+  /* Native-reasoning: always on but visually muted — not the bright active toggle. */
+  .toggle.locked {
+    cursor: not-allowed;
+    color: var(--text-3);
+    border-color: var(--border);
+    background: var(--surface-1, var(--surface-2));
+    box-shadow: none;
+  }
+  .toggle.locked.on {
+    color: var(--text-2);
+    border-color: var(--border-2);
+    background: var(--surface-2);
+    box-shadow: none;
+  }
+  .toggle.locked.on .knob { background: var(--text-3); }
+  .toggle.locked.on .knob::after { transform: translateX(6px); }
+  .lock-hint {
+    font-size: 9px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    margin-left: 2px;
+  }
 
   .body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 

@@ -33,10 +33,8 @@ pub struct ThinkingContext {
     /// field (oMLX).
     pub inline_think: bool,
     /// True when the model is a native-reasoning model (e.g. `phi4:reasoning`,
-    /// `qwen3:4b:thinking`). These emit reasoning in a single call and stay off the
-    /// orchestrator; on oMLX they need the Fix #1 truncation-dedup, and they get a
-    /// `max_tokens` floor ([`NATIVE_REASONING_MIN_TOKENS`]) so reasoning cannot
-    /// starve the answer.
+    /// DeepSeek-R1 distills). These emit reasoning in a single call and stay off the
+    /// orchestrator; toggleable `:thinking` shortcuts (e.g. `qwen3:4b:thinking`) are NOT native.
     pub is_native_reasoning: bool,
 }
 
