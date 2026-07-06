@@ -31,23 +31,35 @@ pub trait ThinkingAdapter: Send + Sync {
 /// oMLX (Apple Silicon / Metal) — native `reasoning_content` field.
 struct OmlxAdapter;
 impl ThinkingAdapter for OmlxAdapter {
-    fn supports_orchestrator(&self) -> bool { true }
-    fn inline_think(&self) -> bool { false }
+    fn supports_orchestrator(&self) -> bool {
+        true
+    }
+    fn inline_think(&self) -> bool {
+        false
+    }
 }
 
 /// llama.cpp and SGLang — reasoning embedded as `<think>` tags inside `content`.
 struct TemplateAdapter;
 impl ThinkingAdapter for TemplateAdapter {
-    fn supports_orchestrator(&self) -> bool { true }
-    fn inline_think(&self) -> bool { true }
+    fn supports_orchestrator(&self) -> bool {
+        true
+    }
+    fn inline_think(&self) -> bool {
+        true
+    }
 }
 
 /// All other engines (vLLM, TabbyAPI, unknown) — plain passthrough, no
 /// structured thinking support.
 struct PassthroughAdapter;
 impl ThinkingAdapter for PassthroughAdapter {
-    fn supports_orchestrator(&self) -> bool { false }
-    fn inline_think(&self) -> bool { false }
+    fn supports_orchestrator(&self) -> bool {
+        false
+    }
+    fn inline_think(&self) -> bool {
+        false
+    }
 }
 
 /// Return the engine-specific thinking adapter for a given `engine_id`.

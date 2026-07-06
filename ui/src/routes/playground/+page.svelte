@@ -56,6 +56,17 @@
   // still loop within the budget; use ≥4B for multi-step reasoning.
 
   let advancedOpen = false;
+  let popWrapEl: HTMLElement;
+
+  // Light-dismiss for the Advanced popover: click outside or Escape.
+  function onWindowPointerDown(e: PointerEvent) {
+    if (advancedOpen && popWrapEl && !popWrapEl.contains(e.target as Node)) {
+      advancedOpen = false;
+    }
+  }
+  function onWindowKeyDown(e: KeyboardEvent) {
+    if (advancedOpen && e.key === 'Escape') advancedOpen = false;
+  }
   let temperature = CHAT_PROFILE.temperature;
   let topP = CHAT_PROFILE.topP;
   let topK = CHAT_PROFILE.topK;
@@ -90,6 +101,14 @@
   $: selModel = models.find((m) => m.id === selected);
   $: visionOn = !!selModel?.capabilities.vision;
   $: thinkingSupported = !!selModel?.capabilities.thinking;
+  // Native-reasoning models (phi4:reasoning, R1 distills) always think — the
+  // toggle is shown locked-on and no think flag / budget goes on the wire (the
+  // daemon splits their inline <think> output on the passthrough path).
+  $: nativeReasoning = !!selModel?.capabilities.native_reasoning;
+  $: if (nativeReasoning) {
+    thinking = true;
+    applyProfile(true);
+  }
   $: chatModels = models.filter(isChatCapable);
   $: canSend = !busy && !!selected && (input.trim().length > 0 || pendingImages.length > 0);
 
@@ -157,8 +176,9 @@
     msgs = [...msgs, { role: 'assistant', text: '', streaming: true }];
     await scrollToBottom();
 
-    // Only send the think flag for models that support it.
-    const useThink = thinkingSupported ? thinking : undefined;
+    // Only send the think flag for models that support it. Native-reasoning
+    // models never get the flag: reasoning is hardwired, not toggleable.
+    const useThink = thinkingSupported && !nativeReasoning ? thinking : undefined;
 
     busy = true;
     abort = new AbortController();
@@ -285,9 +305,10 @@
 </script>
 
 <svelte:head><title>LMForge — Playground</title></svelte:head>
+<svelte:window onpointerdown={onWindowPointerDown} onkeydown={onWindowKeyDown} />
 
 <div class="page">
-  <div class="toolbar" data-tauri-drag-region onpointerdown={dragOnEmpty} role="toolbar">
+  <div class="toolbar" data-tauri-drag-region onpointerdown={dragOnEmpty} role="toolbar" tabindex="-1">
     <h1>Playground</h1>
     <div class="tr">
       <select class="model-sel" bind:value={selected} disabled={busy} aria-label="Model">
@@ -304,21 +325,21 @@
       {#if thinkingSupported}
         <button
           class="toggle"
-          class:on={thinking}
+          class:on={thinking || nativeReasoning}
+          class:locked={nativeReasoning}
           onclick={toggleThinking}
-          disabled={busy}
-          title="Toggle the model's reasoning/thinking mode (snaps sampling to the thinking profile)"
-          aria-pressed={thinking}
+          disabled={busy || nativeReasoning}
+          title={nativeReasoning
+            ? 'Always-on reasoning model — thinking cannot be turned off'
+            : 'Toggle the model\'s reasoning/thinking mode (snaps sampling to the thinking profile)'}
+          aria-pressed={thinking || nativeReasoning}
+          aria-disabled={nativeReasoning}
         >
           <span class="knob"></span>
-          think
+          think{#if nativeReasoning}<span class="lock-hint">locked</span>{/if}
         </button>
       {/if}
-      <label class="ctl" title="Sampling temperature">
-        temp
-        <input type="number" min="0" max="2" step="0.1" bind:value={temperature} disabled={busy} />
-      </label>
-      {#if thinkingSupported}
+      {#if thinkingSupported && !nativeReasoning}
         <label
           class="ctl"
           title="Thinking budget — max reasoning tokens the model may spend before it must answer. Applies only when think is on; the answer still gets the full 'max' on top."
@@ -331,13 +352,65 @@
         max
         <input type="number" min="1" max="8192" step="1" bind:value={maxTokens} disabled={busy} />
       </label>
-      <button
-        class="btn btn--ghost btn--sm"
-        class:active={advancedOpen}
-        onclick={() => (advancedOpen = !advancedOpen)}
-        title="Advanced sampling parameters"
-        aria-pressed={advancedOpen}
-      >sampling</button>
+      <div class="pop-wrap" bind:this={popWrapEl}>
+        <button
+          class="btn btn--ghost btn--sm disclosure"
+          class:active={advancedOpen}
+          onclick={() => (advancedOpen = !advancedOpen)}
+          title="Advanced sampling &amp; decoding parameters"
+          aria-expanded={advancedOpen}
+          aria-controls="advanced-params"
+          aria-haspopup="true"
+        >
+          <svg class="ico" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+            <line x1="2" y1="4.5" x2="14" y2="4.5" /><circle cx="6" cy="4.5" r="1.9" fill="var(--surface-2)" />
+            <line x1="2" y1="11.5" x2="14" y2="11.5" /><circle cx="10" cy="11.5" r="1.9" fill="var(--surface-2)" />
+          </svg>
+          Advanced
+          <svg class="caret" viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 6l4 4 4-4" />
+          </svg>
+        </button>
+        {#if advancedOpen}
+          <div class="popover" id="advanced-params" role="group" aria-label="Advanced sampling parameters">
+            <div class="pop-head">
+              <span class="panel-label">Advanced</span>
+              <span class="profile-hint" title="Values snap to the {thinking ? 'thinking' : 'chat'} profile when the think toggle changes">
+                {thinking ? 'thinking' : 'chat'} profile
+              </span>
+            </div>
+            <label class="prow" title="Sampling temperature — higher is more random">
+              <span>temp</span>
+              <input type="number" min="0" max="2" step="0.1" bind:value={temperature} disabled={busy} />
+            </label>
+            <label class="prow" title="Nucleus sampling — cumulative probability cutoff">
+              <span>top_p</span>
+              <input type="number" min="0" max="1" step="0.01" bind:value={topP} disabled={busy} />
+            </label>
+            <label class="prow" title="Top-k sampling — 0 disables">
+              <span>top_k</span>
+              <input type="number" min="0" max="200" step="1" bind:value={topK} disabled={busy} />
+            </label>
+            <label class="prow" title="Repetition penalty — &gt;1 discourages repeats (loop breaker)">
+              <span>rep_pen</span>
+              <input type="number" min="1" max="2" step="0.05" bind:value={repPen} disabled={busy} />
+            </label>
+            <label class="prow" title="Presence penalty — discourages repeating tokens">
+              <span>pres_pen</span>
+              <input type="number" min="0" max="2" step="0.1" bind:value={presPen} disabled={busy} />
+            </label>
+            <div class="pop-foot">
+              <button
+                class="btn btn--ghost btn--sm"
+                onclick={() => applyProfile(thinking)}
+                disabled={busy}
+                title="Reset to the {thinking ? 'thinking' : 'chat'} profile defaults"
+              >reset to profile</button>
+            </div>
+          </div>
+        {/if}
+      </div>
+      <span class="tr-div" aria-hidden="true"></span>
       <button class="btn btn--ghost btn--sm" onclick={clearChat} disabled={msgs.length === 0}>Clear</button>
     </div>
   </div>
@@ -345,36 +418,6 @@
   <div class="body">
     {#if modelsError}
       <div class="error-strip">{modelsError}</div>
-    {/if}
-
-    {#if advancedOpen}
-      <div class="sampling-bar">
-        <label class="ctl" title="Nucleus sampling — cumulative probability cutoff">
-          top_p
-          <input type="number" min="0" max="1" step="0.01" bind:value={topP} disabled={busy} />
-        </label>
-        <label class="ctl" title="Top-k sampling — 0 disables">
-          top_k
-          <input type="number" min="0" max="200" step="1" bind:value={topK} disabled={busy} />
-        </label>
-        <label class="ctl" title="Repetition penalty — &gt;1 discourages repeats (loop breaker)">
-          rep_pen
-          <input type="number" min="1" max="2" step="0.05" bind:value={repPen} disabled={busy} />
-        </label>
-        <label class="ctl" title="Presence penalty — discourages repeating tokens">
-          pres_pen
-          <input type="number" min="0" max="2" step="0.1" bind:value={presPen} disabled={busy} />
-        </label>
-        <span class="profile-hint">
-          {thinking ? 'thinking profile' : 'chat profile'} · snaps on think toggle
-        </span>
-        <button
-          class="btn btn--ghost btn--sm reset"
-          onclick={() => applyProfile(thinking)}
-          disabled={busy}
-          title="Reset to the {thinking ? 'thinking' : 'chat'} profile defaults"
-        >reset</button>
-      </div>
     {/if}
 
     <div
@@ -584,23 +627,81 @@
   }
   .toggle.on .knob { background: var(--accent); }
   .toggle.on .knob::after { transform: translateX(6px); }
-  .toggle:disabled { opacity: 0.5; cursor: not-allowed; }
+  .toggle:disabled:not(.locked) { opacity: 0.5; cursor: not-allowed; }
+  /* Native-reasoning: always on but visually muted — not the bright active toggle. */
+  .toggle.locked {
+    cursor: not-allowed;
+    color: var(--text-3);
+    border-color: var(--border);
+    background: var(--surface-1, var(--surface-2));
+    box-shadow: none;
+  }
+  .toggle.locked.on {
+    color: var(--text-2);
+    border-color: var(--border-2);
+    background: var(--surface-2);
+    box-shadow: none;
+  }
+  .toggle.locked.on .knob { background: var(--text-3); }
+  .toggle.locked.on .knob::after { transform: translateX(6px); }
+  .lock-hint {
+    font-size: 9px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    margin-left: 2px;
+  }
 
   .body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
-  /* Advanced sampling row */
+  /* Advanced-params disclosure trigger */
   .btn.active { color: var(--accent-2); border-color: var(--accent); background: var(--accent-dim); }
-  .sampling-bar {
-    flex-shrink: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 14px;
-    padding: 8px 16px; border-bottom: 1px solid var(--border);
-    background: var(--surface-1, var(--surface-2));
+  .disclosure { display: inline-flex; align-items: center; gap: 5px; }
+  .disclosure .ico { opacity: 0.8; flex-shrink: 0; }
+  .disclosure .caret { flex-shrink: 0; transition: transform 140ms ease; }
+  .disclosure.active .caret { transform: rotate(180deg); }
+
+  /* Vertical divider separating params from chat actions (Clear) */
+  .tr-div {
+    width: 1px; height: 18px; flex-shrink: 0;
+    background: var(--border); margin: 0 2px;
   }
-  .sampling-bar .ctl input { width: 58px; }
+
+  /* Advanced params popover, anchored to the disclosure trigger */
+  .pop-wrap { position: relative; display: inline-flex; }
+  .popover {
+    position: absolute; top: calc(100% + 8px); right: 0; z-index: 40;
+    min-width: 216px;
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 10px 12px 12px;
+    background: var(--surface-1, var(--surface-2));
+    border: 1px solid var(--border-2); border-radius: var(--radius-sm);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), 0 1px 4px rgba(0, 0, 0, 0.25);
+    animation: fade-in 120ms ease;
+  }
+  .pop-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    padding-bottom: 6px; border-bottom: 1px solid var(--border);
+  }
+  .panel-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+    font-weight: 600; color: var(--text-3);
+  }
   .profile-hint {
-    font-size: 11px; color: var(--accent-2); opacity: 0.85;
+    font-size: 10px; color: var(--accent-2); opacity: 0.85;
     font-family: var(--font-mono);
   }
-  .sampling-bar .reset { margin-left: auto; }
+  .prow {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    font-size: 11px; color: var(--text-2);
+  }
+  .prow span { font-family: var(--font-mono); }
+  .prow input {
+    width: 72px; background: var(--surface-2); color: var(--text);
+    border: 1px solid var(--border-2); border-radius: var(--radius-xs);
+    font-size: 11px; padding: 3px 6px; font-family: var(--font-mono);
+  }
+  .pop-foot { display: flex; justify-content: flex-end; padding-top: 2px; }
 
   .error-strip {
     margin: 10px 16px 0; padding: 8px 12px;

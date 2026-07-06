@@ -8,11 +8,41 @@ use tracing::{debug, info};
 /// only on save. v1 (absolute) indexes load fine and migrate to v2 on next save.
 const SCHEMA_VERSION: u32 = 2;
 
+/// Version of the capability *detector* (`detect_capabilities`), independent of
+/// the on-disk `SCHEMA_VERSION`. Capabilities are persisted in `models.json` and
+/// served verbatim (`GET /lf/model/list` never re-detects), so a detector fix in
+/// a new build does **not** reach models pulled by an older build until they are
+/// re-detected. Bumping this constant makes the daemon re-detect every model's
+/// capabilities once on next start (see `cli::models::heal_capabilities_if_stale`),
+/// so fixes self-heal without a manual `lmforge models scan`.
+///
+/// **Bump this by 1 whenever `detect_capabilities` output changes** (new signal,
+/// changed classification, etc.). History:
+///   * 1 — locked-thinking / dedicated-reasoning hint detection (GGUF `phi4:reasoning`).
+///   * 2 — MTP tensor probe in heal/scan (daemon-pulled GGUF models had mtp=None,
+///     silently disabling speculative decoding — 2026-07-07 e2e TC-E12 skip).
+pub const CAPS_DETECTOR_VERSION: u32 = 2;
+
 /// The models.json index
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ModelIndex {
     pub schema_version: u32,
     pub models: Vec<ModelEntry>,
+    /// Detector version that produced the persisted `capabilities`. Absent in
+    /// indexes written before this field existed → deserializes to `0`, which is
+    /// `< CAPS_DETECTOR_VERSION`, triggering a one-time self-heal re-detect.
+    #[serde(default)]
+    pub caps_detector_version: u32,
+}
+
+impl Default for ModelIndex {
+    fn default() -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            models: vec![],
+            caps_detector_version: CAPS_DETECTOR_VERSION,
+        }
+    }
 }
 
 /// A single model entry in the index
@@ -88,10 +118,7 @@ impl ModelIndex {
     pub fn load(data_dir: &std::path::Path, models_dir: &std::path::Path) -> Result<Self> {
         let path = data_dir.join("models.json");
         if !path.exists() {
-            return Ok(Self {
-                schema_version: SCHEMA_VERSION,
-                models: vec![],
-            });
+            return Ok(Self::default());
         }
 
         let content = std::fs::read_to_string(&path).context("Failed to read models.json")?;
@@ -117,10 +144,14 @@ impl ModelIndex {
         let tmp_path = data_dir.join("models.json.tmp");
 
         // Relativize a clone for on-disk persistence; the in-memory index keeps
-        // absolute paths so callers are unaffected.
+        // absolute paths so callers are unaffected. `caps_detector_version` is
+        // preserved (not force-stamped) so a single-model pull/remove doesn't
+        // mark the whole index as freshly detected — only a full re-detect
+        // (`scan` / `heal_capabilities_if_stale`) advances it.
         let mut out = Self {
             schema_version: SCHEMA_VERSION,
             models: self.models.clone(),
+            caps_detector_version: self.caps_detector_version,
         };
         for entry in &mut out.models {
             entry.path = relativize_model_path(&entry.path, models_dir);
@@ -232,6 +263,69 @@ pub fn dir_size(path: &std::path::Path) -> u64 {
         }
     }
     total
+}
+
+fn thinking_hint_corpus(model_id_hint: Option<&str>, hf_repo_hint: Option<&str>) -> String {
+    format!(
+        "{} {}",
+        model_id_hint.unwrap_or(""),
+        hf_repo_hint.unwrap_or("")
+    )
+    .to_lowercase()
+}
+
+/// True when the catalog shortcut / HF repo name identifies a *dedicated*
+/// reasoning model — one that always emits reasoning and cannot be toggled off:
+///   * `Qwen3-*-Thinking-2507` (`:thinking` shortcut / `-thinking` repo)
+///   * `Phi-4-*-reasoning`      (`:reasoning` shortcut / `reasoning` repo)
+///   * DeepSeek-R1 distills, QwQ
+///
+/// This is deliberately name-based: hybrid models (base Qwen3, pulled as
+/// `qwen3:4b:4bit`) carry none of these markers and are classified toggleable
+/// via the template's `enable_thinking` switch instead.
+fn is_dedicated_reasoning_hint(hint: &str) -> bool {
+    hint.contains(":thinking")
+        || hint.contains("-thinking")
+        || hint.contains("reasoning")
+        || hint.contains("deepseek-r1")
+        || hint.contains("-r1-")
+        || hint.contains("qwq")
+}
+
+/// Catalog shortcuts for dedicated reasoning models. Runs late in detection so
+/// GGUF-only dirs (Signal E) already have `chat=true` before we stamp thinking —
+/// this is what makes `phi4:4b:reasoning:4bit` expose the toggle on the GGUF
+/// path (Linux / Windows llama.cpp), not just on MLX.
+fn apply_catalog_thinking_hints(caps: &mut ModelCapabilities, hint: &str) {
+    if caps.embeddings || caps.reranking {
+        return;
+    }
+    if is_dedicated_reasoning_hint(hint) {
+        caps.chat = true;
+        caps.thinking = true;
+        caps.native_reasoning = true;
+        debug!("Catalog hint dedicated-reasoning — always-on (locked) thinking model");
+    }
+}
+
+/// Resolve `native_reasoning` (locked) vs toggleable after all thinking signals.
+///
+///   * Dedicated reasoning models (name marker)  → locked, regardless of template.
+///   * Hybrid models (base Qwen3, etc.)          → toggleable iff the template
+///     exposes the `enable_thinking` switch.
+fn resolve_native_reasoning(caps: &mut ModelCapabilities, template: &str, hint: &str) {
+    if !caps.thinking {
+        caps.native_reasoning = false;
+        return;
+    }
+    if is_dedicated_reasoning_hint(hint) {
+        caps.native_reasoning = true;
+        return;
+    }
+    // No name marker: a template that lacks the `enable_thinking` switch means
+    // the model reasons in a single hardwired pass (locked); one that has it is
+    // a hybrid the user can toggle.
+    caps.native_reasoning = !template.contains("enable_thinking");
 }
 
 /// Detect model capabilities from its metadata files plus optional catalog hints.
@@ -595,25 +689,8 @@ pub fn detect_capabilities(
     }
 
     // Reasoning models whose tokenizer/template lack the literal markers above
-    // (e.g. Phi-4-mini-reasoning, DeepSeek-R1 distills) still emit reasoning
-    // natively via the engine. Flag them thinking-capable from the id/repo hint
-    // so the UI exposes the toggle.
-    if caps.chat && !caps.thinking {
-        let hint = format!(
-            "{} {}",
-            model_id_hint.unwrap_or(""),
-            hf_repo_hint.unwrap_or("")
-        )
-        .to_lowercase();
-        if hint.contains("reasoning")
-            || hint.contains(":thinking")
-            || hint.contains("deepseek-r1")
-            || hint.contains("-r1-")
-            || hint.contains("qwq")
-        {
-            caps.thinking = true;
-        }
-    }
+    // (e.g. Phi-4-mini-reasoning, DeepSeek-R1 distills) are handled in the
+    // final catalog-hint pass after Signal E (GGUF chat promotion).
 
     // Turn-delimiter stop tokens. Some models terminate the assistant turn with
     // a token that is NOT their configured eos_token (Phi-4: turn end `<|end|>`
@@ -640,13 +717,6 @@ pub fn detect_capabilities(
             if template.contains(m) && !caps.stop_tokens.iter().any(|s| s == m) {
                 caps.stop_tokens.push((*m).to_string());
             }
-        }
-
-        // A thinking model whose template has no `enable_thinking` switch emits
-        // reasoning natively in one call and cannot be toggled off mid-turn — the
-        // budget orchestrator's prefill breaks it. Keep it single-call.
-        if caps.thinking && !template.contains("enable_thinking") {
-            caps.native_reasoning = true;
         }
     }
 
@@ -696,13 +766,27 @@ pub fn detect_capabilities(
             || tmpl.contains("reasoning_content"))
     {
         caps.thinking = true;
-        // Same rule as the file-template path: a thinking model whose template
-        // lacks an `enable_thinking` switch emits reasoning natively in one
-        // call and can't be toggled off mid-turn.
-        if !tmpl.contains("enable_thinking") {
-            caps.native_reasoning = true;
-        }
     }
+
+    // Final thinking classification — catalog hints + native_reasoning resolution.
+    // Must run after Signal E so GGUF-only models (Windows/llama.cpp) get thinking
+    // flags from shortcuts like `phi4:4b:reasoning:4bit`.
+    let hint = thinking_hint_corpus(model_id_hint, hf_repo_hint);
+    apply_catalog_thinking_hints(&mut caps, &hint);
+
+    let mut template_corpus = String::new();
+    if let Ok(c) = std::fs::read_to_string(&tokenizer_config_path) {
+        template_corpus.push_str(&c);
+    }
+    if let Ok(c) = std::fs::read_to_string(&jinja_path) {
+        template_corpus.push_str(&c);
+    }
+    if has_gguf_weights(model_dir)
+        && let Some(tmpl) = crate::model::gguf_inspect::read_chat_template_for_model(model_dir)
+    {
+        template_corpus.push_str(&tmpl);
+    }
+    resolve_native_reasoning(&mut caps, &template_corpus, &hint);
 
     // =========================================================================
     // VLM mmproj sidecar lookup (llama.cpp-served VLMs only).
@@ -914,6 +998,7 @@ mod tests {
         let idx = ModelIndex {
             schema_version: 2,
             models: vec![sample_entry("qwen3:8b", &abs)],
+            ..Default::default()
         };
         idx.save(&data_dir, &models_dir).unwrap();
 
@@ -975,6 +1060,7 @@ mod tests {
         let idx = ModelIndex {
             schema_version: 2,
             models: vec![sample_entry("llama3", &foreign)],
+            ..Default::default()
         };
         idx.save(&data_dir, &models_dir).unwrap();
 
@@ -998,6 +1084,7 @@ mod tests {
         let mut index = ModelIndex {
             schema_version: 1,
             models: vec![],
+            ..Default::default()
         };
 
         assert_eq!(index.list().len(), 0);
@@ -1030,6 +1117,7 @@ mod tests {
         let mut index = ModelIndex {
             schema_version: 1,
             models: vec![],
+            ..Default::default()
         };
 
         let entry = ModelEntry {
@@ -1299,7 +1387,81 @@ mod tests {
             caps.thinking,
             "<think> in tokenizer_config must set thinking=true"
         );
+        assert!(
+            !caps.native_reasoning,
+            "enable_thinking in template must keep model toggleable"
+        );
         cleanup(&dir);
+    }
+
+    #[test]
+    fn test_qwen3_thinking_2507_shortcut_is_locked_native() {
+        // Qwen3-4B-Thinking-2507 is a dedicated always-thinking model: the
+        // `:thinking` shortcut must lock the toggle on (native_reasoning=true).
+        let dir = make_model_dir("qwen3_thinking_shortcut");
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"]}"#,
+        );
+        write_json(
+            &dir,
+            "tokenizer_config.json",
+            r#"{"chat_template":"...<think>...</think>..."}"#,
+        );
+
+        let caps = detect_capabilities(&dir, Some("qwen3:4b:thinking:4bit"), None);
+        assert!(caps.thinking, ":thinking shortcut must expose thinking");
+        assert!(
+            caps.native_reasoning,
+            "dedicated Thinking-2507 must be locked always-on"
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_qwen3_hybrid_base_is_toggleable() {
+        // Base Qwen3 (hybrid) has the enable_thinking switch and no dedicated
+        // name marker → toggleable (native_reasoning=false).
+        let dir = make_model_dir("qwen3_hybrid_base");
+        write_json(
+            &dir,
+            "config.json",
+            r#"{"model_type":"qwen3","architectures":["Qwen3ForCausalLM"]}"#,
+        );
+        write_json(
+            &dir,
+            "tokenizer_config.json",
+            r#"{"chat_template":"...{% if enable_thinking %}<think>{% endif %}..."}"#,
+        );
+
+        let caps = detect_capabilities(&dir, Some("qwen3:4b:4bit"), None);
+        assert!(caps.thinking, "hybrid base must expose thinking");
+        assert!(
+            !caps.native_reasoning,
+            "hybrid base with enable_thinking must stay toggleable"
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_phi_reasoning_gguf_shortcut_is_native_after_signal_e() {
+        let dir = make_gguf_dir(
+            "phi_reasoning_gguf",
+            &[("Phi-4-mini-reasoning-Q4_K_M.gguf", b"fake-weights")],
+        );
+        let caps = detect_capabilities(
+            &dir,
+            Some("phi4:4b:reasoning:4bit"),
+            Some("unsloth/Phi-4-mini-reasoning-GGUF"),
+        );
+        assert!(caps.chat, "GGUF chat model");
+        assert!(caps.thinking, "reasoning shortcut must expose think toggle");
+        assert!(
+            caps.native_reasoning,
+            "phi reasoning must be locked always-on"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -597,6 +597,27 @@ fn build_call2_body(
         messages.push(call2_msg);
     }
 
+    // Make the assistant-continuation contract explicit for the inline path.
+    // b9351 engaged its prefill heuristic automatically on a trailing assistant
+    // message; b9141+ exposes `continue_final_message` (vLLM-compatible, must
+    // pair with `add_generation_prompt:false`), and b9861's template-handler
+    // rework (llama.cpp #23089) rebuilds the prefill into the response unless
+    // `echo:false`. Unknown fields are ignored by older builds, so this is
+    // safe across both pins — without it, b9861 echoes the whole
+    // `<think>…</think>` prefill back as answer content (playground leak,
+    // 2026-07-06).
+    if inline_think {
+        obj.insert(
+            "continue_final_message".to_string(),
+            serde_json::Value::Bool(true),
+        );
+        obj.insert(
+            "add_generation_prompt".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        obj.insert("echo".to_string(), serde_json::Value::Bool(false));
+    }
+
     // Suppress further thinking — CRITICAL: without this the model re-enters <think>
     set_enable_thinking(obj, false);
 
@@ -622,11 +643,17 @@ fn build_call2_body(
 /// This re-issues the *original* messages — no synthetic reasoning prefill — with
 /// `enable_thinking:false` and the full token budget, yielding a single normal
 /// answer. See Fix #2 (ADR-007) and the orchestrator empty-guard call sites.
-fn build_plain_answer_body(original_body: &serde_json::Value, max_tokens: u32) -> serde_json::Value {
+fn build_plain_answer_body(
+    original_body: &serde_json::Value,
+    max_tokens: u32,
+) -> serde_json::Value {
     let mut body = original_body.clone();
     let obj = body.as_object_mut().expect("body must be an object");
     set_enable_thinking(obj, false);
-    obj.insert("max_tokens".to_string(), serde_json::Value::from(max_tokens));
+    obj.insert(
+        "max_tokens".to_string(),
+        serde_json::Value::from(max_tokens),
+    );
     obj.insert("stream".to_string(), serde_json::Value::Bool(true));
     obj.remove("thinking_budget");
     body
@@ -797,7 +824,12 @@ async fn stream_call1_accumulate(
                             reasoning_buf.push_str(r);
                             if let Some(ref tx) = tx
                                 && tx
-                                    .send(make_frame(&completion_id, &model_name, "reasoning_content", r))
+                                    .send(make_frame(
+                                        &completion_id,
+                                        &model_name,
+                                        "reasoning_content",
+                                        r,
+                                    ))
                                     .await
                                     .is_err()
                             {
@@ -812,7 +844,12 @@ async fn stream_call1_accumulate(
                                 reasoning_buf.push_str(&r);
                                 if let Some(ref tx) = tx
                                     && tx
-                                        .send(make_frame(&completion_id, &model_name, "reasoning_content", &r))
+                                        .send(make_frame(
+                                            &completion_id,
+                                            &model_name,
+                                            "reasoning_content",
+                                            &r,
+                                        ))
                                         .await
                                         .is_err()
                                 {
@@ -823,7 +860,12 @@ async fn stream_call1_accumulate(
                                 content_buf.push_str(&ans);
                                 if let Some(ref tx) = tx
                                     && tx
-                                        .send(make_frame(&completion_id, &model_name, "content", &ans))
+                                        .send(make_frame(
+                                            &completion_id,
+                                            &model_name,
+                                            "content",
+                                            &ans,
+                                        ))
                                         .await
                                         .is_err()
                                 {
@@ -840,10 +882,7 @@ async fn stream_call1_accumulate(
                             .get("reasoning_content")
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-                        let c_text = delta
-                            .get("content")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
+                        let c_text = delta.get("content").and_then(|v| v.as_str()).unwrap_or("");
 
                         if !r_text.is_empty() {
                             reasoning_buf.push_str(r_text);
@@ -875,7 +914,12 @@ async fn stream_call1_accumulate(
             reasoning_buf.push_str(&r);
             if let Some(ref tx) = tx {
                 let _ = tx
-                    .send(make_frame(&completion_id, &model_name, "reasoning_content", &r))
+                    .send(make_frame(
+                        &completion_id,
+                        &model_name,
+                        "reasoning_content",
+                        &r,
+                    ))
                     .await;
             }
         }
@@ -966,7 +1010,12 @@ pub async fn proxy_stream_with_thinking_budget(
     };
 
     // Spawn Call 1 accumulator in background
-    let call1_task = tokio::spawn(stream_call1_accumulate(resp1, thinking_budget, tx_opt, inline_think));
+    let call1_task = tokio::spawn(stream_call1_accumulate(
+        resp1,
+        thinking_budget,
+        tx_opt,
+        inline_think,
+    ));
 
     let original_body_c = original_body.clone();
     let client = client.clone();
@@ -1144,6 +1193,16 @@ pub async fn proxy_stream_with_thinking_budget(
         // plain-answer fallback (Fix #2) to emit a structured error instead of a
         // silent empty stream when even the fallback yields nothing.
         let mut saw_content = false;
+        // Call-2 content must reach the client as ANSWER ONLY. Depending on the
+        // engine build, the response may carry the echoed `<think>…</think>`
+        // prefill (b9861 rebuilds the partial assistant message) or a fresh
+        // re-think despite enable_thinking:false. Split tags out of content and
+        // DROP the reasoning side — Call-1 already streamed the real reasoning,
+        // so forwarding it again duplicates the think panel; leaking it raw
+        // corrupts the answer. Mirrors the non-stream path, which has always
+        // routed Call-2 through the splitter and discarded its reasoning.
+        let mut call2_splitter = ThinkSplitter::default();
+        let mut call2_dropped_reasoning: usize = 0;
 
         loop {
             let next = match tokio::time::timeout(STREAM_IDLE_TIMEOUT, call2_stream.next()).await {
@@ -1177,6 +1236,22 @@ pub async fn proxy_stream_with_thinking_budget(
 
                 if data == "[DONE]" {
                     info!(call2_total_events = call2_event_count, "Call-2 stream complete (received [DONE])");
+                    // Flush any held-back splitter fragment as answer content.
+                    let (flush_r, flush_a) = call2_splitter.flush();
+                    call2_dropped_reasoning += flush_r.len();
+                    if !flush_a.is_empty() {
+                        saw_content = true;
+                        let chunk = serde_json::json!({
+                            "id": completion_id_inner,
+                            "object": "chat.completion.chunk",
+                            "model": model_name_inner,
+                            "choices": [{ "index": 0, "delta": { "content": flush_a }, "finish_reason": null }]
+                        });
+                        yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default())));
+                    }
+                    if call2_dropped_reasoning > 0 {
+                        debug!(dropped_bytes = call2_dropped_reasoning, "Call-2 emitted reasoning (echoed prefill or re-think) — dropped, answer-only forwarded");
+                    }
                     if is_fallback && !saw_content {
                         // Fallback also produced nothing — surface a structured error
                         // rather than a blank reply (Fix #2 invariant).
@@ -1187,14 +1262,41 @@ pub async fn proxy_stream_with_thinking_budget(
                     return;
                 }
 
-                // Rewrite completion_id/model to match call-1
+                // Rewrite completion_id/model to match call-1, and sanitise the
+                // delta: think-tags split out of content (answer side kept),
+                // reasoning_content dropped (Call-1 already streamed it).
                 let sse_payload = if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(data) {
                     if let Some(obj) = val.as_object_mut() {
                         obj.insert("id".to_string(), serde_json::Value::String(completion_id_inner.clone()));
                         obj.insert("model".to_string(), serde_json::Value::String(model_name_inner.clone()));
                     }
-                    if val.pointer("/choices/0/delta/content").and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty()) {
-                        saw_content = true;
+                    let mut delta_emptied = false;
+                    if let Some(choices) = val.get_mut("choices").and_then(|c| c.as_array_mut())
+                        && let Some(choice) = choices.first_mut()
+                    {
+                        let has_finish = choice.get("finish_reason").is_some_and(|f| !f.is_null());
+                        if let Some(delta) = choice.get_mut("delta").and_then(|d| d.as_object_mut()) {
+                            if let Some(r) = delta.remove("reasoning_content")
+                                && let Some(s) = r.as_str()
+                            {
+                                call2_dropped_reasoning += s.len();
+                            }
+                            if let Some(content_val) = delta.remove("content") {
+                                let (r, ans) = call2_splitter.push(content_val.as_str().unwrap_or(""));
+                                call2_dropped_reasoning += r.len();
+                                if !ans.is_empty() {
+                                    saw_content = true;
+                                    delta.insert("content".to_string(), serde_json::Value::String(ans));
+                                } else if delta.is_empty() && !has_finish {
+                                    // Delta reduced to nothing and carries no
+                                    // finish marker — skip the frame entirely.
+                                    delta_emptied = true;
+                                }
+                            }
+                        }
+                    }
+                    if delta_emptied {
+                        continue;
                     }
                     format!("data: {}\n\n", serde_json::to_string(&val).unwrap_or_default())
                 } else {
@@ -1217,6 +1319,23 @@ pub async fn proxy_stream_with_thinking_budget(
         }
 
         info!(call2_total_events = call2_event_count, "Call-2 stream ended (no [DONE] received)");
+        // Abnormal end (no [DONE]) — still flush the splitter so a held-back
+        // fragment isn't swallowed.
+        let (flush_r, flush_a) = call2_splitter.flush();
+        call2_dropped_reasoning += flush_r.len();
+        if !flush_a.is_empty() {
+            saw_content = true;
+            let chunk = serde_json::json!({
+                "id": completion_id_inner,
+                "object": "chat.completion.chunk",
+                "model": model_name_inner,
+                "choices": [{ "index": 0, "delta": { "content": flush_a }, "finish_reason": null }]
+            });
+            yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default())));
+        }
+        if call2_dropped_reasoning > 0 {
+            debug!(dropped_bytes = call2_dropped_reasoning, "Call-2 emitted reasoning (echoed prefill or re-think) — dropped, answer-only forwarded");
+        }
         if is_fallback && !saw_content {
             let err = serde_json::json!({"error": {"message": "Model produced no output (reasoning and answer both empty)", "type": "server_error"}});
             yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&err).unwrap_or_default())));
@@ -1338,7 +1457,9 @@ pub async fn proxy_nonstream_with_thinking_budget(
     //   c. reasoning empty, content empty → plain-answer fallback.
     let is_fallback = reasoning_buf.is_empty();
     let body2 = if is_fallback {
-        warn!("Call-1 produced neither reasoning nor content; issuing plain-answer fallback (Fix #2)");
+        warn!(
+            "Call-1 produced neither reasoning nor content; issuing plain-answer fallback (Fix #2)"
+        );
         build_plain_answer_body(&original_body, original_max_tokens)
     } else {
         let remaining = original_max_tokens.saturating_sub(thinking_budget).max(64);
@@ -1499,10 +1620,14 @@ pub async fn proxy_stream_rewriting_think_tags(
     let mut byte_stream = resp.bytes_stream();
 
     let output = stream! {
-        // Safety guard — same limits as proxy_request_assembling_stream.
-        // Without these, a runaway oMLX generation streams forever to the client.
-        const MAX_SSE_LINES: usize = 4096;
-        const MAX_TOTAL_BYTES: usize = 768 * 1024; // 768 KB
+        // Safety guard against a runaway generation streaming forever. Sized to
+        // the Call-1 accumulator's guards (16384 lines / ~1 MB of text): this
+        // path also carries native-reasoning models (phi4:reasoning) whose
+        // max_tokens floor is 4096 — the previous 4096-line cap could abort a
+        // legitimate full-budget generation. The engine's own max_tokens bounds
+        // generation; these are backstops only.
+        const MAX_SSE_LINES: usize = 16384;
+        const MAX_TOTAL_BYTES: usize = 4 * 1024 * 1024; // 4 MB
         let mut sse_line_count: usize = 0;
         let mut total_bytes: usize = 0;
 
@@ -1618,7 +1743,10 @@ pub async fn proxy_stream_dedup_native_reasoning(
         .await
         .map_err(|e| {
             error!(error = %e, "Failed to proxy dedup stream to engine");
-            (502u16, format!("{{\"error\":\"Engine unavailable: {}\"}}", e))
+            (
+                502u16,
+                format!("{{\"error\":\"Engine unavailable: {}\"}}", e),
+            )
         })?;
 
     if !resp.status().is_success() {
@@ -1909,6 +2037,30 @@ mod tests {
     }
 
     #[test]
+    fn test_build_call2_body_inline_sets_continuation_contract() {
+        // b9141+ prefill API: continue_final_message must pair with
+        // add_generation_prompt:false; echo:false (b9861+) keeps the engine
+        // from rebuilding the <think> prefill into the response (the
+        // playground think-leak, 2026-07-06). Older builds ignore unknowns.
+        let body = serde_json::json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "q"}],
+            "max_tokens": 2048
+        });
+        let result = build_call2_body(&body, "r", 512, true);
+        assert_eq!(result["continue_final_message"], true);
+        assert_eq!(result["add_generation_prompt"], false);
+        assert_eq!(result["echo"], false);
+
+        // oMLX path (user-turn feedback) must NOT get continuation flags —
+        // there is no assistant prefill to continue.
+        let result = build_call2_body(&body, "r", 512, false);
+        assert!(result.get("continue_final_message").is_none());
+        assert!(result.get("add_generation_prompt").is_none());
+        assert!(result.get("echo").is_none());
+    }
+
+    #[test]
     fn test_build_call2_body_omlx_uses_user_directive() {
         // inline_think=false (oMLX): reasoning fed back as a USER directive,
         // NOT an assistant prefill (oMLX regenerates assistant prefills and
@@ -2089,12 +2241,12 @@ mod tests {
         //                          answer  ="The answer is 4."
         // Delivered as awkward chunks (tags + words straddle delta boundaries):
         let deltas = [
-            "<thi",                 // partial open tag
-            "nk>Let me think ",     // completes open tag + reasoning
+            "<thi",             // partial open tag
+            "nk>Let me think ", // completes open tag + reasoning
             "step by step. ",
             "2+2=4.",
-            "</thin",               // partial close tag
-            "k>The answer ",        // completes close tag + answer begins
+            "</thin",        // partial close tag
+            "k>The answer ", // completes close tag + answer begins
             "is 4.",
         ];
 
@@ -2135,6 +2287,9 @@ mod tests {
         // The dangling "</thin" was buffered as a possible tag; on flush it is
         // emitted in the current (thinking) mode → reasoning, never content.
         assert_eq!(reasoning, "still reasoning when cut off</thin");
-        assert_eq!(content, "", "truncated reasoning must not leak into the answer");
+        assert_eq!(
+            content, "",
+            "truncated reasoning must not leak into the answer"
+        );
     }
 }

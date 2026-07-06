@@ -1,0 +1,261 @@
+2026-07-04 07:23:11,846 - omlx.settings - INFO - Saved settings to /Users/titasbiswas/.omlx/settings.json
+INFO:     Uvicorn running on http://127.0.0.1:11431 (Press CTRL+C to quit)
+2026-07-04 07:23:13,522 - omlx.scheduler - INFO - ChunkedKVCache patch: methods already present upstream, skipped: size
+2026-07-04 07:23:13,604 - omlx.server - INFO - CORS origins: ['*']
+2026-07-04 07:23:13,621 - omlx.model_discovery - INFO - Discovered model: gemma-3-4b-it-4bit (type: vlm, engine: vlm, size: 3.33GB)
+2026-07-04 07:23:13,622 - omlx.model_discovery - INFO - Discovered model: meta-llama-3.1-8b-instruct-4bit (type: llm, engine: batched, size: 4.42GB)
+2026-07-04 07:23:13,623 - omlx.model_discovery - INFO - Discovered model: phi-4-mini-instruct-4bit (type: llm, engine: batched, size: 2.11GB)
+2026-07-04 07:23:13,624 - omlx.model_discovery - INFO - Discovered model: phi-4-mini-reasoning-4bit (type: llm, engine: batched, size: 2.11GB)
+2026-07-04 07:23:13,625 - omlx.model_discovery - INFO - Discovered model: qwen2.5-7b-instruct-4bit (type: llm, engine: batched, size: 4.19GB)
+2026-07-04 07:23:13,625 - omlx.model_discovery - INFO - Model type 'qwen3' has both embedding and LLM variants, but architecture ['Qwen3ForCausalLM'] is not an embedding architecture — treating as LLM
+2026-07-04 07:23:13,626 - omlx.model_discovery - INFO - Discovered model: qwen3-1.7b-4bit (type: llm, engine: batched, size: 0.95GB)
+2026-07-04 07:23:13,626 - omlx.model_discovery - INFO - Model type 'qwen3' has both embedding and LLM variants, but architecture ['Qwen3ForCausalLM'] is not an embedding architecture — treating as LLM
+2026-07-04 07:23:13,626 - omlx.model_discovery - INFO - Discovered model: qwen3-4b-thinking-2507-4bit (type: llm, engine: batched, size: 2.21GB)
+2026-07-04 07:23:13,627 - omlx.model_discovery - INFO - Model type 'qwen3' has both embedding and LLM variants, but architecture ['Qwen3ForCausalLM'] is not an embedding architecture — treating as LLM
+2026-07-04 07:23:13,627 - omlx.model_discovery - INFO - Discovered model: qwen3-8b-4bit (type: llm, engine: batched, size: 4.51GB)
+2026-07-04 07:23:13,628 - omlx.model_discovery - INFO - Discovered model: qwen3-embedding-0.6b-8bit (type: embedding, engine: embedding, size: 0.62GB)
+2026-07-04 07:23:13,628 - omlx.model_discovery - INFO - Discovered model: qwen3-reranker-0.6b-mxfp8 (type: reranker, engine: reranker, size: 0.60GB)
+2026-07-04 07:23:13,629 - omlx.model_discovery - INFO - Discovered model: qwen3-vl-2b-instruct-4bit (type: vlm, engine: vlm, size: 1.74GB)
+2026-07-04 07:23:13,629 - omlx.model_discovery - INFO - Discovered model: qwen3.5-2b-4bit (type: vlm, engine: vlm, size: 1.68GB)
+2026-07-04 07:23:13,630 - omlx.model_discovery - INFO - Discovered model: qwen3.5-4b-6bit (type: vlm, engine: vlm, size: 4.00GB)
+2026-07-04 07:23:13,634 - omlx.model_discovery - INFO - Discovered model: mlx-community--SmolLM-135M-Instruct-4bit (type: llm, engine: batched, size: 0.07GB)
+2026-07-04 07:23:13,634 - omlx.engine_pool - INFO - Discovered 14 models
+2026-07-04 07:23:13,634 - omlx.server_metrics - INFO - Loaded all-time stats from /Users/titasbiswas/.omlx/stats.json
+2026-07-04 07:23:13,634 - omlx.server - INFO - Server initialized with 14 models
+2026-07-04 07:23:13,634 - omlx.server - INFO - Default model: gemma-3-4b-it-4bit
+2026-07-04 07:23:13,634 - omlx.server - INFO - Memory guard tier: balanced (guard on)
+2026-07-04 07:23:13,634 - omlx.server - INFO - Default max tokens: 32768
+2026-07-04 07:23:13,635 - omlx.server - INFO - HF Downloader initialized
+2026-07-04 07:23:13,636 - omlx.server - INFO - ModelScope SDK not installed, MS downloader disabled
+2026-07-04 07:23:13,637 - omlx.server - INFO - oQ Quantizer initialized
+2026-07-04 07:23:13,638 - omlx.server - INFO - HF Uploader initialized
+INFO:     Started server process [89530]
+INFO:     Waiting for application startup.
+2026-07-04 07:23:13,655 - omlx.process_memory_enforcer - WARNING - Metal cap (28.1GB, Apple max_recommended_working_set_size) is below the oMLX static ceiling (30.0GB); leaving Apple's default Metal cap active because iogpu.wired_limit_mb is unset. Raise it with: sudo sysctl iogpu.wired_limit_mb=30720
+2026-07-04 07:23:13,655 - omlx.process_memory_enforcer - INFO - Process memory enforcer started (tier=balanced, ceiling=21.4GB, interval=1.0s)
+INFO:     Application startup complete.
+2026-07-04 07:23:14,336 - omlx.engine_pool - INFO - Loading model: qwen3-embedding-0.6b-8bit
+2026-07-04 07:23:14,336 - omlx.engine.embedding - INFO - Starting embedding engine: /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit
+2026-07-04 07:23:14,337 - omlx.engine_core - INFO - MLX executor thread initialized: generation_stream = ThreadLocalStream(Device(gpu, 0), 4)
+2026-07-04 07:23:14,344 - omlx.models.embedding - INFO - Loading embedding model via mlx-embeddings: /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit
+2026-07-04 07:23:14,933 - omlx.models.embedding - INFO - mx.compile enabled for /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit (primitive embedding path)
+2026-07-04 07:23:14,933 - omlx.models.embedding - INFO - Embedding model loaded successfully: /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit (hidden_size=1024, compiled=True)
+2026-07-04 07:23:14,933 - omlx.engine.embedding - INFO - Embedding engine started: /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit
+2026-07-04 07:23:14,933 - omlx.process_memory_enforcer - WARNING - ProcessMemoryEnforcer: could not resolve scheduler for engine type EmbeddingEngine — prefill memory guard will not propagate to this engine. Verify the wrapper chain (engine._engine.engine.scheduler) still holds.
+2026-07-04 07:23:14,934 - omlx.engine_pool - INFO - Loaded model: qwen3-embedding-0.6b-8bit (actual: 891.16MB, estimated: 634.01MB, total: 634.01MB)
+2026-07-04 07:23:14,943 - omlx.models.embedding - WARNING - compiled embedding path failed for /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit: [eval] Attempting to eval an array during function transformations like compile or vmap is not allowed.; disabling compile and falling back to eager generate()
+2026-07-04 07:23:14,985 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 46 tokens, max_length=32768, truncation=True in 0.046s
+2026-07-04 07:23:15,044 - omlx.engine_pool - INFO - Loading model: qwen3.5-2b-4bit
+2026-07-04 07:23:15,058 - omlx.patches.mlx_lm_mtp.qwen35_model - INFO - Qwen3.5/3.6 MTP model patch applied (PR 990)
+2026-07-04 07:23:15,060 - omlx.patches.mlx_vlm_mtp.qwen35_vlm_model - INFO - Patched mlx_vlm.models.qwen3_5.Model.sanitize for MTP
+2026-07-04 07:23:15,060 - omlx.patches.mlx_vlm_mtp.qwen35_moe_vlm_model - INFO - Patched mlx_vlm.models.qwen3_5_moe.Model.sanitize for MTP
+2026-07-04 07:23:15,061 - omlx.patches.mlx_vlm_mtp.qwen35_moe_vlm_runtime - INFO - mlx-vlm Qwen3.5-MoE runtime MTP patch applied
+2026-07-04 07:23:15,061 - omlx.patches.mlx_vlm_mtp.qwen35_vlm_runtime - INFO - mlx-vlm Qwen3.5 (dense) runtime MTP patch applied
+2026-07-04 07:23:15,061 - omlx.utils.model_loading - INFO - mlx-vlm runtime MTP patch applied for /Users/titasbiswas/.lmforge/models/qwen3.5-2b-4bit (config declares mtp heads but checkpoint ships no mtp.* weights; MTPModule attachment skipped to keep strict load_weights happy)
+2026-07-04 07:23:16,645 - omlx.engine.vlm - INFO - Vision feature cache enabled (SSD: /Users/titasbiswas/.omlx/cache/vision_features)
+2026-07-04 07:23:17,158 - omlx.scheduler - INFO - Enlarging paged cache block_size=256 to 2048 for ArraysCache hybrid model (reduces boundary snapshot overhead)
+2026-07-04 07:23:17,158 - omlx.memory_monitor - INFO - MemoryMonitor initialized (estimator-only, eviction disabled)
+2026-07-04 07:23:17,158 - omlx.memory_monitor - INFO - Model info set: 24 layers (6 KVCache), 2 KV heads, 8 Q heads, 256 head_dim. Estimated memory per 64-token block: 3.00 MB
+2026-07-04 07:23:17,158 - omlx.scheduler - INFO - paged SSD-only mode: max_blocks=100000, block_size=2048 tokens
+2026-07-04 07:23:17,158 - omlx.cache.paged_cache - INFO - PagedCacheManager initialized: block_size=2048, initial_blocks=256, max_blocks=100000, max_tokens=204800000
+----8<---- (head above / tail below) ----8<----
+2026-07-07 00:08:31,355 - omlx.engine_core - INFO - Engine started
+2026-07-07 00:08:31,356 - omlx.cache.paged_ssd_cache - INFO - PagedSSDCacheManager updated layer cache signature (28 layers, 1 unique types)
+2026-07-07 00:08:31,381 - omlx.engine.vlm - INFO - VLM tool calling enabled: parser=json_tools
+2026-07-07 00:08:31,383 - omlx.engine.vlm - INFO - VLMBatchedEngine loaded: /Users/titasbiswas/.lmforge/models/qwen3-vl-2b-instruct-4bit
+2026-07-07 00:08:31,384 - omlx.engine_pool - INFO - Loaded model: qwen3-vl-2b-instruct-4bit (actual: 1.88GB, estimated: 1.74GB, total: 1.74GB)
+2026-07-07 00:08:31,386 - omlx.engine.vlm - INFO - Structured output requires xgrammar. Reinstall with: brew reinstall omlx --with-grammar
+[transformers] Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs`
+2026-07-07 00:08:32,721 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=6.1ms/1, store_cache_main_boundary=0.0ms/1, store_cache_main_collect=0.0ms/1, store_cache_main_dispatch=0.1ms/1, store_cache_worker_sync=0.2ms/1
+2026-07-07 00:08:32,723 - omlx.server - INFO - Chat completion: 74 tokens in 1.32s (126.2 tok/s), prompt: 12, finish_reason=stop, max_tokens=4096, request_max_tokens=4096
+2026-07-07 00:13:32,815 - omlx.engine_pool - INFO - Unloading model: qwen3-vl-2b-instruct-4bit (immediate abort)
+2026-07-07 00:13:32,818 - omlx.engine_core - INFO - Engine stopped
+2026-07-07 00:13:32,818 - omlx.scheduler - INFO - Scheduler shutdown initiated...
+2026-07-07 00:13:32,819 - omlx.cache.paged_ssd_cache - INFO - Shutting down PagedSSDCacheManager...
+2026-07-07 00:13:32,819 - omlx.scheduler - INFO - Scheduler shutdown completed
+2026-07-07 00:13:32,824 - omlx.cache.paged_cache - INFO - PagedCacheManager cleared (reset to 256 initial blocks)
+2026-07-07 00:13:32,891 - omlx.scheduler - INFO - Deep reset completed - all caches cleared
+2026-07-07 00:13:32,891 - omlx.utils.compile_cache - INFO - MLX compile-cache clear resolved (_ZN3mlx4core6detail19compile_clear_cacheEv)
+2026-07-07 00:13:32,896 - omlx.engine.vlm - INFO - VLMBatchedEngine stopped
+2026-07-07 00:13:32,959 - omlx.engine_pool - INFO - Unloaded model: qwen3-vl-2b-instruct-4bit, freed=1.66GB (expected>=0.00B), active_memory: 1.02KB (settled)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+2026-07-07 01:51:29,697 - omlx.process_memory_enforcer - INFO - Process memory enforcer stopped
+2026-07-07 01:51:29,698 - omlx.server - INFO - Process memory enforcer stopped
+2026-07-07 01:51:29,698 - omlx.admin.hf_downloader - INFO - HF Downloader shut down
+2026-07-07 01:51:29,698 - omlx.server - INFO - HF Downloader stopped
+2026-07-07 01:51:29,698 - omlx.engine_pool - INFO - Engine pool shutdown complete
+2026-07-07 01:51:29,700 - omlx.server - INFO - Engine pool shutdown
+INFO:     Application shutdown complete.
+INFO:     Finished server process [29489]
+2026-07-07 01:55:15,000 - omlx.settings - INFO - Saved settings to /Users/titasbiswas/.omlx/settings.json
+INFO:     Uvicorn running on http://127.0.0.1:11431 (Press CTRL+C to quit)
+2026-07-07 01:55:16,373 - omlx.scheduler - INFO - ChunkedKVCache patch: methods already present upstream, skipped: size
+2026-07-07 01:55:16,451 - omlx.server - INFO - CORS origins: ['*']
+2026-07-07 01:55:16,468 - omlx.model_discovery - INFO - Discovered model: gemma-3-4b-it-4bit (type: vlm, engine: vlm, size: 3.33GB)
+2026-07-07 01:55:16,469 - omlx.model_discovery - INFO - Discovered model: meta-llama-3.1-8b-instruct-4bit (type: llm, engine: batched, size: 4.42GB)
+2026-07-07 01:55:16,470 - omlx.model_discovery - INFO - Discovered model: phi-4-mini-instruct-4bit (type: llm, engine: batched, size: 2.11GB)
+2026-07-07 01:55:16,471 - omlx.model_discovery - INFO - Discovered model: phi-4-mini-reasoning-4bit (type: llm, engine: batched, size: 2.11GB)
+2026-07-07 01:55:16,472 - omlx.model_discovery - INFO - Discovered model: qwen2.5-7b-instruct-4bit (type: llm, engine: batched, size: 4.19GB)
+2026-07-07 01:55:16,473 - omlx.model_discovery - INFO - Model type 'qwen3' has both embedding and LLM variants, but architecture ['Qwen3ForCausalLM'] is not an embedding architecture — treating as LLM
+2026-07-07 01:55:16,473 - omlx.model_discovery - INFO - Discovered model: qwen3-1.7b-4bit (type: llm, engine: batched, size: 0.95GB)
+2026-07-07 01:55:16,474 - omlx.model_discovery - INFO - Model type 'qwen3' has both embedding and LLM variants, but architecture ['Qwen3ForCausalLM'] is not an embedding architecture — treating as LLM
+2026-07-07 01:55:16,474 - omlx.model_discovery - INFO - Discovered model: qwen3-4b-thinking-2507-4bit (type: llm, engine: batched, size: 2.21GB)
+2026-07-07 01:55:16,474 - omlx.model_discovery - INFO - Model type 'qwen3' has both embedding and LLM variants, but architecture ['Qwen3ForCausalLM'] is not an embedding architecture — treating as LLM
+2026-07-07 01:55:16,475 - omlx.model_discovery - INFO - Discovered model: qwen3-8b-4bit (type: llm, engine: batched, size: 4.51GB)
+2026-07-07 01:55:16,475 - omlx.model_discovery - INFO - Discovered model: qwen3-embedding-0.6b-8bit (type: embedding, engine: embedding, size: 0.62GB)
+2026-07-07 01:55:16,476 - omlx.model_discovery - INFO - Discovered model: qwen3-reranker-0.6b-mxfp8 (type: reranker, engine: reranker, size: 0.60GB)
+2026-07-07 01:55:16,477 - omlx.model_discovery - INFO - Discovered model: qwen3-vl-2b-instruct-4bit (type: vlm, engine: vlm, size: 1.74GB)
+2026-07-07 01:55:16,477 - omlx.model_discovery - INFO - Discovered model: qwen3.5-2b-4bit (type: vlm, engine: vlm, size: 1.68GB)
+2026-07-07 01:55:16,478 - omlx.model_discovery - INFO - Discovered model: qwen3.5-4b-6bit (type: vlm, engine: vlm, size: 4.00GB)
+2026-07-07 01:55:16,481 - omlx.model_discovery - INFO - Discovered model: mlx-community--SmolLM-135M-Instruct-4bit (type: llm, engine: batched, size: 0.07GB)
+2026-07-07 01:55:16,481 - omlx.engine_pool - INFO - Discovered 14 models
+2026-07-07 01:55:16,481 - omlx.server_metrics - INFO - Loaded all-time stats from /Users/titasbiswas/.omlx/stats.json
+2026-07-07 01:55:16,481 - omlx.server - INFO - Server initialized with 14 models
+2026-07-07 01:55:16,481 - omlx.server - INFO - Default model: gemma-3-4b-it-4bit
+2026-07-07 01:55:16,481 - omlx.server - INFO - Memory guard tier: balanced (guard on)
+2026-07-07 01:55:16,481 - omlx.server - INFO - Default max tokens: 32768
+2026-07-07 01:55:16,482 - omlx.server - INFO - HF Downloader initialized
+2026-07-07 01:55:16,483 - omlx.server - INFO - ModelScope SDK not installed, MS downloader disabled
+2026-07-07 01:55:16,484 - omlx.server - INFO - oQ Quantizer initialized
+2026-07-07 01:55:16,485 - omlx.server - INFO - HF Uploader initialized
+INFO:     Started server process [16643]
+INFO:     Waiting for application startup.
+2026-07-07 01:55:16,502 - omlx.process_memory_enforcer - WARNING - Metal cap (28.1GB, Apple max_recommended_working_set_size) is below the oMLX static ceiling (30.0GB); leaving Apple's default Metal cap active because iogpu.wired_limit_mb is unset. Raise it with: sudo sysctl iogpu.wired_limit_mb=30720
+2026-07-07 01:55:16,502 - omlx.process_memory_enforcer - INFO - Process memory enforcer started (tier=balanced, ceiling=23.4GB, interval=1.0s)
+INFO:     Application startup complete.
+2026-07-07 01:55:17,503 - omlx.engine_pool - INFO - Loading model: qwen3-embedding-0.6b-8bit
+2026-07-07 01:55:17,503 - omlx.engine.embedding - INFO - Starting embedding engine: /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit
+2026-07-07 01:55:17,504 - omlx.engine_core - INFO - MLX executor thread initialized: generation_stream = ThreadLocalStream(Device(gpu, 0), 4)
+2026-07-07 01:55:17,516 - omlx.models.embedding - INFO - Loading embedding model via mlx-embeddings: /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit
+2026-07-07 01:55:18,107 - omlx.models.embedding - INFO - mx.compile enabled for /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit (primitive embedding path)
+2026-07-07 01:55:18,107 - omlx.models.embedding - INFO - Embedding model loaded successfully: /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit (hidden_size=1024, compiled=True)
+2026-07-07 01:55:18,108 - omlx.engine.embedding - INFO - Embedding engine started: /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit
+2026-07-07 01:55:18,108 - omlx.process_memory_enforcer - WARNING - ProcessMemoryEnforcer: could not resolve scheduler for engine type EmbeddingEngine — prefill memory guard will not propagate to this engine. Verify the wrapper chain (engine._engine.engine.scheduler) still holds.
+2026-07-07 01:55:18,108 - omlx.engine_pool - INFO - Loaded model: qwen3-embedding-0.6b-8bit (actual: 891.92MB, estimated: 634.01MB, total: 634.01MB)
+2026-07-07 01:55:18,125 - omlx.models.embedding - WARNING - compiled embedding path failed for /Users/titasbiswas/.lmforge/models/qwen3-embedding-0.6b-8bit: [eval] Attempting to eval an array during function transformations like compile or vmap is not allowed.; disabling compile and falling back to eager generate()
+2026-07-07 01:55:18,319 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 46 tokens, max_length=32768, truncation=True in 0.207s
+2026-07-07 01:55:18,374 - omlx.engine_pool - INFO - Loading model: qwen3.5-2b-4bit
+2026-07-07 01:55:18,385 - omlx.patches.mlx_lm_mtp.qwen35_model - INFO - Qwen3.5/3.6 MTP model patch applied (PR 990)
+2026-07-07 01:55:18,387 - omlx.patches.mlx_vlm_mtp.qwen35_vlm_model - INFO - Patched mlx_vlm.models.qwen3_5.Model.sanitize for MTP
+2026-07-07 01:55:18,387 - omlx.patches.mlx_vlm_mtp.qwen35_moe_vlm_model - INFO - Patched mlx_vlm.models.qwen3_5_moe.Model.sanitize for MTP
+2026-07-07 01:55:18,388 - omlx.patches.mlx_vlm_mtp.qwen35_moe_vlm_runtime - INFO - mlx-vlm Qwen3.5-MoE runtime MTP patch applied
+2026-07-07 01:55:18,388 - omlx.patches.mlx_vlm_mtp.qwen35_vlm_runtime - INFO - mlx-vlm Qwen3.5 (dense) runtime MTP patch applied
+2026-07-07 01:55:18,388 - omlx.utils.model_loading - INFO - mlx-vlm runtime MTP patch applied for /Users/titasbiswas/.lmforge/models/qwen3.5-2b-4bit (config declares mtp heads but checkpoint ships no mtp.* weights; MTPModule attachment skipped to keep strict load_weights happy)
+2026-07-07 01:55:20,009 - omlx.cache.vision_feature_cache - INFO - Vision feature SSD cache scan: scanned=2, indexed=2, errors=0, total_size=0.5MB
+2026-07-07 01:55:20,009 - omlx.engine.vlm - INFO - Vision feature cache enabled (SSD: /Users/titasbiswas/.omlx/cache/vision_features)
+2026-07-07 01:55:20,507 - omlx.scheduler - INFO - Enlarging paged cache block_size=256 to 2048 for ArraysCache hybrid model (reduces boundary snapshot overhead)
+2026-07-07 01:55:20,507 - omlx.memory_monitor - INFO - MemoryMonitor initialized (estimator-only, eviction disabled)
+2026-07-07 01:55:20,507 - omlx.memory_monitor - INFO - Model info set: 24 layers (6 KVCache), 2 KV heads, 8 Q heads, 256 head_dim. Estimated memory per 64-token block: 3.00 MB
+2026-07-07 01:55:20,507 - omlx.scheduler - INFO - paged SSD-only mode: max_blocks=100000, block_size=2048 tokens
+2026-07-07 01:55:20,507 - omlx.cache.paged_cache - INFO - PagedCacheManager initialized: block_size=2048, initial_blocks=256, max_blocks=100000, max_tokens=204800000
+2026-07-07 01:55:20,507 - omlx.cache.paged_ssd_cache - INFO - Scanning SSD cache directory: /Users/titasbiswas/.omlx/cache
+2026-07-07 01:55:20,623 - omlx.cache.paged_ssd_cache - INFO - SSD cache scan complete: scanned=348, indexed=1, errors=0, total_size=42.64 MB, skipped_incompatible=347 blocks (10.69 GB)
+2026-07-07 01:55:20,623 - omlx.cache.paged_ssd_cache - INFO - PagedSSDCacheManager initialized: dir=/Users/titasbiswas/.omlx/cache, max_size=46.04 GB, existing_files=1, disk_free=174.86 GB, cache_used=42.64 MB
+2026-07-07 01:55:20,623 - omlx.cache.paged_cache - INFO - paged SSD cache manager connected to PagedCacheManager
+2026-07-07 01:55:20,623 - omlx.cache.prefix_cache - INFO - PagedSSDCacheManager connected to BlockAwarePrefixCache
+2026-07-07 01:55:20,623 - omlx.scheduler - INFO - paged SSD cache enabled: cache_dir=/Users/titasbiswas/.omlx/cache, max_size=46.04 GB, block_size=2048 tokens
+2026-07-07 01:55:20,623 - omlx.scheduler - INFO - paged SSD cache enabled: /Users/titasbiswas/.omlx/cache, block_size=2048, max_blocks=100000
+2026-07-07 01:55:20,623 - omlx.engine_core - INFO - Engine started
+2026-07-07 01:55:20,623 - omlx.cache.paged_ssd_cache - INFO - PagedSSDCacheManager updated layer cache signature (24 layers, 2 unique types)
+2026-07-07 01:55:20,673 - omlx.engine.vlm - INFO - VLM tool calling enabled: parser=qwen3_coder
+2026-07-07 01:55:20,676 - omlx.engine.vlm - INFO - VLMBatchedEngine loaded: /Users/titasbiswas/.lmforge/models/qwen3.5-2b-4bit
+2026-07-07 01:55:20,678 - omlx.engine_pool - INFO - Loaded model: qwen3.5-2b-4bit (actual: 1.78GB, estimated: 1.68GB, total: 2.30GB)
+2026-07-07 01:55:20,680 - omlx.engine.vlm - INFO - Structured output requires xgrammar. Reinstall with: brew reinstall omlx --with-grammar
+2026-07-07 01:55:22,678 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=8.1ms/1, store_cache_main_boundary=0.0ms/1, store_cache_main_collect=0.0ms/1, store_cache_main_dispatch=1.0ms/1, store_cache_worker_sync=0.1ms/1
+2026-07-07 01:55:22,679 - omlx.server - INFO - Chat completion: 128 tokens in 1.99s (64.5 tok/s), prompt: 50, finish_reason=length, max_tokens=128, request_max_tokens=128
+2026-07-07 01:55:22,767 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.024s
+2026-07-07 01:55:22,828 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.028s
+2026-07-07 01:55:22,892 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.028s
+2026-07-07 01:55:22,953 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.028s
+2026-07-07 01:55:23,016 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.028s
+2026-07-07 01:55:23,074 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.024s
+2026-07-07 01:55:23,138 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.026s
+2026-07-07 01:55:23,203 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.025s
+2026-07-07 01:55:23,264 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.023s
+2026-07-07 01:55:23,323 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 54 tokens, max_length=32768, truncation=True in 0.022s
+2026-07-07 01:55:24,859 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=16.2ms/2, store_cache_main_boundary=0.0ms/2, store_cache_main_collect=0.0ms/2, store_cache_main_dispatch=1.1ms/2, store_cache_worker_sync=0.1ms/1
+2026-07-07 01:55:24,860 - omlx.server - INFO - Chat completion: 128 tokens in 1.45s (88.2 tok/s), prompt: 63, finish_reason=length, max_tokens=128, request_max_tokens=128
+2026-07-07 01:55:26,363 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=24.2ms/3, store_cache_main_boundary=0.0ms/3, store_cache_main_collect=0.0ms/3, store_cache_main_dispatch=1.2ms/3, store_cache_worker_sync=0.2ms/2
+2026-07-07 01:55:26,364 - omlx.server - INFO - Chat completion: 128 tokens in 1.46s (87.9 tok/s), prompt: 63, finish_reason=length, max_tokens=128, request_max_tokens=128
+2026-07-07 01:55:27,875 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=32.2ms/4, store_cache_main_boundary=0.0ms/4, store_cache_main_collect=0.0ms/4, store_cache_main_dispatch=1.3ms/4, store_cache_worker_sync=0.3ms/3
+2026-07-07 01:55:27,876 - omlx.server - INFO - Chat completion: 128 tokens in 1.46s (87.8 tok/s), prompt: 63, finish_reason=length, max_tokens=128, request_max_tokens=128
+2026-07-07 01:55:29,450 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=40.2ms/5, store_cache_main_boundary=0.0ms/5, store_cache_main_collect=0.0ms/5, store_cache_main_dispatch=1.5ms/5, store_cache_worker_sync=0.3ms/4
+2026-07-07 01:55:29,451 - omlx.server - INFO - Chat completion: 128 tokens in 1.53s (83.9 tok/s), prompt: 63, finish_reason=length, max_tokens=128, request_max_tokens=128
+2026-07-07 01:55:30,971 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=48.4ms/6, store_cache_main_boundary=0.0ms/6, store_cache_main_collect=0.1ms/6, store_cache_main_dispatch=1.6ms/6, store_cache_worker_sync=0.5ms/5
+2026-07-07 01:55:30,972 - omlx.server - INFO - Chat completion: 128 tokens in 1.46s (87.6 tok/s), prompt: 63, finish_reason=length, max_tokens=128, request_max_tokens=128
+2026-07-07 01:55:32,483 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=56.3ms/7, store_cache_main_boundary=0.0ms/7, store_cache_main_collect=0.1ms/7, store_cache_main_dispatch=1.7ms/7, store_cache_worker_sync=0.6ms/7
+2026-07-07 01:55:32,484 - omlx.server - INFO - Chat completion: 128 tokens in 1.46s (87.5 tok/s), prompt: 63, finish_reason=length, max_tokens=128, request_max_tokens=128
+2026-07-07 01:55:33,739 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=64.8ms/8, store_cache_main_boundary=0.0ms/8, store_cache_main_collect=0.1ms/8, store_cache_main_dispatch=1.8ms/8, store_cache_worker_sync=0.6ms/7
+2026-07-07 01:55:33,740 - omlx.server - INFO - Chat completion: 102 tokens in 1.21s (84.0 tok/s), prompt: 63, finish_reason=stop, max_tokens=128, request_max_tokens=128
+2026-07-07 01:55:35,243 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=73.0ms/9, store_cache_main_boundary=0.0ms/9, store_cache_main_collect=0.1ms/9, store_cache_main_dispatch=1.9ms/9, store_cache_worker_sync=0.7ms/8
+2026-07-07 01:55:35,243 - omlx.server - INFO - Chat completion: 128 tokens in 1.46s (88.0 tok/s), prompt: 63, finish_reason=length, max_tokens=128, request_max_tokens=128
+2026-07-07 01:55:36,516 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=81.2ms/10, store_cache_main_boundary=0.0ms/10, store_cache_main_collect=0.1ms/10, store_cache_main_dispatch=2.0ms/10, store_cache_worker_sync=0.7ms/9
+2026-07-07 01:55:36,516 - omlx.server - INFO - Chat completion: 102 tokens in 1.22s (83.3 tok/s), prompt: 63, finish_reason=stop, max_tokens=128, request_max_tokens=128
+2026-07-07 01:55:37,759 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=89.3ms/11, store_cache_main_boundary=0.0ms/11, store_cache_main_collect=0.1ms/11, store_cache_main_dispatch=2.1ms/11, store_cache_worker_sync=0.8ms/10
+2026-07-07 01:55:37,759 - omlx.server - INFO - Chat completion: 102 tokens in 1.20s (84.7 tok/s), prompt: 64, finish_reason=stop, max_tokens=128, request_max_tokens=128
+2026-07-07 01:55:37,907 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.032s
+2026-07-07 01:55:37,927 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.044s
+2026-07-07 01:55:37,948 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.060s
+2026-07-07 01:55:37,969 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.079s
+2026-07-07 01:55:37,989 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.078s
+2026-07-07 01:55:38,009 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.078s
+2026-07-07 01:55:38,029 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.077s
+2026-07-07 01:55:38,049 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.076s
+2026-07-07 01:55:38,069 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 54 tokens, max_length=32768, truncation=True in 0.075s
+2026-07-07 01:55:38,088 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 53 tokens, max_length=32768, truncation=True in 0.074s
+2026-07-07 01:55:38,279 - omlx.server - INFO - Embedding: 1 inputs, 1024 dims, 44 tokens, max_length=32768, truncation=True in 0.067s
+2026-07-07 01:55:39,649 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=97.3ms/12, store_cache_main_boundary=0.0ms/12, store_cache_main_collect=0.1ms/12, store_cache_main_dispatch=2.3ms/12, store_cache_worker_sync=0.8ms/11
+2026-07-07 01:55:39,650 - omlx.server - INFO - Chat completion: 128 tokens in 1.44s (89.1 tok/s), prompt: 55, finish_reason=length, max_tokens=128, request_max_tokens=128
+2026-07-07 01:55:39,842 - omlx.engine_pool - INFO - Loading model: qwen3-vl-2b-instruct-4bit
+2026-07-07 01:55:40,797 - omlx.cache.vision_feature_cache - INFO - Vision feature SSD cache scan: scanned=2, indexed=2, errors=0, total_size=0.5MB
+2026-07-07 01:55:40,797 - omlx.engine.vlm - INFO - Vision feature cache enabled (SSD: /Users/titasbiswas/.omlx/cache/vision_features)
+2026-07-07 01:55:41,407 - omlx.scheduler - INFO - Loaded 1 additional EOS token(s) from generation_config.json: {151643}
+2026-07-07 01:55:41,408 - omlx.memory_monitor - INFO - MemoryMonitor initialized (estimator-only, eviction disabled)
+2026-07-07 01:55:41,408 - omlx.memory_monitor - INFO - Model info set: 28 layers (28 KVCache), 8 KV heads, 16 Q heads, 128 head_dim. Estimated memory per 64-token block: 7.00 MB
+2026-07-07 01:55:41,408 - omlx.scheduler - INFO - paged SSD-only mode: max_blocks=100000, block_size=256 tokens
+2026-07-07 01:55:41,408 - omlx.cache.paged_cache - INFO - PagedCacheManager initialized: block_size=256, initial_blocks=256, max_blocks=100000, max_tokens=25600000
+2026-07-07 01:55:41,408 - omlx.cache.paged_ssd_cache - INFO - Scanning SSD cache directory: /Users/titasbiswas/.omlx/cache
+2026-07-07 01:55:41,505 - omlx.cache.paged_ssd_cache - INFO - SSD cache scan complete: scanned=348, indexed=1, errors=0, total_size=28.01 MB, skipped_incompatible=347 blocks (10.71 GB)
+2026-07-07 01:55:41,505 - omlx.cache.paged_ssd_cache - INFO - PagedSSDCacheManager initialized: dir=/Users/titasbiswas/.omlx/cache, max_size=46.04 GB, existing_files=1, disk_free=174.86 GB, cache_used=28.01 MB
+2026-07-07 01:55:41,505 - omlx.cache.paged_cache - INFO - paged SSD cache manager connected to PagedCacheManager
+2026-07-07 01:55:41,505 - omlx.cache.prefix_cache - INFO - PagedSSDCacheManager connected to BlockAwarePrefixCache
+2026-07-07 01:55:41,505 - omlx.scheduler - INFO - paged SSD cache enabled: cache_dir=/Users/titasbiswas/.omlx/cache, max_size=46.04 GB, block_size=256 tokens
+2026-07-07 01:55:41,505 - omlx.scheduler - INFO - paged SSD cache enabled: /Users/titasbiswas/.omlx/cache, block_size=256, max_blocks=100000
+2026-07-07 01:55:41,505 - omlx.engine_core - INFO - Engine started
+2026-07-07 01:55:41,505 - omlx.cache.paged_ssd_cache - INFO - PagedSSDCacheManager updated layer cache signature (28 layers, 1 unique types)
+2026-07-07 01:55:41,530 - omlx.engine.vlm - INFO - VLM tool calling enabled: parser=json_tools
+2026-07-07 01:55:41,532 - omlx.engine.vlm - INFO - VLMBatchedEngine loaded: /Users/titasbiswas/.lmforge/models/qwen3-vl-2b-instruct-4bit
+2026-07-07 01:55:41,533 - omlx.engine_pool - INFO - Loaded model: qwen3-vl-2b-instruct-4bit (actual: 1.63GB, estimated: 1.74GB, total: 4.05GB)
+2026-07-07 01:55:41,533 - omlx.engine.vlm - INFO - Structured output requires xgrammar. Reinstall with: brew reinstall omlx --with-grammar
+[transformers] Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs`
+2026-07-07 01:55:43,254 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=7.1ms/1, store_cache_main_boundary=0.0ms/1, store_cache_main_collect=0.0ms/1, store_cache_main_dispatch=0.1ms/1, store_cache_worker_sync=0.1ms/1
+2026-07-07 01:55:43,254 - omlx.server - INFO - Chat completion: 165 tokens in 1.71s (96.3 tok/s), prompt: 52, finish_reason=stop, max_tokens=4096, request_max_tokens=4096
+[transformers] Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs`
+2026-07-07 01:55:45,876 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=14.3ms/2, store_cache_main_boundary=0.0ms/2, store_cache_main_collect=0.0ms/2, store_cache_main_dispatch=0.1ms/2, store_cache_worker_sync=0.1ms/1
+2026-07-07 01:55:45,877 - omlx.server - INFO - Chat completion: 187 tokens in 1.99s (94.2 tok/s), prompt: 117, finish_reason=stop, max_tokens=4096, request_max_tokens=4096
+[transformers] Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs`
+2026-07-07 01:55:47,008 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=21.6ms/3, store_cache_main_boundary=0.0ms/3, store_cache_main_collect=0.0ms/3, store_cache_main_dispatch=0.2ms/3, store_cache_worker_sync=0.2ms/2
+2026-07-07 01:55:47,008 - omlx.server - INFO - Chat completion: 101 tokens in 1.09s (92.7 tok/s), prompt: 106, finish_reason=stop, max_tokens=4096, request_max_tokens=4096
+2026-07-07 01:55:48,317 - omlx.engine_pool - INFO - Loading model: qwen3-reranker-0.6b-mxfp8
+2026-07-07 01:55:48,317 - omlx.engine.reranker - INFO - Starting reranker engine: /Users/titasbiswas/.lmforge/models/qwen3-reranker-0.6b-mxfp8
+2026-07-07 01:55:48,319 - omlx.models.reranker - INFO - Loading reranker model: /Users/titasbiswas/.lmforge/models/qwen3-reranker-0.6b-mxfp8 (arch=Qwen3ForCausalLM)
+2026-07-07 01:55:49,126 - omlx.models.reranker - INFO - CausalLM reranker tokens: yes=9693, no=2152, prefix_len=39, suffix_len=9
+2026-07-07 01:55:49,126 - omlx.models.reranker - INFO - mx.compile skipped for /Users/titasbiswas/.lmforge/models/qwen3-reranker-0.6b-mxfp8
+2026-07-07 01:55:49,126 - omlx.models.reranker - INFO - Reranker model loaded successfully: /Users/titasbiswas/.lmforge/models/qwen3-reranker-0.6b-mxfp8 (arch=Qwen3ForCausalLM, num_labels=2, causal_lm=True, vl=False, compiled=False)
+2026-07-07 01:55:49,126 - omlx.engine.reranker - INFO - Reranker engine started: /Users/titasbiswas/.lmforge/models/qwen3-reranker-0.6b-mxfp8
+2026-07-07 01:55:49,126 - omlx.process_memory_enforcer - WARNING - ProcessMemoryEnforcer: could not resolve scheduler for engine type RerankerEngine — prefill memory guard will not propagate to this engine. Verify the wrapper chain (engine._engine.engine.scheduler) still holds.
+2026-07-07 01:55:49,127 - omlx.engine_pool - INFO - Loaded model: qwen3-reranker-0.6b-mxfp8 (actual: 830.69MB, estimated: 615.35MB, total: 4.65GB)
+2026-07-07 01:55:49,516 - omlx.server - INFO - Rerank: 5 docs, 574 tokens in 0.389s
+2026-07-07 01:55:49,780 - omlx.scheduler - INFO - Cache phase timings: cleanup_finished_sync=108.1ms/13, store_cache_main_boundary=0.0ms/13, store_cache_main_collect=0.1ms/13, store_cache_main_dispatch=2.3ms/13, store_cache_worker_sync=0.9ms/12
+2026-07-07 01:55:49,781 - omlx.server - INFO - Chat completion: 1 tokens in 0.20s (5.0 tok/s), prompt: 24, finish_reason=stop, max_tokens=64, request_max_tokens=64
+2026-07-07 01:56:11,565 - omlx.scheduler - INFO - Enabled boundary cache snapshots for stateful non-sliceable cache layers
+2026-07-07 01:56:12,032 - omlx.scheduler - INFO - Cache phase timings: boundary_capture_extract=0.2ms/1, boundary_capture_sync=6.4ms/1, boundary_snapshot_save=6.0ms/1, cleanup_finished_sync=115.0ms/14, store_cache_main_boundary=0.0ms/14, store_cache_main_collect=0.1ms/14, store_cache_main_dispatch=2.5ms/14, store_cache_worker_sync=1.0ms/13
+2026-07-07 01:56:12,035 - omlx.server - INFO - Chat completion: 2048 tokens in 22.20s (93.5 tok/s), prompt: 42, finish_reason=length, max_tokens=2048, request_max_tokens=2048
+2026-07-07 01:56:13,536 - omlx.scheduler - INFO - Using boundary cache snapshot for 101d836e-65f6-45ae-ba6a-085ec540e673: storing 2048/2130 tokens (skipping trailing partial block, 0 intermediate snapshots)
+2026-07-07 01:56:13,543 - omlx.scheduler - INFO - Cache phase timings: boundary_capture_extract=0.2ms/1, boundary_capture_sync=6.4ms/1, boundary_snapshot_save=6.0ms/1, cleanup_finished_sync=123.0ms/15, store_cache_main_boundary=0.4ms/15, store_cache_main_collect=0.1ms/15, store_cache_main_dispatch=3.6ms/15, store_cache_worker_sync=1.1ms/14
+2026-07-07 01:56:13,545 - omlx.server - INFO - Chat completion: 4 tokens in 1.50s (3993.5 tok/s), prompt: 2126, finish_reason=stop, max_tokens=64, request_max_tokens=64
+2026-07-07 01:56:18,848 - omlx.scheduler - INFO - Cache phase timings: boundary_capture_extract=0.2ms/1, boundary_capture_sync=6.4ms/1, boundary_snapshot_save=6.0ms/1, cleanup_finished_sync=130.8ms/16, store_cache_main_boundary=0.4ms/16, store_cache_main_collect=0.1ms/16, store_cache_main_dispatch=3.8ms/16, store_cache_worker_sync=1.2ms/15
+2026-07-07 01:56:18,850 - omlx.server - INFO - Chat completion: 256 tokens in 3.04s (96.4 tok/s), prompt: 20, finish_reason=length, max_tokens=256, request_max_tokens=256
+2026-07-07 01:56:19,728 - omlx.scheduler - INFO - Cache phase timings: boundary_capture_extract=0.2ms/1, boundary_capture_sync=6.4ms/1, boundary_snapshot_save=6.0ms/1, cleanup_finished_sync=139.1ms/17, store_cache_main_boundary=0.4ms/17, store_cache_main_collect=0.2ms/17, store_cache_main_dispatch=3.9ms/17, store_cache_worker_sync=1.3ms/16
+2026-07-07 01:56:19,728 - omlx.server - INFO - Chat completion: 50 tokens in 0.87s (116.5 tok/s), prompt: 311, finish_reason=stop, max_tokens=256, request_max_tokens=256

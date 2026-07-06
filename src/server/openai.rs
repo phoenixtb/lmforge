@@ -15,12 +15,7 @@ fn load_index(
     data_dir: &std::path::Path,
     models_dir: &std::path::Path,
 ) -> crate::model::index::ModelIndex {
-    crate::model::index::ModelIndex::load(data_dir, models_dir).unwrap_or_else(|_| {
-        crate::model::index::ModelIndex {
-            schema_version: 1,
-            models: vec![],
-        }
-    })
+    crate::model::index::ModelIndex::load(data_dir, models_dir).unwrap_or_default()
 }
 
 /// Returns true if the request body contains any multimodal image content block.
@@ -169,7 +164,8 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     // Prepare body for thinking orchestration: extracts intent fields, applies
     // engine transforms + sampling defaults, strips LMForge-private fields, and
     // resolves routing flags (can_use_budget, inline_think, thinking_budget).
-    let thinking_ctx = thinking::prepare_request(&mut body_value, &state.engine_config.id, model_caps);
+    let thinking_ctx =
+        thinking::prepare_request(&mut body_value, &state.engine_config.id, model_caps);
     let has_think = thinking_ctx.has_think;
     let thinking_budget = thinking_ctx.thinking_budget;
     let stream_reasoning_deltas = thinking_ctx.stream_reasoning_deltas;
@@ -186,14 +182,18 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     // emits the role token, and regenerates a duplicate answer. Inject the
     // model's detected turn-end tokens as `stop` (client-supplied `stop` wins).
     if state.engine_config.id == "omlx" {
-        let stops: Vec<String> = model_caps.map(|c| c.stop_tokens.clone()).unwrap_or_default();
+        let stops: Vec<String> = model_caps
+            .map(|c| c.stop_tokens.clone())
+            .unwrap_or_default();
         if !stops.is_empty()
             && let Some(obj) = body_value.as_object_mut()
             && !obj.contains_key("stop")
         {
             obj.insert(
                 "stop".to_string(),
-                serde_json::Value::Array(stops.into_iter().map(serde_json::Value::String).collect()),
+                serde_json::Value::Array(
+                    stops.into_iter().map(serde_json::Value::String).collect(),
+                ),
             );
         }
     }
@@ -333,7 +333,13 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
             _ => {
                 // Plain passthrough (non-think, or non-orchestrator engine).
                 // Native-reasoning oMLX models route through the dedup proxy to
-                // strip the truncation echo (Fix #1); everything else streams raw.
+                // strip the truncation echo (Fix #1). Native-reasoning models on
+                // inline-think engines (llama.cpp / SGLang) always emit
+                // `<think>…</think>` in content regardless of the think toggle
+                // (their template hardwires reasoning), and llama-server doesn't
+                // recognise every such template — route them through the tag
+                // rewriter so raw tags never reach the client. Everything else
+                // streams raw.
                 let forwarded_body = match serde_json::to_vec(&body_value) {
                     Ok(b) => Bytes::from(b),
                     Err(e) => {
@@ -344,11 +350,29 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
                     }
                 };
                 if native_reasoning_dedup {
-                    proxy::proxy_stream_dedup_native_reasoning(&client, engine_port, "/v1/chat/completions", forwarded_body)
-                        .await
+                    proxy::proxy_stream_dedup_native_reasoning(
+                        &client,
+                        engine_port,
+                        "/v1/chat/completions",
+                        forwarded_body,
+                    )
+                    .await
+                } else if thinking_ctx.is_native_reasoning && inline_think {
+                    proxy::proxy_stream_rewriting_think_tags(
+                        &client,
+                        engine_port,
+                        "/v1/chat/completions",
+                        forwarded_body,
+                    )
+                    .await
                 } else {
-                    proxy::proxy_stream(&client, engine_port, "/v1/chat/completions", forwarded_body)
-                        .await
+                    proxy::proxy_stream(
+                        &client,
+                        engine_port,
+                        "/v1/chat/completions",
+                        forwarded_body,
+                    )
+                    .await
                 }
             }
         };
@@ -442,11 +466,25 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
         match proxy::proxy_request(&client, engine_port, "/v1/chat/completions", forwarded_body)
             .await
         {
-            Ok((status, text)) => Response::builder()
-                .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(text))
-                .unwrap(),
+            Ok((status, text)) => {
+                // Native-reasoning models on inline-think engines emit
+                // `<think>` tags in content regardless of the think toggle —
+                // split them into reasoning_content (mirrors the streaming
+                // rewriter path).
+                let text = if thinking_ctx.is_native_reasoning
+                    && inline_think
+                    && (200..300).contains(&status)
+                {
+                    thinking::split_think_in_response(&text).unwrap_or(text)
+                } else {
+                    text
+                };
+                Response::builder()
+                    .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(text))
+                    .unwrap()
+            }
             Err((status, text)) => Response::builder()
                 .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
                 .header(header::CONTENT_TYPE, "application/json")
@@ -482,10 +520,7 @@ pub async fn completions(State(state): State<AppState>, body: Bytes) -> impl Int
     let engine_port = guard.port();
 
     let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex {
-            schema_version: 1,
-            models: vec![],
-        });
+        .unwrap_or_default();
     // Same engine-aware rewrite as `/v1/chat/completions`. See the comment
     // there for why vLLM is exempt.
     let needs_basename_rewrite = state.engine_config.id != "vllm";
@@ -754,10 +789,7 @@ pub async fn model_get(
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
     let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex {
-            schema_version: 1,
-            models: vec![],
-        });
+        .unwrap_or_default();
 
     let Some(m) = index.get(&id) else {
         let body = format!(
@@ -801,10 +833,7 @@ pub async fn model_get(
 /// `GET /v1/models` — List available models with capability metadata
 pub async fn models(State(state): State<AppState>) -> impl IntoResponse {
     let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex {
-            schema_version: 1,
-            models: vec![],
-        });
+        .unwrap_or_default();
 
     let data: Vec<serde_json::Value> = index
         .list()
@@ -842,10 +871,7 @@ mod tests {
     use crate::model::index::{ModelCapabilities, ModelEntry, ModelIndex};
 
     fn empty_index() -> ModelIndex {
-        ModelIndex {
-            schema_version: 1,
-            models: vec![],
-        }
+        ModelIndex::default()
     }
 
     fn index_with(model_id: &str, vision: bool) -> ModelIndex {
@@ -865,6 +891,7 @@ mod tests {
                 },
                 added_at: "2026-01-01".to_string(),
             }],
+            ..Default::default()
         }
     }
 

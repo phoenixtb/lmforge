@@ -69,6 +69,16 @@ pub fn get_free_vram(profile: &HardwareProfile) -> f32 {
     free_vram
 }
 
+// NOTE on Windows/WDDM: no static VRAM reserve is applied here. WDDM pages
+// GPU allocations into shared system RAM based on its own heuristics — the
+// 2026-07-06 spill incident happened while nvidia-smi still reported ample
+// free VRAM, so a fixed reserve wouldn't have prevented it, while it *would*
+// block legitimate small-model co-loads on tight cards. The real mitigations
+// are the full-footprint admission gate (process_pool), the decode-speed
+// spill sentinel (engine::throughput), and the user-side driver setting
+// 'CUDA - Sysmem Fallback Policy = Prefer No Sysmem Fallback' surfaced by
+// `lmforge init` / `lmforge doctor` and docs/dev/INSTALL_WINDOWS.md.
+
 /// Estimate the VRAM required for a model (in GB)
 pub fn estimate_model_vram(size_bytes: u64) -> f32 {
     let size_gb = size_bytes as f32 / (1024.0 * 1024.0 * 1024.0);

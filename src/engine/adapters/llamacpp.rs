@@ -347,6 +347,10 @@ impl EngineAdapter for LlamacppAdapter {
         // `Option<ChildStderr>` and is `Some` here because we set
         // `Stdio::piped()` above.
         let observer = crate::engine::spec_observer::SpecObserver::new();
+        // Decode-speed sentinel: flags the VRAM-spill signature (slow start,
+        // big mid-lifetime speed-up). Only meaningful on GPU variants.
+        let gpu_variant = !matches!(active_variant, crate::engine::variant::LlamaVariant::Cpu);
+        let throughput = crate::engine::throughput::ThroughputObserver::new(model_id, gpu_variant);
         if let Some(stderr) = child.stderr.take() {
             let observer_clone = observer.clone();
             let model_id_owned = model_id.to_string();
@@ -354,6 +358,7 @@ impl EngineAdapter for LlamacppAdapter {
                 stderr,
                 stderr_file,
                 observer_clone,
+                throughput,
                 model_id_owned,
             ));
         } else {
@@ -417,6 +422,7 @@ async fn stderr_tee_task(
     stderr: tokio::process::ChildStderr,
     sink_file: std::fs::File,
     observer: crate::engine::spec_observer::SpecObserver,
+    throughput: crate::engine::throughput::ThroughputObserver,
     model_id: String,
 ) {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -428,6 +434,7 @@ async fn stderr_tee_task(
         match reader.next_line().await {
             Ok(Some(line)) => {
                 observer.record_line(&line);
+                throughput.record_line(&line);
                 if let Err(e) = sink.write_all(line.as_bytes()).await {
                     warn!(model_id, error = %e, "Failed to write stderr line to log file — tee task aborting");
                     break;

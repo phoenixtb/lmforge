@@ -150,21 +150,46 @@ impl EngineAdapter for EngineAdapterInstance {
         free_vram_gb: f32,
     ) -> LoadPlan {
         match self {
-            Self::Omlx(ad) => {
-                ad.plan_load(model_id, model_dir, data_dir, role, size_bytes, free_vram_gb)
-            }
-            Self::Sglang(ad) => {
-                ad.plan_load(model_id, model_dir, data_dir, role, size_bytes, free_vram_gb)
-            }
-            Self::Llamacpp(ad) => {
-                ad.plan_load(model_id, model_dir, data_dir, role, size_bytes, free_vram_gb)
-            }
-            Self::Vllm(ad) => {
-                ad.plan_load(model_id, model_dir, data_dir, role, size_bytes, free_vram_gb)
-            }
-            Self::TabbyApi(ad) => {
-                ad.plan_load(model_id, model_dir, data_dir, role, size_bytes, free_vram_gb)
-            }
+            Self::Omlx(ad) => ad.plan_load(
+                model_id,
+                model_dir,
+                data_dir,
+                role,
+                size_bytes,
+                free_vram_gb,
+            ),
+            Self::Sglang(ad) => ad.plan_load(
+                model_id,
+                model_dir,
+                data_dir,
+                role,
+                size_bytes,
+                free_vram_gb,
+            ),
+            Self::Llamacpp(ad) => ad.plan_load(
+                model_id,
+                model_dir,
+                data_dir,
+                role,
+                size_bytes,
+                free_vram_gb,
+            ),
+            Self::Vllm(ad) => ad.plan_load(
+                model_id,
+                model_dir,
+                data_dir,
+                role,
+                size_bytes,
+                free_vram_gb,
+            ),
+            Self::TabbyApi(ad) => ad.plan_load(
+                model_id,
+                model_dir,
+                data_dir,
+                role,
+                size_bytes,
+                free_vram_gb,
+            ),
         }
     }
 

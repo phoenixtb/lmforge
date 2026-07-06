@@ -1,15 +1,13 @@
 use anyhow::{Result, bail};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::engine::keepalive;
-use crate::engine::manager::{
-    EngineMetrics, EngineState, EngineStatus, ModelHandle, ModelSlot,
-};
+use crate::engine::manager::{EngineMetrics, EngineState, EngineStatus, ModelHandle, ModelSlot};
 use crate::engine::registry::EngineConfig;
 use crate::engine::residency::{Residency, ResidencyKind};
 
@@ -24,6 +22,7 @@ const BYTES_PER_GIB: f32 = 1_073_741_824.0;
 struct OmlxModelsStatus {
     models: Vec<OmlxModelEntry>,
     #[serde(default)]
+    #[allow(dead_code)] // present in oMLX payload; not yet surfaced in UI
     current_model_memory: u64,
 }
 
@@ -139,7 +138,10 @@ impl SharedServerResidency {
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     fn health_url(&self) -> String {
-        format!("http://127.0.0.1:{}{}", self.port, self.config.health_endpoint)
+        format!(
+            "http://127.0.0.1:{}{}",
+            self.port, self.config.health_endpoint
+        )
     }
 
     fn models_url(&self) -> String {
@@ -152,7 +154,7 @@ impl SharedServerResidency {
 
     async fn is_healthy(&self) -> bool {
         self.http
-            .get(&self.health_url())
+            .get(self.health_url())
             .send()
             .await
             .map(|r| r.status().is_success())
@@ -214,8 +216,7 @@ impl SharedServerResidency {
             if self.is_healthy().await {
                 info!(port = self.port, "oMLX shared server is healthy");
                 // Rebuild reverse map: new server scan may have surfaced new model subdirs.
-                self.reverse_map =
-                    Self::build_reverse_map_from(&self.data_dir, &self.models_dir);
+                self.reverse_map = Self::build_reverse_map_from(&self.data_dir, &self.models_dir);
                 return Ok(());
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -254,7 +255,7 @@ impl SharedServerResidency {
 
     /// Fetch the model list from oMLX's `/v1/models` endpoint (discovery list).
     async fn fetch_omlx_models(&self) -> Vec<String> {
-        let Ok(resp) = self.http.get(&self.models_url()).send().await else {
+        let Ok(resp) = self.http.get(self.models_url()).send().await else {
             return vec![];
         };
         let Ok(body) = resp.json::<serde_json::Value>().await else {
@@ -281,12 +282,8 @@ impl SharedServerResidency {
     /// The LMForge model index stores both the LMForge ID and the full `path`.
     /// This is a pure function; callers cache the result in `self.reverse_map`
     /// and only rebuild it after a server restart (new models may be discovered).
-    fn build_reverse_map_from(data_dir: &PathBuf, models_dir: &PathBuf) -> HashMap<String, String> {
-        let index = crate::model::index::ModelIndex::load(data_dir, models_dir)
-            .unwrap_or(crate::model::index::ModelIndex {
-                schema_version: 1,
-                models: vec![],
-            });
+    fn build_reverse_map_from(data_dir: &Path, models_dir: &Path) -> HashMap<String, String> {
+        let index = crate::model::index::ModelIndex::load(data_dir, models_dir).unwrap_or_default();
         index
             .models
             .into_iter()
@@ -306,7 +303,7 @@ impl SharedServerResidency {
     /// - `vram_est_gb` uses `actual_size` when loaded, `estimated_size` otherwise.
     /// - LMForge model IDs are resolved via the model index path → id map.
     async fn sync_from_omlx_status(&self) {
-        let Ok(resp) = self.http.get(&self.models_status_url()).send().await else {
+        let Ok(resp) = self.http.get(self.models_status_url()).send().await else {
             return;
         };
         let Ok(status) = resp.json::<OmlxModelsStatus>().await else {
@@ -332,10 +329,7 @@ impl SharedServerResidency {
                 .cloned()
                 .unwrap_or_else(|| entry.id.clone());
 
-            let vram_gb = entry
-                .actual_size
-                .unwrap_or(entry.estimated_size) as f32
-                / BYTES_PER_GIB;
+            let vram_gb = entry.actual_size.unwrap_or(entry.estimated_size) as f32 / BYTES_PER_GIB;
 
             let idle_secs = entry
                 .last_access
@@ -365,7 +359,11 @@ impl SharedServerResidency {
         // ── Atomically replace running_models with ground truth ───────────────
         state.running_models = desired;
         crate::server::metrics::set_active_models(
-            state.running_models.values().filter(|s| s.status == EngineStatus::Ready).count() as u64,
+            state
+                .running_models
+                .values()
+                .filter(|s| s.status == EngineStatus::Ready)
+                .count() as u64,
         );
     }
 }
@@ -395,7 +393,10 @@ impl SharedServerResidency {
         };
 
         for (lmf_id, omlx_id) in idle_ids {
-            let url = format!("http://127.0.0.1:{}/v1/models/{}/unload", self.port, omlx_id);
+            let url = format!(
+                "http://127.0.0.1:{}/v1/models/{}/unload",
+                self.port, omlx_id
+            );
             match self.http.post(&url).send().await {
                 Ok(r) if r.status().is_success() => {
                     tracing::info!("oMLX idle evict: unloaded {lmf_id} (omlx: {omlx_id})");
@@ -436,10 +437,7 @@ impl Residency for SharedServerResidency {
         for_request: bool,
     ) -> Result<ModelHandle> {
         let index = crate::model::index::ModelIndex::load(&self.data_dir, &self.models_dir)
-            .unwrap_or(crate::model::index::ModelIndex {
-                schema_version: 1,
-                models: vec![],
-            });
+            .unwrap_or_default();
 
         // Verify the model has been pulled (subdir on disk).
         let model_dir = index
@@ -471,8 +469,7 @@ impl Residency for SharedServerResidency {
         if !known.contains(&omlx_model_id) {
             info!(
                 model_id,
-                omlx_model_id,
-                "Model not yet in oMLX discovery list — restarting server to rescan"
+                omlx_model_id, "Model not yet in oMLX discovery list — restarting server to rescan"
             );
             self.kill_process().await;
             self.spawn_server().await?;
@@ -482,18 +479,21 @@ impl Residency for SharedServerResidency {
         // The next heartbeat sync will replace it with real data from oMLX.
         {
             let mut state = self.state.write().await;
-            state.running_models.entry(model_id.to_string()).or_insert_with(|| {
-                let size_bytes = index.get(model_id).map(|m| m.size_bytes).unwrap_or(0);
-                ModelSlot {
-                    model_id: model_id.to_string(),
-                    port: self.port,
-                    status: EngineStatus::Starting,
-                    idle_secs: 0,
-                    vram_est_gb: size_bytes as f32 / BYTES_PER_GIB,
-                    spec_mode: crate::engine::speculative::SpecMode::Off,
-                    spec_stats: None,
-                }
-            });
+            state
+                .running_models
+                .entry(model_id.to_string())
+                .or_insert_with(|| {
+                    let size_bytes = index.get(model_id).map(|m| m.size_bytes).unwrap_or(0);
+                    ModelSlot {
+                        model_id: model_id.to_string(),
+                        port: self.port,
+                        status: EngineStatus::Starting,
+                        idle_secs: 0,
+                        vram_est_gb: size_bytes as f32 / BYTES_PER_GIB,
+                        spec_mode: crate::engine::speculative::SpecMode::Off,
+                        spec_stats: None,
+                    }
+                });
             state.clear_error(model_id);
         }
         self.notify().await;
@@ -533,19 +533,19 @@ impl Residency for SharedServerResidency {
     /// Periodic heartbeat: crash detection + real state sync from oMLX.
     async fn heartbeat_tick(&mut self) {
         // ── Crash detection ───────────────────────────────────────────────────
-        if let Some(p) = self.process.as_mut() {
-            if let Ok(Some(status)) = p.try_wait() {
-                warn!(
-                    ?status,
-                    "oMLX shared server exited unexpectedly — clearing state, \
-                     will restart on next request"
-                );
-                self.process = None;
-                self.state.write().await.running_models.clear();
-                crate::server::metrics::set_active_models(0);
-                self.notify().await;
-                return;
-            }
+        if let Some(p) = self.process.as_mut()
+            && let Ok(Some(status)) = p.try_wait()
+        {
+            warn!(
+                ?status,
+                "oMLX shared server exited unexpectedly — clearing state, \
+                 will restart on next request"
+            );
+            self.process = None;
+            self.state.write().await.running_models.clear();
+            crate::server::metrics::set_active_models(0);
+            self.notify().await;
+            return;
         }
 
         // ── Real state sync from oMLX /v1/models/status ───────────────────────

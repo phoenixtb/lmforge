@@ -109,6 +109,16 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
         let driver = profile.cuda_driver_version.as_deref().unwrap_or("unknown");
         println!("  CUDA:       runtime {} | driver {}", runtime, driver);
     }
+    if profile.os == crate::hardware::probe::Os::Windows
+        && profile.gpu_vendor == crate::hardware::probe::GpuVendor::Nvidia
+    {
+        // WDDM's default sysmem-fallback silently pages VRAM to system RAM
+        // under pressure: 4-6x slower decode, and corrupted output observed
+        // on Blackwell + 610.x (2026-07-06). Only settable via Control Panel.
+        println!("  Hint:       set 'CUDA - Sysmem Fallback Policy' to 'Prefer No Sysmem");
+        println!("              Fallback' in NVIDIA Control Panel → Manage 3D Settings.");
+        println!("              (Avoids slow/unstable VRAM spills under memory pressure.)");
+    }
     println!(
         "  VRAM:       {:.1} GB{}",
         profile.vram_gb,

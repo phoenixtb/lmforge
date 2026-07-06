@@ -92,6 +92,8 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 
 > **Windows Firewall**: when LMForge first binds to a non-loopback address (e.g. `0.0.0.0` for LAN access), Windows will pop a Defender Firewall dialog asking to allow `lmforge.exe` on Private/Public networks. Allow it on **Private** networks only unless you intentionally want WAN exposure.
 
+> **Windows + NVIDIA — recommended one-time setting**: in NVIDIA Control Panel → Manage 3D Settings, set **CUDA - Sysmem Fallback Policy** to **Prefer No Sysmem Fallback**. The default policy silently pages VRAM into system RAM under memory pressure, which slows inference 4–6x and can corrupt engine output on some driver/GPU combinations. Details in [docs/dev/INSTALL_WINDOWS.md](docs/dev/INSTALL_WINDOWS.md#-known-issue-wddm-sysmem-fallback-nvidia--set-the-driver-policy).
+
 > **Ubuntu 26.04 — building from source**: `libwebkit2gtk-4.1-dev` was removed in 26.04. Use `libwebkitgtk-6.0-dev` instead when installing Tauri build dependencies manually. The pre-built AppImage and core binary (released binaries built on Ubuntu 22.04) run on 26.04 without modification.
 
 ---

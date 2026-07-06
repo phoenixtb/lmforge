@@ -8,14 +8,14 @@
   // Svelte 5 prop — pre-filled model ID (e.g. from a future entry point)
   let { prefill = '', ondone }: { prefill?: string; ondone?: () => void } = $props();
 
-  let modelIdInput = $state(prefill);
+  let modelIdInput = $state('');
   let pulling       = $state(false);
   let progress      = $state<PullProgress | null>(null);
   let cancelFn      = $state<(() => void) | null>(null);
   let error         = $state<string | null>(null);
   let succeeded     = $state(false);
 
-  // Update input if prefill prop changes (e.g. parent navigates here with a value)
+  // Sync prefill prop into the input (including initial value on mount).
   $effect(() => {
     if (prefill && !pulling) modelIdInput = prefill;
   });

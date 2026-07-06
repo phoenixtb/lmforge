@@ -33,10 +33,8 @@ pub struct ThinkingContext {
     /// field (oMLX).
     pub inline_think: bool,
     /// True when the model is a native-reasoning model (e.g. `phi4:reasoning`,
-    /// `qwen3:4b:thinking`). These emit reasoning in a single call and stay off the
-    /// orchestrator; on oMLX they need the Fix #1 truncation-dedup, and they get a
-    /// `max_tokens` floor ([`NATIVE_REASONING_MIN_TOKENS`]) so reasoning cannot
-    /// starve the answer.
+    /// DeepSeek-R1 distills). These emit reasoning in a single call and stay off the
+    /// orchestrator; toggleable `:thinking` shortcuts (e.g. `qwen3:4b:thinking`) are NOT native.
     pub is_native_reasoning: bool,
 }
 
@@ -187,6 +185,62 @@ fn apply_native_reasoning_budget_floor(
     NATIVE_REASONING_MIN_TOKENS
 }
 
+/// Split inline `<think>…</think>` blocks out of `message.content` in an
+/// assembled (non-streaming) chat-completions response, moving the reasoning
+/// into `message.reasoning_content`. Used for native-reasoning models on
+/// inline-think engines (llama.cpp / SGLang) whose templates hardwire
+/// reasoning: llama-server doesn't recognise every such template, so raw tags
+/// would otherwise leak into `content`. Returns `None` when nothing changed
+/// (no tags present, or unparseable body) so callers can forward the original
+/// text untouched.
+pub fn split_think_in_response(text: &str) -> Option<String> {
+    if !text.contains("<think>") {
+        return None;
+    }
+    let mut val: serde_json::Value = serde_json::from_str(text).ok()?;
+    let choices = val.get_mut("choices")?.as_array_mut()?;
+    let mut changed = false;
+    for choice in choices.iter_mut() {
+        let Some(msg) = choice.get_mut("message").and_then(|m| m.as_object_mut()) else {
+            continue;
+        };
+        let Some(content) = msg.get("content").and_then(|c| c.as_str()) else {
+            continue;
+        };
+        if !content.contains("<think>") {
+            continue;
+        }
+        let mut splitter = ThinkSplitter::default();
+        let (mut reasoning, mut answer) = splitter.push(content);
+        let (r2, a2) = splitter.flush();
+        reasoning.push_str(&r2);
+        answer.push_str(&a2);
+        if reasoning.is_empty() {
+            continue;
+        }
+        let existing = msg
+            .get("reasoning_content")
+            .and_then(|r| r.as_str())
+            .unwrap_or("");
+        let merged = if existing.is_empty() {
+            reasoning
+        } else {
+            format!("{existing}{reasoning}")
+        };
+        msg.insert(
+            "reasoning_content".to_string(),
+            serde_json::Value::String(merged),
+        );
+        msg.insert("content".to_string(), serde_json::Value::String(answer));
+        changed = true;
+    }
+    if changed {
+        serde_json::to_string(&val).ok()
+    } else {
+        None
+    }
+}
+
 /// Default reasoning-phase token cap applied when a client requests thinking
 /// (`think:true`) on an oMLX thinking model but omits `thinking_budget`.
 ///
@@ -230,7 +284,10 @@ pub fn apply_thinking_sampling_defaults(body: &mut serde_json::Value, has_think:
         return;
     };
     if !obj.contains_key("temperature") {
-        obj.insert("temperature".into(), serde_json::Value::from(THINK_DEFAULT_TEMPERATURE));
+        obj.insert(
+            "temperature".into(),
+            serde_json::Value::from(THINK_DEFAULT_TEMPERATURE),
+        );
     }
     if !obj.contains_key("top_p") {
         obj.insert("top_p".into(), serde_json::Value::from(THINK_DEFAULT_TOP_P));
@@ -246,7 +303,10 @@ pub fn apply_thinking_sampling_defaults(body: &mut serde_json::Value, has_think:
         || obj.contains_key("frequency_penalty")
         || obj.contains_key("repetition_penalty");
     if !has_any_penalty {
-        obj.insert("presence_penalty".into(), serde_json::Value::from(THINK_DEFAULT_PRESENCE_PENALTY));
+        obj.insert(
+            "presence_penalty".into(),
+            serde_json::Value::from(THINK_DEFAULT_PRESENCE_PENALTY),
+        );
     }
 }
 
@@ -286,7 +346,6 @@ pub fn extract_think_tags(content: &str) -> (Option<String>, String) {
     }
     (None, content.to_string())
 }
-
 
 /// Inject `reasoning_content` field into a non-streaming response JSON.
 /// Modifies the response in-place if think tags are found in the content.
@@ -586,7 +645,9 @@ pub fn apply_think_for_engine(
                 // enable_thinking=true → the model reasons until max_tokens with no
                 // answer ("blank reply bug", baseline linux-x86_64-cpu run 972dc63).
                 // Inject enable_thinking:false to make thinking opt-in on these engines.
-                debug!("Fix #3: no think intent on thinking model — injecting enable_thinking:false");
+                debug!(
+                    "Fix #3: no think intent on thinking model — injecting enable_thinking:false"
+                );
                 if let Some(obj) = body.as_object_mut() {
                     let kwargs = obj
                         .entry("chat_template_kwargs")
@@ -644,6 +705,34 @@ pub fn extract_stream_reasoning_deltas(body: &serde_json::Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_think_in_response_moves_tags_to_reasoning() {
+        let resp = r#"{"choices":[{"message":{"role":"assistant","content":"<think>step by step</think>The answer is 42."},"finish_reason":"stop"}]}"#;
+        let out = split_think_in_response(resp).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let msg = &v["choices"][0]["message"];
+        assert_eq!(msg["reasoning_content"], "step by step");
+        assert_eq!(msg["content"], "The answer is 42.");
+    }
+
+    #[test]
+    fn split_think_in_response_unterminated_becomes_reasoning() {
+        // finish=length mid-think: everything after <think> is reasoning,
+        // content ends up empty (mirrors the streaming splitter's flush).
+        let resp = r#"{"choices":[{"message":{"role":"assistant","content":"<think>still going and going"},"finish_reason":"length"}]}"#;
+        let out = split_think_in_response(resp).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let msg = &v["choices"][0]["message"];
+        assert_eq!(msg["reasoning_content"], "still going and going");
+        assert_eq!(msg["content"], "");
+    }
+
+    #[test]
+    fn split_think_in_response_no_tags_is_noop() {
+        let resp = r#"{"choices":[{"message":{"role":"assistant","content":"plain answer"},"finish_reason":"stop"}]}"#;
+        assert!(split_think_in_response(resp).is_none());
+    }
 
     #[test]
     fn test_extract_think_tags_with_thinking() {
@@ -1239,8 +1328,10 @@ mod tests {
             "model": "x", "messages": [], "think": true, "repetition_penalty": 1.15
         });
         apply_thinking_sampling_defaults(&mut body, true);
-        assert!(body.get("presence_penalty").is_none(),
-            "must not seed presence_penalty when client already set a repetition control");
+        assert!(
+            body.get("presence_penalty").is_none(),
+            "must not seed presence_penalty when client already set a repetition control"
+        );
         assert_eq!(body["repetition_penalty"], 1.15);
     }
 
@@ -1322,7 +1413,10 @@ mod tests {
         let mut body = serde_json::json!({"model": "x", "messages": [], "max_tokens": 8192});
         let eff = apply_native_reasoning_budget_floor(&mut body, true, 8192);
         assert_eq!(eff, 8192);
-        assert_eq!(body["max_tokens"], 8192, "client value above floor must be preserved");
+        assert_eq!(
+            body["max_tokens"], 8192,
+            "client value above floor must be preserved"
+        );
     }
 
     #[test]
@@ -1330,7 +1424,10 @@ mod tests {
         let mut body = serde_json::json!({"model": "x", "messages": [], "max_tokens": 256});
         let eff = apply_native_reasoning_budget_floor(&mut body, false, 256);
         assert_eq!(eff, 256);
-        assert_eq!(body["max_tokens"], 256, "non-native models must not be floored");
+        assert_eq!(
+            body["max_tokens"], 256,
+            "non-native models must not be floored"
+        );
     }
 
     #[test]

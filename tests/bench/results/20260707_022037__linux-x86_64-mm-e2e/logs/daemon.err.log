@@ -1,0 +1,400 @@
+[2m2026-07-06T18:50:26.526782Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m299 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:26.550519Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m300 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:26.574155Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m301 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:26.598106Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m302 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:26.622175Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m303 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:26.645830Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m304 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:26.670246Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m305 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:26.694488Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m306 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:26.718175Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m307 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:26.741737Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m308 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:26.765238Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m309 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:26.789039Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m310 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:26.812563Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m311 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:26.836653Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m312 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:26.860482Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m313 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:26.884313Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m314 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:26.908083Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m315 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:50:26.932323Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m316 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:26.956342Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m317 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:50:26.980224Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m318 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.004261Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m319 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.028098Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m320 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.051794Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m321 [3mpayload_bytes[0m[2m=[0m316
+[2m2026-07-06T18:50:27.075614Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m322 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:27.099465Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m323 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.123448Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m324 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:27.147067Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m325 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:27.171267Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m326 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:50:27.195026Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m327 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:27.218668Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m328 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:27.242358Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m329 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.267024Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m330 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.291000Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m331 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.314611Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m332 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.338308Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m333 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:27.362246Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m334 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.386083Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m335 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:27.409906Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m336 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:27.433513Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m337 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:27.457159Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m338 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:27.480828Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m339 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:27.504435Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m340 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.528270Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m341 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.552003Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m342 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.575601Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m343 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.599345Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m344 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:27.623161Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m345 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:27.647125Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m346 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.670752Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m347 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.694575Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m348 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.718325Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m349 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.742130Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m350 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:27.765680Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m351 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:27.790229Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m352 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.814261Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m353 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.838593Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m354 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.863602Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m355 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.888769Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m356 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:27.912554Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m357 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:27.936166Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m358 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:27.959777Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m359 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:27.983309Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m360 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:50:28.006904Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m361 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:28.030563Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m362 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:28.054155Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m363 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.077737Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m364 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.101438Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m365 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.124959Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m366 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.148495Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m367 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:28.172104Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m368 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:28.195569Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m369 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.219064Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m370 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.243017Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m371 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.266679Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m372 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.290249Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m373 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:28.313727Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m374 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:28.337622Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m375 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.361268Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m376 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.384916Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m377 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.408776Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m378 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.432899Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m379 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:50:28.456512Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m380 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:28.481578Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m381 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:50:28.505366Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m382 [3mpayload_bytes[0m[2m=[0m310
+[2m2026-07-06T18:50:28.529031Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m383 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:50:28.552539Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m384 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.576237Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m385 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:50:28.599962Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m386 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:28.624428Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m387 [3mpayload_bytes[0m[2m=[0m310
+[2m2026-07-06T18:50:28.649004Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m388 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:28.673579Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m389 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:28.698747Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m390 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:50:28.723014Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m391 [3mpayload_bytes[0m[2m=[0m309
+[2m2026-07-06T18:50:28.747329Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m392 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:28.771455Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m393 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.795540Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m394 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.819797Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m395 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.844177Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m396 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.868541Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m397 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:28.893181Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m398 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:28.917649Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m399 [3mpayload_bytes[0m[2m=[0m561
+[2m2026-07-06T18:50:28.917817Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m399
+[2m2026-07-06T18:50:28.919464Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T18:50:29.354830Z[0m [32m INFO[0m Thinking request routing [3mmodel[0m[2m=[0mqwen3.5:2b:4bit [3mstream[0m[2m=[0mtrue [3mcan_use_budget[0m[2m=[0mtrue [3mthinking_budget[0m[2m=[0mSome(1024) [3minline_think[0m[2m=[0mtrue [3mnative_reasoning[0m[2m=[0mfalse
+[2m2026-07-06T18:50:29.354869Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T18:50:53.615984Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m3188 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-07-06T18:50:57.949718Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m309
+[2m2026-07-06T18:50:57.949744Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m309
+[2m2026-07-06T18:50:57.973948Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:57.997060Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:58.020106Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:58.044041Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m6 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:50:58.067487Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m7 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:58.090936Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m8 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:58.114297Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m9 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:50:58.137666Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m10 [3mpayload_bytes[0m[2m=[0m310
+[2m2026-07-06T18:50:58.161006Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m11 [3mpayload_bytes[0m[2m=[0m310
+[2m2026-07-06T18:50:58.184703Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m12 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:50:58.208073Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m13 [3mpayload_bytes[0m[2m=[0m311
+[2m2026-07-06T18:50:58.231481Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m14 [3mpayload_bytes[0m[2m=[0m312
+[2m2026-07-06T18:50:58.255078Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m15 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:58.278496Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m16 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:50:58.301916Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m17 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:50:58.325342Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m18 [3mpayload_bytes[0m[2m=[0m310
+[2m2026-07-06T18:50:58.348795Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m19 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:58.372172Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m20 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:58.395520Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m21 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:58.418972Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m22 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:50:58.442468Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m23 [3mpayload_bytes[0m[2m=[0m559
+[2m2026-07-06T18:50:58.442512Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m23
+[2m2026-07-06T18:50:58.443797Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T18:51:02.866778Z[0m [32m INFO[0m Thinking request routing [3mmodel[0m[2m=[0mqwen3.5:2b:4bit [3mstream[0m[2m=[0mtrue [3mcan_use_budget[0m[2m=[0mtrue [3mthinking_budget[0m[2m=[0mSome(1024) [3minline_think[0m[2m=[0mtrue [3mnative_reasoning[0m[2m=[0mfalse
+[2m2026-07-06T18:51:02.866816Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T18:51:27.007989Z[0m [32m INFO[0m Call-1 budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m1024 [3mreasoning_len[0m[2m=[0m2675 [3mremaining_tokens[0m[2m=[0m768
+[2m2026-07-06T18:51:31.157757Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m1 [3mpayload_bytes[0m[2m=[0m309
+[2m2026-07-06T18:51:31.157792Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m2 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:31.185708Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m3 [3mpayload_bytes[0m[2m=[0m313
+[2m2026-07-06T18:51:31.219721Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m4 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:51:31.243352Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m5 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:51:31.267031Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m6 [3mpayload_bytes[0m[2m=[0m309
+[2m2026-07-06T18:51:31.290646Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m7 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:51:31.314065Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m8 [3mpayload_bytes[0m[2m=[0m310
+[2m2026-07-06T18:51:31.337802Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m9 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:31.361256Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m10 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:31.384439Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m11 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:31.408039Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m12 [3mpayload_bytes[0m[2m=[0m311
+[2m2026-07-06T18:51:31.432220Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m13 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:31.455427Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m14 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:51:31.480755Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m15 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:51:31.507799Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m16 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:31.531926Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m17 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:31.555428Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m18 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:31.579473Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m19 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:51:31.603033Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m20 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:31.626600Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m21 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:31.650187Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m22 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:51:31.673879Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m23 [3mpayload_bytes[0m[2m=[0m309
+[2m2026-07-06T18:51:31.697570Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m24 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:51:31.721229Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m25 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:51:31.744840Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m26 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:51:31.768808Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m27 [3mpayload_bytes[0m[2m=[0m310
+[2m2026-07-06T18:51:31.792913Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m28 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:31.817575Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m29 [3mpayload_bytes[0m[2m=[0m310
+[2m2026-07-06T18:51:31.841971Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m30 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:51:31.866272Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m31 [3mpayload_bytes[0m[2m=[0m309
+[2m2026-07-06T18:51:31.890353Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m32 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:51:31.914225Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m33 [3mpayload_bytes[0m[2m=[0m315
+[2m2026-07-06T18:51:31.937906Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m34 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:31.961724Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m35 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:31.985348Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m36 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:32.009649Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m37 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:32.033323Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m38 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:51:32.058753Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m39 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:32.083168Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m40 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:32.107258Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m41 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:32.130960Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m42 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:32.154483Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m43 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:51:32.178460Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m44 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:51:32.202129Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m45 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:51:32.225699Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m46 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:51:32.249468Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m47 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:32.273204Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m48 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.296895Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m49 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.323921Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m50 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.347734Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m51 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.371210Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m52 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.394932Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m53 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.418658Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m54 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.442428Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m55 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.465997Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m56 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.489702Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m57 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.513235Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m58 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.536950Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m59 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:32.560642Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m60 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:32.584283Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m61 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:32.607920Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m62 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:32.631537Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m63 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:51:32.655037Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m64 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:32.679271Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m65 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:51:32.702953Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m66 [3mpayload_bytes[0m[2m=[0m310
+[2m2026-07-06T18:51:32.726523Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m67 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:32.750290Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m68 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.774725Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m69 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:32.798841Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m70 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.821911Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m71 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.845462Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m72 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.869261Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m73 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.893618Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m74 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:32.917115Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m75 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.940697Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m76 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.964275Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m77 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:32.987658Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m78 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.011316Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m79 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:33.034723Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m80 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.058398Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m81 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.081797Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m82 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:33.105320Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m83 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:33.129278Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m84 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.153374Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m85 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.181795Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m86 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:51:33.205084Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m87 [3mpayload_bytes[0m[2m=[0m314
+[2m2026-07-06T18:51:33.228725Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m88 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:33.252415Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m89 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.276832Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m90 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:33.301559Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m91 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.325621Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m92 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.349189Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m93 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.372754Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m94 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.396305Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m95 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:33.419826Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m96 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.443606Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m97 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.467240Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m98 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.490847Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m99 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.514537Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m100 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:33.538241Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m101 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.561914Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m102 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.586823Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m103 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.610332Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m104 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.634015Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m105 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:33.657496Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m106 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.681702Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m107 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.707903Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m108 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.731895Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m109 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.755498Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m110 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:33.779713Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m111 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.803528Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m112 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.827392Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m113 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:33.851396Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m114 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:33.876928Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m115 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.901510Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m116 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:33.925094Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m117 [3mpayload_bytes[0m[2m=[0m309
+[2m2026-07-06T18:51:33.948648Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m118 [3mpayload_bytes[0m[2m=[0m314
+[2m2026-07-06T18:51:33.972232Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m119 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:33.995670Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m120 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:34.019136Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m121 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:34.042519Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m122 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:34.065988Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m123 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:34.089904Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m124 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:34.116129Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m125 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:34.139774Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m126 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:34.163176Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m127 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:34.186839Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m128 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:51:34.210505Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m129 [3mpayload_bytes[0m[2m=[0m314
+[2m2026-07-06T18:51:34.239510Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m130 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:34.263025Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m131 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:34.286545Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m132 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:34.310180Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m133 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:34.334476Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m134 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:34.358537Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m135 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:34.382091Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m136 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:34.405677Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m137 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:34.429277Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m138 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:34.452782Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m139 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:34.477001Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m140 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:34.500627Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m141 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:51:34.524128Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m142 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:51:34.547506Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m143 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:34.570984Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m144 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:34.594456Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m145 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:34.618020Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m146 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:34.643726Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m147 [3mpayload_bytes[0m[2m=[0m309
+[2m2026-07-06T18:51:34.669981Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m148 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:51:34.693509Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m149 [3mpayload_bytes[0m[2m=[0m309
+[2m2026-07-06T18:51:34.717003Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m150 [3mpayload_bytes[0m[2m=[0m313
+[2m2026-07-06T18:51:34.741292Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m151 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:34.764704Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m152 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:51:34.788288Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m153 [3mpayload_bytes[0m[2m=[0m310
+[2m2026-07-06T18:51:34.811942Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m154 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:34.835352Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m155 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:34.858924Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m156 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:34.882592Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m157 [3mpayload_bytes[0m[2m=[0m309
+[2m2026-07-06T18:51:34.906322Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m158 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:34.930000Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m159 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:51:34.953506Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m160 [3mpayload_bytes[0m[2m=[0m308
+[2m2026-07-06T18:51:34.976973Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m161 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:35.000379Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m162 [3mpayload_bytes[0m[2m=[0m307
+[2m2026-07-06T18:51:35.023999Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m163 [3mpayload_bytes[0m[2m=[0m305
+[2m2026-07-06T18:51:35.047608Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m164 [3mpayload_bytes[0m[2m=[0m309
+[2m2026-07-06T18:51:35.071819Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m165 [3mpayload_bytes[0m[2m=[0m306
+[2m2026-07-06T18:51:35.095731Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m166 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:35.119346Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m167 [3mpayload_bytes[0m[2m=[0m304
+[2m2026-07-06T18:51:35.142969Z[0m [32m INFO[0m call2 SSE event yielded [3mcall2_event_n[0m[2m=[0m168 [3mpayload_bytes[0m[2m=[0m559
+[2m2026-07-06T18:51:35.143104Z[0m [32m INFO[0m Call-2 stream complete (received [DONE]) [3mcall2_total_events[0m[2m=[0m168
+[2m2026-07-06T18:53:30.952782Z[0m [32m INFO[0m TTL expired for qwen3.5:4b:mtp:4bit, unloading...
+[2m2026-07-06T18:53:30.952823Z[0m [32m INFO[0m Sending SIGTERM to release llama-server mmap memory footprint [3mpid[0m[2m=[0m14882 [3mmodel[0m[2m=[0mqwen3.5:4b:mtp:4bit
+[2m2026-07-06T20:29:41.939149Z[0m [32m INFO[0m Starting LMForge... [3mport[0m[2m=[0m11430 [3mbind[0m[2m=[0m127.0.0.1
+[2m2026-07-06T20:29:41.940192Z[0m [33m WARN[0m Sent SIGTERM to stale LMForge daemon, waiting for clean exit [3mpid[0m[2m=[0m12905
+[2m2026-07-06T20:29:42.441536Z[0m [33m WARN[0m Sent SIGKILL to stale LMForge daemon [3mpid[0m[2m=[0m12905
+[2m2026-07-06T20:29:42.449448Z[0m [33m WARN[0m Sent SIGKILL to stale engine process [3mpid[0m[2m=[0m15036 [3mpath[0m[2m=[0m/home/phoenixt/.lmforge/engines/llamacpp_11432.pid
+[2m2026-07-06T20:29:42.950434Z[0m [32m INFO[0m Engine selected [3mengine[0m[2m=[0mllamacpp [3mversion[0m[2m=[0mb9861 [3mpriority[0m[2m=[0m100
+[2m2026-07-06T20:29:42.950501Z[0m [32m INFO[0m PID file written [3mpid[0m[2m=[0m2216 [3mpath[0m[2m=[0m/home/phoenixt/.lmforge/lmforge.pid
+[2m2026-07-06T20:29:42.950594Z[0m [32m INFO[0m Prometheus recorder installed at /metrics
+[2m2026-07-06T20:29:42.950602Z[0m [32m INFO[0m Building API router [3mmax_body_bytes[0m[2m=[0m33554432
+[2m2026-07-06T20:29:42.951443Z[0m [32m INFO[0m Serving dashboard UI at /ui [3mui_dir[0m[2m=[0m/home/phoenixt/projects/lmforge/repo/lmforge/ui/build
+[2m2026-07-06T20:29:42.951678Z[0m [32m INFO[0m API server listening [3maddr[0m[2m=[0m127.0.0.1:11430
+[2m2026-07-06T20:49:04.910106Z[0m [32m INFO[0m Starting LMForge... [3mport[0m[2m=[0m11430 [3mbind[0m[2m=[0m127.0.0.1
+[2m2026-07-06T20:49:05.413262Z[0m [32m INFO[0m Engine selected [3mengine[0m[2m=[0mllamacpp [3mversion[0m[2m=[0mb9861 [3mpriority[0m[2m=[0m100
+[2m2026-07-06T20:49:05.413333Z[0m [32m INFO[0m PID file written [3mpid[0m[2m=[0m10173 [3mpath[0m[2m=[0m/home/phoenixt/.lmforge/lmforge.pid
+[2m2026-07-06T20:49:05.413449Z[0m [32m INFO[0m Prometheus recorder installed at /metrics
+[2m2026-07-06T20:49:05.413459Z[0m [32m INFO[0m Building API router [3mmax_body_bytes[0m[2m=[0m33554432
+[2m2026-07-06T20:49:05.413465Z[0m [32m INFO[0m Serving dashboard UI at /ui [3mui_dir[0m[2m=[0m/home/phoenixt/projects/lmforge/repo/lmforge/ui/build
+[2m2026-07-06T20:49:05.413659Z[0m [32m INFO[0m API server listening [3maddr[0m[2m=[0m127.0.0.1:11430
+[2m2026-07-06T20:50:39.139896Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3-embed:0.6b:8bit"
+[2m2026-07-06T20:50:39.140671Z[0m [32m INFO[0m Cold load request for model [3mmodel_id[0m[2m=[0m"qwen3-embed:0.6b:8bit"
+[2m2026-07-06T20:50:39.360238Z[0m [32m INFO[0m Spawning llama-server [3mmodel_id[0m[2m=[0mqwen3-embed:0.6b:8bit [3mport[0m[2m=[0m11431 [3mgguf[0m[2m=[0m/home/phoenixt/.lmforge/models/qwen3-embedding-0.6b-gguf/Qwen3-Embedding-0.6B-Q8_0.gguf [3mrole[0m[2m=[0mEmbed
+[2m2026-07-06T20:50:39.367774Z[0m [32m INFO[0m llama.cpp runtime plan [3mmodel_id[0m[2m=[0mqwen3-embed:0.6b:8bit [3mngl[0m[2m=[0m0 [3mctx_size[0m[2m=[0m4096 [3mfree_vram_gb[0m[2m=[0m5.382177352905273 [3mfootprint_total_gb[0m[2m=[0m1.4327553510665894 [3mspec_mode[0m[2m=[0mOff
+[2m2026-07-06T20:50:39.367791Z[0m [32m INFO[0m CPU-only: bounding context + parallel slots to contain KV cache [3mctx_size[0m[2m=[0m4096 [3mparallel[0m[2m=[0m1
+[2m2026-07-06T20:50:39.367794Z[0m [32m INFO[0m Spawning llama-server [3mexecutable[0m[2m=[0m/home/phoenixt/.lmforge/engines/llama-server [3mactive_variant[0m[2m=[0mcpu [3margs[0m[2m=[0m["--port", "11431", "--model", "/home/phoenixt/.lmforge/models/qwen3-embedding-0.6b-gguf/Qwen3-Embedding-0.6B-Q8_0.gguf", "-ngl", "0", "--embeddings", "--ctx-size", "4096", "--parallel", "1"]
+[2m2026-07-06T20:50:42.923434Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T20:50:42.923478Z[0m [32m INFO[0m Cold load request for model [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T20:50:43.121985Z[0m [32m INFO[0m Spawning llama-server [3mmodel_id[0m[2m=[0mqwen3.5:2b:4bit [3mport[0m[2m=[0m11432 [3mgguf[0m[2m=[0m/home/phoenixt/.lmforge/models/qwen3.5-2b-gguf/Qwen3.5-2B-UD-Q4_K_XL.gguf [3mrole[0m[2m=[0mChat
+[2m2026-07-06T20:50:43.129316Z[0m [32m INFO[0m llama.cpp runtime plan [3mmodel_id[0m[2m=[0mqwen3.5:2b:4bit [3mngl[0m[2m=[0m0 [3mctx_size[0m[2m=[0m4096 [3mfree_vram_gb[0m[2m=[0m4.90144157409668 [3mfootprint_total_gb[0m[2m=[0m1.8352419137954712 [3mspec_mode[0m[2m=[0mOff
+[2m2026-07-06T20:50:43.129329Z[0m [32m INFO[0m llama.cpp host-memory prefix cache enabled [3mcache_ram_mib[0m[2m=[0m1024 [3mtotal_ram_gb[0m[2m=[0m11.601188659667969
+[2m2026-07-06T20:50:43.129333Z[0m [32m INFO[0m CPU-only: bounding context + parallel slots to contain KV cache [3mctx_size[0m[2m=[0m4096 [3mparallel[0m[2m=[0m1
+[2m2026-07-06T20:50:43.129336Z[0m [32m INFO[0m Spawning llama-server [3mexecutable[0m[2m=[0m/home/phoenixt/.lmforge/engines/llama-server [3mactive_variant[0m[2m=[0mcpu [3margs[0m[2m=[0m["--port", "11432", "--model", "/home/phoenixt/.lmforge/models/qwen3.5-2b-gguf/Qwen3.5-2B-UD-Q4_K_XL.gguf", "-ngl", "0", "--cache-ram", "1024", "--ctx-size", "4096", "--parallel", "1"]
+[2m2026-07-06T20:50:48.453553Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3-embed:0.6b:8bit"
+[2m2026-07-06T20:50:48.771023Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3-embed:0.6b:8bit"
+[2m2026-07-06T20:50:48.856259Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3-embed:0.6b:8bit"
+[2m2026-07-06T20:50:48.940350Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3-embed:0.6b:8bit"
+[2m2026-07-06T20:50:49.022859Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3-embed:0.6b:8bit"
+[2m2026-07-06T20:50:49.138129Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3-embed:0.6b:8bit"
+[2m2026-07-06T20:50:49.219951Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3-embed:0.6b:8bit"
+[2m2026-07-06T20:50:49.316819Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3-embed:0.6b:8bit"
+[2m2026-07-06T20:50:49.401270Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3-embed:0.6b:8bit"
+[2m2026-07-06T20:50:49.481413Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3-embed:0.6b:8bit"
+[2m2026-07-06T20:50:49.579472Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T20:50:53.007742Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T20:50:56.420382Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T20:51:00.065429Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T20:51:03.458364Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T20:51:07.292338Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T20:51:11.433088Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T20:51:14.573145Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T20:51:17.715022Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T20:51:20.854438Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T20:51:24.207166Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3-vl:2b:4bit"
+[2m2026-07-06T20:51:24.207211Z[0m [32m INFO[0m Cold load request for model [3mmodel_id[0m[2m=[0m"qwen3-vl:2b:4bit"
+[2m2026-07-06T20:51:24.422354Z[0m [32m INFO[0m Spawning llama-server [3mmodel_id[0m[2m=[0mqwen3-vl:2b:4bit [3mport[0m[2m=[0m11433 [3mgguf[0m[2m=[0m/home/phoenixt/.lmforge/models/qwen3-vl-2b-instruct-gguf/Qwen3-VL-2B-Instruct-UD-Q4_K_XL.gguf [3mrole[0m[2m=[0mChat
+[2m2026-07-06T20:51:24.422420Z[0m [32m INFO[0m llama.cpp runtime plan [3mmodel_id[0m[2m=[0mqwen3-vl:2b:4bit [3mngl[0m[2m=[0m0 [3mctx_size[0m[2m=[0m1024 [3mfree_vram_gb[0m[2m=[0m4.176324844360352 [3mfootprint_total_gb[0m[2m=[0m2.324620008468628 [3mspec_mode[0m[2m=[0mOff
+[2m2026-07-06T20:51:24.422429Z[0m [32m INFO[0m llama.cpp host-memory prefix cache enabled [3mcache_ram_mib[0m[2m=[0m1024 [3mtotal_ram_gb[0m[2m=[0m11.601188659667969
+[2m2026-07-06T20:51:24.422434Z[0m [32m INFO[0m VLM mmproj sidecar detected — enabling multimodal mode [3mmmproj[0m[2m=[0m/home/phoenixt/.lmforge/models/qwen3-vl-2b-instruct-gguf/mmproj-F16.gguf [3mctx_size[0m[2m=[0m1024
+[2m2026-07-06T20:51:24.422437Z[0m [32m INFO[0m CPU-only: bounding context + parallel slots to contain KV cache [3mctx_size[0m[2m=[0m1024 [3mparallel[0m[2m=[0m1
+[2m2026-07-06T20:51:24.422440Z[0m [32m INFO[0m Spawning llama-server [3mexecutable[0m[2m=[0m/home/phoenixt/.lmforge/engines/llama-server [3mactive_variant[0m[2m=[0mcpu [3margs[0m[2m=[0m["--port", "11433", "--model", "/home/phoenixt/.lmforge/models/qwen3-vl-2b-instruct-gguf/Qwen3-VL-2B-Instruct-UD-Q4_K_XL.gguf", "-ngl", "0", "--cache-ram", "1024", "--mmproj", "/home/phoenixt/.lmforge/models/qwen3-vl-2b-instruct-gguf/mmproj-F16.gguf", "--ctx-size", "1024", "--parallel", "1"]
+[2m2026-07-06T20:51:30.670324Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3-vl:2b:4bit"
+[2m2026-07-06T20:51:35.085080Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3-vl:2b:4bit"
+[2m2026-07-06T20:51:37.473944Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3-reranker:0.6b:8bit"
+[2m2026-07-06T20:51:37.473983Z[0m [32m INFO[0m Cold load request for model [3mmodel_id[0m[2m=[0m"qwen3-reranker:0.6b:8bit"
+[2m2026-07-06T20:51:37.685649Z[0m [32m INFO[0m Spawning llama-server [3mmodel_id[0m[2m=[0mqwen3-reranker:0.6b:8bit [3mport[0m[2m=[0m11434 [3mgguf[0m[2m=[0m/home/phoenixt/.lmforge/models/qwen3-reranker-0.6b-gguf/Qwen3-Reranker-0.6B.Q8_0.gguf [3mrole[0m[2m=[0mRerank
+[2m2026-07-06T20:51:37.686384Z[0m [32m INFO[0m llama.cpp runtime plan [3mmodel_id[0m[2m=[0mqwen3-reranker:0.6b:8bit [3mngl[0m[2m=[0m0 [3mctx_size[0m[2m=[0m4096 [3mfree_vram_gb[0m[2m=[0m2.570822238922119 [3mfootprint_total_gb[0m[2m=[0m1.432755470275879 [3mspec_mode[0m[2m=[0mOff
+[2m2026-07-06T20:51:37.686406Z[0m [32m INFO[0m CPU-only: bounding context + parallel slots to contain KV cache [3mctx_size[0m[2m=[0m4096 [3mparallel[0m[2m=[0m1
+[2m2026-07-06T20:51:37.686410Z[0m [32m INFO[0m Spawning llama-server [3mexecutable[0m[2m=[0m/home/phoenixt/.lmforge/engines/llama-server [3mactive_variant[0m[2m=[0mcpu [3margs[0m[2m=[0m["--port", "11434", "--model", "/home/phoenixt/.lmforge/models/qwen3-reranker-0.6b-gguf/Qwen3-Reranker-0.6B.Q8_0.gguf", "-ngl", "0", "--reranking", "--ctx-size", "4096", "--parallel", "1"]
+[2m2026-07-06T20:51:40.110000Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:4b:mtp:4bit"
+[2m2026-07-06T20:51:40.110043Z[0m [32m INFO[0m Cold load request for model [3mmodel_id[0m[2m=[0m"qwen3.5:4b:mtp:4bit"
+[2m2026-07-06T20:51:40.239838Z[0m [32m INFO[0m Memory budget low (free: 1.86GB, need: 9.27GB). Evicting idle LRU model: qwen3-embed:0.6b:8bit
+[2m2026-07-06T20:51:40.239867Z[0m [32m INFO[0m Sending SIGTERM to release llama-server mmap memory footprint [3mpid[0m[2m=[0m11407 [3mmodel[0m[2m=[0mqwen3-embed:0.6b:8bit
+[2m2026-07-06T20:51:40.283049Z[0m [32m INFO[0m Memory budget low (free: 2.57GB, need: 9.27GB). Evicting idle LRU model: qwen3.5:2b:4bit
+[2m2026-07-06T20:51:40.283467Z[0m [32m INFO[0m Sending SIGTERM to release llama-server mmap memory footprint [3mpid[0m[2m=[0m11477 [3mmodel[0m[2m=[0mqwen3.5:2b:4bit
+[2m2026-07-06T20:51:40.349518Z[0m [32m INFO[0m Memory budget low (free: 4.07GB, need: 9.27GB). Evicting idle LRU model: qwen3-vl:2b:4bit
+[2m2026-07-06T20:51:40.349539Z[0m [32m INFO[0m Sending SIGTERM to release llama-server mmap memory footprint [3mpid[0m[2m=[0m11804 [3mmodel[0m[2m=[0mqwen3-vl:2b:4bit
+[2m2026-07-06T20:51:40.413074Z[0m [32m INFO[0m Memory budget low (free: 6.21GB, need: 9.27GB). Evicting idle LRU model: qwen3-reranker:0.6b:8bit
+[2m2026-07-06T20:51:40.413097Z[0m [32m INFO[0m Sending SIGTERM to release llama-server mmap memory footprint [3mpid[0m[2m=[0m11902 [3mmodel[0m[2m=[0mqwen3-reranker:0.6b:8bit
+[2m2026-07-06T20:51:40.481950Z[0m [33m WARN[0m Insufficient VRAM headroom for speculative decoding — loading with spec-dec disabled [3mmodel_id[0m[2m=[0m"qwen3.5:4b:mtp:4bit" [3mfree_gb[0m[2m=[0m6.771699905395508 [3mneeded_gb[0m[2m=[0m9.271443367004395 [3mbase_gb[0m[2m=[0m3.7008979320526123 [3mspec_mode[0m[2m=[0mMtp
+[2m2026-07-06T20:51:40.519170Z[0m [32m INFO[0m Spawning llama-server [3mmodel_id[0m[2m=[0mqwen3.5:4b:mtp:4bit [3mport[0m[2m=[0m11431 [3mgguf[0m[2m=[0m/home/phoenixt/.lmforge/models/qwen3.5-4b-mtp-gguf/Qwen3.5-4B-UD-Q4_K_XL.gguf [3mrole[0m[2m=[0mChat
+[2m2026-07-06T20:51:40.519742Z[0m [32m INFO[0m llama.cpp runtime plan [3mmodel_id[0m[2m=[0mqwen3.5:4b:mtp:4bit [3mngl[0m[2m=[0m0 [3mctx_size[0m[2m=[0m4096 [3mfree_vram_gb[0m[2m=[0m6.771699905395508 [3mfootprint_total_gb[0m[2m=[0m3.7008979320526123 [3mspec_mode[0m[2m=[0mOff
+[2m2026-07-06T20:51:40.519760Z[0m [32m INFO[0m llama.cpp host-memory prefix cache enabled [3mcache_ram_mib[0m[2m=[0m1024 [3mtotal_ram_gb[0m[2m=[0m11.601188659667969
+[2m2026-07-06T20:51:40.519764Z[0m [32m INFO[0m CPU-only: bounding context + parallel slots to contain KV cache [3mctx_size[0m[2m=[0m4096 [3mparallel[0m[2m=[0m1
+[2m2026-07-06T20:51:40.519766Z[0m [32m INFO[0m Spawning llama-server [3mexecutable[0m[2m=[0m/home/phoenixt/.lmforge/engines/llama-server [3mactive_variant[0m[2m=[0mcpu [3margs[0m[2m=[0m["--port", "11431", "--model", "/home/phoenixt/.lmforge/models/qwen3.5-4b-mtp-gguf/Qwen3.5-4B-UD-Q4_K_XL.gguf", "-ngl", "0", "--cache-ram", "1024", "--ctx-size", "4096", "--parallel", "1"]
+[2m2026-07-06T20:51:55.142473Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T20:51:55.144664Z[0m [32m INFO[0m Cold load request for model [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T20:51:55.352477Z[0m [32m INFO[0m Spawning llama-server [3mmodel_id[0m[2m=[0mqwen3.5:2b:4bit [3mport[0m[2m=[0m11432 [3mgguf[0m[2m=[0m/home/phoenixt/.lmforge/models/qwen3.5-2b-gguf/Qwen3.5-2B-UD-Q4_K_XL.gguf [3mrole[0m[2m=[0mChat
+[2m2026-07-06T20:51:55.352520Z[0m [32m INFO[0m llama.cpp runtime plan [3mmodel_id[0m[2m=[0mqwen3.5:2b:4bit [3mngl[0m[2m=[0m0 [3mctx_size[0m[2m=[0m4096 [3mfree_vram_gb[0m[2m=[0m3.6183857917785645 [3mfootprint_total_gb[0m[2m=[0m1.8352419137954712 [3mspec_mode[0m[2m=[0mOff
+[2m2026-07-06T20:51:55.352527Z[0m [32m INFO[0m llama.cpp host-memory prefix cache enabled [3mcache_ram_mib[0m[2m=[0m1024 [3mtotal_ram_gb[0m[2m=[0m11.601188659667969
+[2m2026-07-06T20:51:55.352531Z[0m [32m INFO[0m CPU-only: bounding context + parallel slots to contain KV cache [3mctx_size[0m[2m=[0m4096 [3mparallel[0m[2m=[0m1
+[2m2026-07-06T20:51:55.352534Z[0m [32m INFO[0m Spawning llama-server [3mexecutable[0m[2m=[0m/home/phoenixt/.lmforge/engines/llama-server [3mactive_variant[0m[2m=[0mcpu [3margs[0m[2m=[0m["--port", "11432", "--model", "/home/phoenixt/.lmforge/models/qwen3.5-2b-gguf/Qwen3.5-2B-UD-Q4_K_XL.gguf", "-ngl", "0", "--cache-ram", "1024", "--ctx-size", "4096", "--parallel", "1"]
+[2m2026-07-06T20:51:56.543463Z[0m [32m INFO[0m Thinking request routing [3mmodel[0m[2m=[0mqwen3.5:2b:4bit [3mstream[0m[2m=[0mfalse [3mcan_use_budget[0m[2m=[0mtrue [3mthinking_budget[0m[2m=[0mSome(2048) [3minline_think[0m[2m=[0mtrue [3mnative_reasoning[0m[2m=[0mfalse
+[2m2026-07-06T20:51:56.543508Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T20:52:45.255506Z[0m [32m INFO[0m Call-1 (non-stream) finished naturally; assembling from Call-1 only [3mfinish[0m[2m=[0mSome("stop") [3mreasoning_len[0m[2m=[0m4823 [3mcontent_len[0m[2m=[0m777
+[2m2026-07-06T20:52:45.300789Z[0m [32m INFO[0m Thinking request routing [3mmodel[0m[2m=[0mqwen3.5:2b:4bit [3mstream[0m[2m=[0mfalse [3mcan_use_budget[0m[2m=[0mtrue [3mthinking_budget[0m[2m=[0mSome(256) [3minline_think[0m[2m=[0mtrue [3mnative_reasoning[0m[2m=[0mfalse
+[2m2026-07-06T20:52:45.300823Z[0m [32m INFO[0m Model requested — checking active slots [3mmodel_id[0m[2m=[0m"qwen3.5:2b:4bit"
+[2m2026-07-06T20:52:51.528477Z[0m [32m INFO[0m Call-1 (non-stream) budget exhausted; executing Call-2 [3mthinking_budget[0m[2m=[0m256 [3mreasoning_len[0m[2m=[0m970 [3mremaining_tokens[0m[2m=[0m256

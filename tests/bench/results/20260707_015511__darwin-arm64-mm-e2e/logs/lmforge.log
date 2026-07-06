@@ -1,0 +1,75 @@
+{"timestamp":"2026-07-06T11:51:00.194334Z","level":"INFO","fields":{"message":"Running lmforge init..."},"target":"lmforge::cli::init"}
+{"timestamp":"2026-07-06T11:51:00.194552Z","level":"INFO","fields":{"message":"Ensured data directories at /Users/titasbiswas/.lmforge"},"target":"lmforge::cli::init"}
+{"timestamp":"2026-07-06T11:51:00.224899Z","level":"INFO","fields":{"message":"Hardware profile saved","path":"/Users/titasbiswas/.lmforge/hardware.json"},"target":"lmforge::cli::init"}
+{"timestamp":"2026-07-06T11:51:00.225201Z","level":"INFO","fields":{"message":"Engine selected","engine":"omlx","version":"0.4.4","priority":10},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T11:51:00.225224Z","level":"INFO","fields":{"message":"Installing engine","engine":"omlx","version":"0.4.4","method":"brew"},"target":"lmforge::engine::installer"}
+{"timestamp":"2026-07-06T11:51:02.441454Z","level":"INFO","fields":{"message":"Starting LMForge...","port":11430,"bind":"127.0.0.1"},"target":"lmforge::cli::start"}
+{"timestamp":"2026-07-06T11:51:02.944583Z","level":"INFO","fields":{"message":"Engine selected","engine":"omlx","version":"0.4.4","priority":10},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T11:51:02.953928Z","level":"INFO","fields":{"message":"PID file written","pid":60274,"path":"/Users/titasbiswas/.lmforge/lmforge.pid"},"target":"lmforge::engine::daemon"}
+{"timestamp":"2026-07-06T11:51:02.954078Z","level":"INFO","fields":{"message":"oMLX SharedServerResidency active (set LMFORGE_OMLX_SHARED=0 to disable)","port":11431,"models_dir":"/Users/titasbiswas/.lmforge/models"},"target":"lmforge::engine::manager"}
+{"timestamp":"2026-07-06T11:51:03.163269Z","level":"INFO","fields":{"message":"Prometheus recorder installed at /metrics"},"target":"lmforge::server::metrics"}
+{"timestamp":"2026-07-06T11:51:03.163318Z","level":"INFO","fields":{"message":"Building API router","max_body_bytes":33554432},"target":"lmforge::server"}
+{"timestamp":"2026-07-06T11:51:03.163358Z","level":"INFO","fields":{"message":"Serving dashboard UI at /ui","ui_dir":"/Users/titasbiswas/projects/ai_focused/lmforge/ui/build"},"target":"lmforge::server"}
+{"timestamp":"2026-07-06T11:51:03.163951Z","level":"INFO","fields":{"message":"API server listening","addr":"127.0.0.1:11430"},"target":"lmforge::cli::start"}
+{"timestamp":"2026-07-06T12:59:30.865638Z","level":"INFO","fields":{"message":"Running lmforge init..."},"target":"lmforge::cli::init"}
+{"timestamp":"2026-07-06T12:59:30.865855Z","level":"INFO","fields":{"message":"Ensured data directories at /Users/titasbiswas/.lmforge"},"target":"lmforge::cli::init"}
+{"timestamp":"2026-07-06T12:59:30.901221Z","level":"INFO","fields":{"message":"Hardware profile saved","path":"/Users/titasbiswas/.lmforge/hardware.json"},"target":"lmforge::cli::init"}
+{"timestamp":"2026-07-06T12:59:30.901637Z","level":"INFO","fields":{"message":"Engine selected","engine":"omlx","version":"0.4.4","priority":10},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T12:59:30.901675Z","level":"INFO","fields":{"message":"Installing engine","engine":"omlx","version":"0.4.4","method":"brew"},"target":"lmforge::engine::installer"}
+{"timestamp":"2026-07-06T12:59:32.106704Z","level":"INFO","fields":{"message":"Starting LMForge...","port":11430,"bind":"127.0.0.1"},"target":"lmforge::cli::start"}
+{"timestamp":"2026-07-06T12:59:32.610323Z","level":"INFO","fields":{"message":"Engine selected","engine":"omlx","version":"0.4.4","priority":10},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T12:59:32.618099Z","level":"INFO","fields":{"message":"PID file written","pid":80954,"path":"/Users/titasbiswas/.lmforge/lmforge.pid"},"target":"lmforge::engine::daemon"}
+{"timestamp":"2026-07-06T12:59:32.618291Z","level":"INFO","fields":{"message":"oMLX SharedServerResidency active (set LMFORGE_OMLX_SHARED=0 to disable)","port":11431,"models_dir":"/Users/titasbiswas/.lmforge/models"},"target":"lmforge::engine::manager"}
+{"timestamp":"2026-07-06T12:59:32.826345Z","level":"INFO","fields":{"message":"Prometheus recorder installed at /metrics"},"target":"lmforge::server::metrics"}
+{"timestamp":"2026-07-06T12:59:32.826387Z","level":"INFO","fields":{"message":"Building API router","max_body_bytes":33554432},"target":"lmforge::server"}
+{"timestamp":"2026-07-06T12:59:32.826451Z","level":"INFO","fields":{"message":"Serving dashboard UI at /ui","ui_dir":"/Users/titasbiswas/projects/ai_focused/lmforge/ui/build"},"target":"lmforge::server"}
+{"timestamp":"2026-07-06T12:59:32.826946Z","level":"INFO","fields":{"message":"API server listening","addr":"127.0.0.1:11430"},"target":"lmforge::cli::start"}
+{"timestamp":"2026-07-06T17:31:55.283858Z","level":"INFO","fields":{"message":"Running lmforge init..."},"target":"lmforge::cli::init"}
+{"timestamp":"2026-07-06T17:31:55.284022Z","level":"INFO","fields":{"message":"Ensured data directories at /Users/titasbiswas/.lmforge"},"target":"lmforge::cli::init"}
+{"timestamp":"2026-07-06T17:31:55.312748Z","level":"INFO","fields":{"message":"Hardware profile saved","path":"/Users/titasbiswas/.lmforge/hardware.json"},"target":"lmforge::cli::init"}
+{"timestamp":"2026-07-06T17:31:55.313024Z","level":"INFO","fields":{"message":"Engine selected","engine":"omlx","version":"0.4.4","priority":10},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T17:31:55.313055Z","level":"INFO","fields":{"message":"Installing engine","engine":"omlx","version":"0.4.4","method":"brew"},"target":"lmforge::engine::installer"}
+{"timestamp":"2026-07-06T17:31:56.520621Z","level":"INFO","fields":{"message":"Starting LMForge...","port":11430,"bind":"127.0.0.1"},"target":"lmforge::cli::start"}
+{"timestamp":"2026-07-06T17:31:56.542286Z","level":"INFO","fields":{"message":"Capability detector changed — re-detected model capabilities in place","from":0,"to":1,"updated":0,"total":13},"target":"lmforge::cli::models"}
+{"timestamp":"2026-07-06T17:31:56.542344Z","level":"INFO","fields":{"message":"Model capability index self-healed to current detector"},"target":"lmforge::cli::start"}
+{"timestamp":"2026-07-06T17:31:57.046549Z","level":"INFO","fields":{"message":"Engine selected","engine":"omlx","version":"0.4.4","priority":10},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T17:31:57.058192Z","level":"INFO","fields":{"message":"PID file written","pid":51649,"path":"/Users/titasbiswas/.lmforge/lmforge.pid"},"target":"lmforge::engine::daemon"}
+{"timestamp":"2026-07-06T17:31:57.058305Z","level":"INFO","fields":{"message":"oMLX SharedServerResidency active (set LMFORGE_OMLX_SHARED=0 to disable)","port":11431,"models_dir":"/Users/titasbiswas/.lmforge/models"},"target":"lmforge::engine::manager"}
+{"timestamp":"2026-07-06T17:31:57.267319Z","level":"INFO","fields":{"message":"Prometheus recorder installed at /metrics"},"target":"lmforge::server::metrics"}
+{"timestamp":"2026-07-06T17:31:57.267350Z","level":"INFO","fields":{"message":"Building API router","max_body_bytes":33554432},"target":"lmforge::server"}
+{"timestamp":"2026-07-06T17:31:57.267395Z","level":"INFO","fields":{"message":"Serving dashboard UI at /ui","ui_dir":"/Users/titasbiswas/projects/ai_focused/lmforge/ui/build"},"target":"lmforge::server"}
+{"timestamp":"2026-07-06T17:31:57.267942Z","level":"INFO","fields":{"message":"API server listening","addr":"127.0.0.1:11430"},"target":"lmforge::cli::start"}
+{"timestamp":"2026-07-06T18:38:26.107616Z","level":"WARN","fields":{"message":"native-reasoning model: raised max_tokens to floor to avoid truncated-to-blank reply","client_max_tokens":512,"floored_max_tokens":4096},"target":"lmforge::server::thinking"}
+{"timestamp":"2026-07-06T18:38:26.108858Z","level":"INFO","fields":{"message":"Starting shared oMLX server","port":11431,"models_dir":"/Users/titasbiswas/.lmforge/models"},"target":"lmforge::engine::shared_server"}
+{"timestamp":"2026-07-06T18:38:29.696488Z","level":"INFO","fields":{"message":"oMLX shared server is healthy","port":11431},"target":"lmforge::engine::shared_server"}
+{"timestamp":"2026-07-06T18:43:32.961063Z","level":"INFO","fields":{"message":"oMLX idle evict: unloaded qwen3-vl:2b:4bit (omlx: qwen3-vl-2b-instruct-4bit)"},"target":"lmforge::engine::shared_server"}
+{"timestamp":"2026-07-06T20:23:08.556522Z","level":"INFO","fields":{"message":"Running lmforge init..."},"target":"lmforge::cli::init"}
+{"timestamp":"2026-07-06T20:23:08.556677Z","level":"INFO","fields":{"message":"Ensured data directories at /Users/titasbiswas/.lmforge"},"target":"lmforge::cli::init"}
+{"timestamp":"2026-07-06T20:23:08.588231Z","level":"INFO","fields":{"message":"Hardware profile saved","path":"/Users/titasbiswas/.lmforge/hardware.json"},"target":"lmforge::cli::init"}
+{"timestamp":"2026-07-06T20:23:08.588526Z","level":"INFO","fields":{"message":"Engine selected","engine":"omlx","version":"0.4.4","priority":10},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T20:23:08.588562Z","level":"INFO","fields":{"message":"Installing engine","engine":"omlx","version":"0.4.4","method":"brew"},"target":"lmforge::engine::installer"}
+{"timestamp":"2026-07-06T20:23:09.850964Z","level":"INFO","fields":{"message":"Starting LMForge...","port":11430,"bind":"127.0.0.1"},"target":"lmforge::cli::start"}
+{"timestamp":"2026-07-06T20:23:10.355847Z","level":"INFO","fields":{"message":"Engine selected","engine":"omlx","version":"0.4.4","priority":10},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T20:23:10.366803Z","level":"INFO","fields":{"message":"PID file written","pid":11909,"path":"/Users/titasbiswas/.lmforge/lmforge.pid"},"target":"lmforge::engine::daemon"}
+{"timestamp":"2026-07-06T20:23:10.366964Z","level":"INFO","fields":{"message":"oMLX SharedServerResidency active (set LMFORGE_OMLX_SHARED=0 to disable)","port":11431,"models_dir":"/Users/titasbiswas/.lmforge/models"},"target":"lmforge::engine::manager"}
+{"timestamp":"2026-07-06T20:23:10.578443Z","level":"INFO","fields":{"message":"Prometheus recorder installed at /metrics"},"target":"lmforge::server::metrics"}
+{"timestamp":"2026-07-06T20:23:10.578473Z","level":"INFO","fields":{"message":"Building API router","max_body_bytes":33554432},"target":"lmforge::server"}
+{"timestamp":"2026-07-06T20:23:10.579560Z","level":"INFO","fields":{"message":"Serving dashboard UI at /ui","ui_dir":"/Users/titasbiswas/projects/ai_focused/lmforge/ui/build"},"target":"lmforge::server"}
+{"timestamp":"2026-07-06T20:23:10.580073Z","level":"INFO","fields":{"message":"API server listening","addr":"127.0.0.1:11430"},"target":"lmforge::cli::start"}
+{"timestamp":"2026-07-06T20:25:11.723178Z","level":"INFO","fields":{"message":"Engine selected","engine":"omlx","version":"0.4.4","priority":10},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T20:25:11.723479Z","level":"INFO","fields":{"message":"Resolving HuggingFace repo","repo":"mlx-community/Qwen3-Embedding-0.6B-8bit","revision":"None"},"target":"lmforge::model::resolver"}
+{"timestamp":"2026-07-06T20:25:12.101385Z","level":"INFO","fields":{"message":"Engine selected","engine":"omlx","version":"0.4.4","priority":10},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T20:25:12.101563Z","level":"INFO","fields":{"message":"Resolving HuggingFace repo","repo":"mlx-community/Qwen3.5-2B-4bit","revision":"None"},"target":"lmforge::model::resolver"}
+{"timestamp":"2026-07-06T20:25:12.447252Z","level":"INFO","fields":{"message":"Engine selected","engine":"omlx","version":"0.4.4","priority":10},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T20:25:12.447504Z","level":"INFO","fields":{"message":"Resolving HuggingFace repo","repo":"mlx-community/Qwen3-VL-2B-Instruct-4bit","revision":"None"},"target":"lmforge::model::resolver"}
+{"timestamp":"2026-07-06T20:25:12.884142Z","level":"INFO","fields":{"message":"Engine selected","engine":"omlx","version":"0.4.4","priority":10},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T20:25:12.884350Z","level":"INFO","fields":{"message":"Resolving HuggingFace repo","repo":"mlx-community/Qwen3-Reranker-0.6B-mxfp8","revision":"None"},"target":"lmforge::model::resolver"}
+{"timestamp":"2026-07-06T20:25:14.421129Z","level":"INFO","fields":{"message":"Starting shared oMLX server","port":11431,"models_dir":"/Users/titasbiswas/.lmforge/models"},"target":"lmforge::engine::shared_server"}
+{"timestamp":"2026-07-06T20:25:17.499044Z","level":"INFO","fields":{"message":"oMLX shared server is healthy","port":11431},"target":"lmforge::engine::shared_server"}
+{"timestamp":"2026-07-06T20:25:39.834558Z","level":"WARN","fields":{"message":"native-reasoning model: raised max_tokens to floor to avoid truncated-to-blank reply","client_max_tokens":128,"floored_max_tokens":4096},"target":"lmforge::server::thinking"}
+{"timestamp":"2026-07-06T20:25:43.301512Z","level":"WARN","fields":{"message":"native-reasoning model: raised max_tokens to floor to avoid truncated-to-blank reply","client_max_tokens":192,"floored_max_tokens":4096},"target":"lmforge::server::thinking"}
+{"timestamp":"2026-07-06T20:25:45.915510Z","level":"WARN","fields":{"message":"native-reasoning model: raised max_tokens to floor to avoid truncated-to-blank reply","client_max_tokens":192,"floored_max_tokens":4096},"target":"lmforge::server::thinking"}
+{"timestamp":"2026-07-06T20:25:49.829172Z","level":"INFO","fields":{"message":"Thinking request routing","model":"qwen3.5:2b:4bit","stream":false,"can_use_budget":true,"thinking_budget":"Some(2048)","inline_think":false,"native_reasoning":false},"target":"lmforge::server::openai"}
+{"timestamp":"2026-07-06T20:26:12.036608Z","level":"INFO","fields":{"message":"Call-1 (non-stream) budget exhausted; executing Call-2","thinking_budget":2048,"reasoning_len":5549,"remaining_tokens":64},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T20:26:15.797028Z","level":"INFO","fields":{"message":"Thinking request routing","model":"qwen3.5:2b:4bit","stream":false,"can_use_budget":true,"thinking_budget":"Some(256)","inline_think":false,"native_reasoning":false},"target":"lmforge::server::openai"}
+{"timestamp":"2026-07-06T20:26:18.850800Z","level":"INFO","fields":{"message":"Call-1 (non-stream) budget exhausted; executing Call-2","thinking_budget":256,"reasoning_len":1021,"remaining_tokens":256},"target":"lmforge::server::proxy"}

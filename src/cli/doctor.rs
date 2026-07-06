@@ -51,13 +51,12 @@ fn print_active_engine_gate(profile: &HardwareProfile, data_dir: &std::path::Pat
     };
 
     // Residency mode for informational display.
-    let residency_label = if engine.id == "omlx"
-        && std::env::var("LMFORGE_OMLX_SHARED").as_deref() != Ok("0")
-    {
-        "SharedServer (one omlx serve, native LRU)"
-    } else {
-        "ProcessPool (per-model process, LMForge LRU)"
-    };
+    let residency_label =
+        if engine.id == "omlx" && std::env::var("LMFORGE_OMLX_SHARED").as_deref() != Ok("0") {
+            "SharedServer (one omlx serve, native LRU)"
+        } else {
+            "ProcessPool (per-model process, LMForge LRU)"
+        };
 
     println!();
     println!("Engine — {} (active, version-gated)", engine.name);
@@ -270,6 +269,23 @@ fn print_runtime_hints(profile: &HardwareProfile, active: LlamaVariant) {
         println!("  LMFORGE_LLAMACPP_VARIANT = (unset)");
     }
     println!("  active_variant    : {active}");
+
+    // Windows NVIDIA: WDDM's silent sysmem fallback degrades llama.cpp decode
+    // 4-6x under VRAM pressure and has corrupted engine output on Blackwell
+    // (610.x driver, 2026-07-06 incident). The policy is only settable in the
+    // NVIDIA Control Panel, so surface it as a recommendation.
+    if profile.os == crate::hardware::probe::Os::Windows
+        && profile.gpu_vendor == crate::hardware::probe::GpuVendor::Nvidia
+    {
+        println!();
+        println!(
+            "  ℹ Recommended: NVIDIA Control Panel → Manage 3D Settings → \
+             'CUDA - Sysmem Fallback Policy' → 'Prefer No Sysmem Fallback'.\n    \
+             Default policy silently pages VRAM into system RAM under pressure, \
+             which slows inference 4-6x and can corrupt engine output on some \
+             driver/GPU combinations."
+        );
+    }
 
     // Hint specifically for the most common failure: Linux NVIDIA below
     // the cuda12 driver floor.

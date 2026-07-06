@@ -116,6 +116,20 @@ pub async fn run(
         }
     }
 
+    // 1b. Self-healing capability re-detection. Capabilities are persisted in
+    //     models.json and served verbatim (GET /lf/model/list never re-detects),
+    //     so a detector fix in a new build only reaches models pulled by an older
+    //     build after a re-detect. When the persisted `caps_detector_version` is
+    //     behind the current detector, re-detect every model's capabilities in
+    //     place — weights untouched — so fixes land without a manual
+    //     `lmforge models scan`. Runs before the API binds so the first
+    //     /lf/model/list already reflects the healed caps. Non-fatal on error.
+    match crate::cli::models::heal_capabilities_if_stale(&data_dir, &models_dir) {
+        Ok(true) => info!("Model capability index self-healed to current detector"),
+        Ok(false) => {}
+        Err(e) => warn!(error = %e, "Capability self-heal skipped (continuing startup)"),
+    }
+
     // 2. Proactive startup cleanup — kill any stale LMForge or engine processes
     //    and verify both ports are free BEFORE we do anything expensive.
     //    This must happen before hardware probe, engine spawn, or model load.
@@ -164,13 +178,7 @@ pub async fn run(
     // 6. (Optional) validate model if --model was passed
     if let Some(ref m) = model {
         // Verify the model exists in the index before starting so we fail fast
-        let idx =
-            crate::model::index::ModelIndex::load(&data_dir, &models_dir).unwrap_or_else(|_| {
-                crate::model::index::ModelIndex {
-                    schema_version: 1,
-                    models: vec![],
-                }
-            });
+        let idx = crate::model::index::ModelIndex::load(&data_dir, &models_dir).unwrap_or_default();
         if idx.get(m).is_none() {
             anyhow::bail!(
                 "Model '{}' not found. Pull it first with:\n  lmforge pull {}",

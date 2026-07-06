@@ -210,16 +210,16 @@ pub fn read_kv_geometry_for_model(model_dir: &Path) -> Option<KvGeometry> {
 
     let block_count = read_metadata_u64(&gguf, &format!("{arch}.block_count"))?;
     let head_count = read_metadata_u64(&gguf, &format!("{arch}.attention.head_count"));
-    let head_count_kv = read_metadata_u64(&gguf, &format!("{arch}.attention.head_count_kv"))
-        .or(head_count)?;
+    let head_count_kv =
+        read_metadata_u64(&gguf, &format!("{arch}.attention.head_count_kv")).or(head_count)?;
     let embedding_length = read_metadata_u64(&gguf, &format!("{arch}.embedding_length"));
 
     let derived_head_dim = match (embedding_length, head_count) {
         (Some(e), Some(h)) if h > 0 => Some(e / h),
         _ => None,
     };
-    let key_length = read_metadata_u64(&gguf, &format!("{arch}.attention.key_length"))
-        .or(derived_head_dim)?;
+    let key_length =
+        read_metadata_u64(&gguf, &format!("{arch}.attention.key_length")).or(derived_head_dim)?;
     let value_length =
         read_metadata_u64(&gguf, &format!("{arch}.attention.value_length")).unwrap_or(key_length);
 
@@ -498,7 +498,10 @@ mod tests {
     #[test]
     fn read_metadata_string_returns_none_for_absent_key() {
         let f = synth_gguf_with_meta("tokenizer.ggml.model", "gpt2");
-        assert_eq!(read_metadata_string(f.path(), "tokenizer.chat_template"), None);
+        assert_eq!(
+            read_metadata_string(f.path(), "tokenizer.chat_template"),
+            None
+        );
     }
 
     #[test]

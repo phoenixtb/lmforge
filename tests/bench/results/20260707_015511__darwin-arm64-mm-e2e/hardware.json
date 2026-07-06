@@ -1,0 +1,19 @@
+{
+  "os": "darwin",
+  "arch": "aarch64",
+  "is_tegra": false,
+  "gpu_vendor": "apple",
+  "vram_gb": 27.0,
+  "unified_mem": true,
+  "total_ram_gb": 36.0,
+  "cpu_cores": 12,
+  "cpu_model": "Apple M3 Pro",
+  "schema_version": 2,
+  "compute_cap": null,
+  "cuda_runtime_version": null,
+  "cuda_driver_version": null,
+  "driver_tuple": null,
+  "os_family": "darwin",
+  "is_wsl": false,
+  "gpu_count": 0
+}

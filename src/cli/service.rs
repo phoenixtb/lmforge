@@ -86,6 +86,7 @@ fn home_dir() -> Result<PathBuf> {
 
 /// Minimal XML entity escaping for launchd plist string values.
 #[cfg(target_os = "macos")]
+#[allow(dead_code)] // exercised by unit tests; reserved for future plist value escaping
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")

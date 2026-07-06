@@ -1,0 +1,400 @@
+{"timestamp":"2026-07-06T19:28:22.793527Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":221,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:22.816429Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":222,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:22.839220Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":223,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:22.862172Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":224,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:22.885290Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":225,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:22.907984Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":226,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:22.931104Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":227,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:22.953826Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":228,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:22.976653Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":229,"payload_bytes":316},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:22.999439Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":230,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.022152Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":231,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.045037Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":232,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.068062Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":233,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.091331Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":234,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.114130Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":235,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.137086Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":236,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.159860Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":237,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.182788Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":238,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.206092Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":239,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.233701Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":240,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.261429Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":241,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.285795Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":242,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.308693Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":243,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.331960Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":244,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.357345Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":245,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.380285Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":246,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.405126Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":247,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.429285Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":248,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.455260Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":249,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.480300Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":250,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.504972Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":251,"payload_bytes":318},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.528736Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":252,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.551633Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":253,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.575271Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":254,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.599205Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":255,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.623076Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":256,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.646031Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":257,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.669690Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":258,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.693452Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":259,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.717235Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":260,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.740223Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":261,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.763960Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":262,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.787730Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":263,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.811542Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":264,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.834386Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":265,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.857990Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":266,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.881783Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":267,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.905241Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":268,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.928569Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":269,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.951933Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":270,"payload_bytes":316},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.975949Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":271,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:23.999141Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":272,"payload_bytes":318},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:24.022673Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":273,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:24.045356Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":274,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:24.068513Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":275,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:24.091331Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":276,"payload_bytes":317},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:24.114155Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":277,"payload_bytes":318},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:24.137161Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":278,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:24.160011Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":279,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:24.182799Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":280,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:24.205564Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":281,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:24.228445Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":282,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:24.251246Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":283,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:24.274323Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":284,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:24.297322Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":285,"payload_bytes":569},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:24.297375Z","level":"INFO","fields":{"message":"Call-2 stream complete (received [DONE])","call2_total_events":285},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:28:24.319194Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T19:28:24.662873Z","level":"INFO","fields":{"message":"Thinking request routing","model":"qwen3.5:2b:4bit","stream":true,"can_use_budget":true,"thinking_budget":"Some(1024)","inline_think":true,"native_reasoning":false},"target":"lmforge::server::openai"}
+{"timestamp":"2026-07-06T19:28:24.662901Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T19:28:34.430534Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T19:28:38.543731Z","level":"INFO","fields":{"message":"Thinking request routing","model":"qwen3.5:2b:4bit","stream":true,"can_use_budget":true,"thinking_budget":"Some(1024)","inline_think":true,"native_reasoning":false},"target":"lmforge::server::openai"}
+{"timestamp":"2026-07-06T19:28:38.543755Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T19:29:01.973386Z","level":"INFO","fields":{"message":"Call-1 budget exhausted; executing Call-2","thinking_budget":1024,"reasoning_len":2603,"remaining_tokens":768},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:05.707469Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":1,"payload_bytes":318},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:05.707488Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":2,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:05.730544Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":3,"payload_bytes":322},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:05.753572Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":4,"payload_bytes":316},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:05.776548Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":5,"payload_bytes":317},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:05.799257Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":6,"payload_bytes":318},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:05.822957Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":7,"payload_bytes":316},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:05.846574Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":8,"payload_bytes":319},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:05.869399Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":9,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:05.892078Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":10,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:05.915080Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":11,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:05.938060Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":12,"payload_bytes":320},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:05.960950Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":13,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:05.983569Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":14,"payload_bytes":316},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.006497Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":15,"payload_bytes":317},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.029317Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":16,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.052200Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":17,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.075124Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":18,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.098209Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":19,"payload_bytes":317},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.121058Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":20,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.143928Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":21,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.166687Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":22,"payload_bytes":316},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.189353Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":23,"payload_bytes":318},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.212082Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":24,"payload_bytes":317},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.234822Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":25,"payload_bytes":316},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.258265Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":26,"payload_bytes":317},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.281049Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":27,"payload_bytes":319},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.303939Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":28,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.326867Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":29,"payload_bytes":319},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.350463Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":30,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.373354Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":31,"payload_bytes":316},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.396122Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":32,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.418875Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":33,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.441717Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":34,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.464546Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":35,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.487291Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":36,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.509985Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":37,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.532756Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":38,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.555438Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":39,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.578404Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":40,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.601514Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":41,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.624338Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":42,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.647102Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":43,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.669906Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":44,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.692886Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":45,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.715678Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":46,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.738299Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":47,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.761041Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":48,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.783804Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":49,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.806788Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":50,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.830120Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":51,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.852860Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":52,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.875554Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":53,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.898207Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":54,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.921099Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":55,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.943772Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":56,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.967032Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":57,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:06.989829Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":58,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.012572Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":59,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.035239Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":60,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.057949Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":61,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.080674Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":62,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.103479Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":63,"payload_bytes":316},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.126344Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":64,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.148925Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":65,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.171736Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":66,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.194455Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":67,"payload_bytes":318},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.217294Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":68,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.239982Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":69,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.262866Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":70,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.285539Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":71,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.308323Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":72,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.331555Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":73,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.356449Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":74,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.379269Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":75,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.402097Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":76,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.425663Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":77,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.451597Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":78,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.475724Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":79,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.500012Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":80,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.523194Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":81,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.546356Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":82,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.569766Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":83,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.593397Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":84,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.616477Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":85,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.640457Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":86,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.664183Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":87,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.687696Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":88,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.710590Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":89,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.733602Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":90,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.757072Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":91,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.780111Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":92,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.803035Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":93,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.826078Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":94,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.850131Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":95,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.873130Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":96,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.895906Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":97,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.919209Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":98,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.942287Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":99,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.965400Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":100,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:07.988053Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":101,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.011000Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":102,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.034064Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":103,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.056933Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":104,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.079693Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":105,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.102516Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":106,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.125354Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":107,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.148034Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":108,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.170720Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":109,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.193453Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":110,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.216392Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":111,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.239410Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":112,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.262226Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":113,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.284895Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":114,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.307585Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":115,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.330341Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":116,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.353913Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":117,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.376759Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":118,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.399582Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":119,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.422246Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":120,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.444951Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":121,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.467690Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":122,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.490330Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":123,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.513080Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":124,"payload_bytes":319},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.536016Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":125,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.558715Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":126,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.581739Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":127,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.604572Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":128,"payload_bytes":318},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.627745Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":129,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.650761Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":130,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.674953Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":131,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.697584Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":132,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.720274Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":133,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.742988Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":134,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.765655Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":135,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.788367Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":136,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.811004Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":137,"payload_bytes":318},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.833796Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":138,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.856736Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":139,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.879554Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":140,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.902330Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":141,"payload_bytes":318},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.925020Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":142,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.947894Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":143,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.970847Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":144,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:08.993489Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":145,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.016185Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":146,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.039004Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":147,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.061877Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":148,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.084614Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":149,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.107351Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":150,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.130246Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":151,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.153147Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":152,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.175766Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":153,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.198478Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":154,"payload_bytes":316},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.221211Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":155,"payload_bytes":317},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.243934Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":156,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.266676Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":157,"payload_bytes":316},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.289586Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":158,"payload_bytes":324},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.312229Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":159,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.335447Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":160,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.360750Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":161,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.384852Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":162,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.408144Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":163,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.432366Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":164,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.455473Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":165,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.479023Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":166,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.503120Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":167,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.526653Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":168,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.549441Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":169,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.572796Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":170,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.596604Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":171,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.619923Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":172,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.642935Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":173,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.666443Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":174,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.689818Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":175,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.712664Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":176,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.735449Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":177,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.758910Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":178,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.782351Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":179,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.805324Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":180,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.828535Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":181,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.852070Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":182,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.875970Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":183,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.898829Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":184,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.921930Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":185,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.944768Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":186,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.968259Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":187,"payload_bytes":316},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:09.990876Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":188,"payload_bytes":317},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.014023Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":189,"payload_bytes":316},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.037144Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":190,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.060296Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":191,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.083030Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":192,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.105965Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":193,"payload_bytes":318},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.128977Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":194,"payload_bytes":316},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.151982Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":195,"payload_bytes":319},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.174851Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":196,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.197562Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":197,"payload_bytes":313},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.220217Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":198,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.242879Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":199,"payload_bytes":320},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.265710Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":200,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.288441Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":201,"payload_bytes":316},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.311143Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":202,"payload_bytes":317},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.334059Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":203,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.357770Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":204,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.380600Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":205,"payload_bytes":314},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.403401Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":206,"payload_bytes":317},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.426110Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":207,"payload_bytes":315},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.448784Z","level":"INFO","fields":{"message":"call2 SSE event yielded","call2_event_n":208,"payload_bytes":569},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:29:10.448840Z","level":"INFO","fields":{"message":"Call-2 stream complete (received [DONE])","call2_total_events":208},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T19:33:40.115670Z","level":"INFO","fields":{"message":"TTL expired for qwen3.5:2b:4bit, unloading..."},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T19:33:40.115695Z","level":"INFO","fields":{"message":"Sending SIGTERM to release llama-server mmap memory footprint","pid":5700,"model":"qwen3.5:2b:4bit"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:18:27.691670Z","level":"INFO","fields":{"message":"Running lmforge init..."},"target":"lmforge::cli::init"}
+{"timestamp":"2026-07-06T20:18:27.692132Z","level":"INFO","fields":{"message":"Ensured data directories at C:\\Users\\phoenixt\\.lmforge"},"target":"lmforge::cli::init"}
+{"timestamp":"2026-07-06T20:18:28.325191Z","level":"INFO","fields":{"message":"Hardware profile saved","path":"C:\\Users\\phoenixt\\.lmforge\\hardware.json"},"target":"lmforge::cli::init"}
+{"timestamp":"2026-07-06T20:18:28.326185Z","level":"INFO","fields":{"message":"Engine selected","engine":"llamacpp","version":"b9861","priority":100},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T20:18:28.326943Z","level":"INFO","fields":{"message":"Installing engine","engine":"llamacpp","version":"b9861","method":"binary"},"target":"lmforge::engine::installer"}
+{"timestamp":"2026-07-06T20:18:29.268296Z","level":"INFO","fields":{"message":"Download complete","url":"https://github.com/ggml-org/llama.cpp/releases/download/b9861/llama-b9861-bin-win-cpu-x64.zip","bytes":17483772},"target":"lmforge::engine::installer"}
+{"timestamp":"2026-07-06T20:18:29.285414Z","level":"INFO","fields":{"message":"sha256 verified against bundled SHA256SUMS","asset":"llama-b9861-bin-win-cpu-x64.zip"},"target":"lmforge::engine::installer"}
+{"timestamp":"2026-07-06T20:18:31.376911Z","level":"INFO","fields":{"message":"Detached daemon child spawned","pid":11064},"target":"lmforge::cli::start"}
+{"timestamp":"2026-07-06T20:18:31.385298Z","level":"INFO","fields":{"message":"Starting LMForge...","port":11430,"bind":"127.0.0.1"},"target":"lmforge::cli::start"}
+{"timestamp":"2026-07-06T20:18:32.309772Z","level":"INFO","fields":{"message":"Engine selected","engine":"llamacpp","version":"b9861","priority":100},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T20:18:32.309858Z","level":"INFO","fields":{"message":"Installing engine","engine":"llamacpp","version":"b9861","method":"binary"},"target":"lmforge::engine::installer"}
+{"timestamp":"2026-07-06T20:18:32.447858Z","level":"INFO","fields":{"message":"PID file written","pid":11064,"path":"C:\\Users\\phoenixt\\.lmforge\\lmforge.pid"},"target":"lmforge::engine::daemon"}
+{"timestamp":"2026-07-06T20:18:32.447965Z","level":"INFO","fields":{"message":"Prometheus recorder installed at /metrics"},"target":"lmforge::server::metrics"}
+{"timestamp":"2026-07-06T20:18:32.447983Z","level":"INFO","fields":{"message":"Building API router","max_body_bytes":33554432},"target":"lmforge::server"}
+{"timestamp":"2026-07-06T20:18:32.448011Z","level":"INFO","fields":{"message":"Serving dashboard UI at /ui","ui_dir":"C:\\projects\\lmforge\\repo\\lmforge\\lmforge\\ui\\build"},"target":"lmforge::server"}
+{"timestamp":"2026-07-06T20:18:32.448460Z","level":"INFO","fields":{"message":"API server listening","addr":"127.0.0.1:11430"},"target":"lmforge::cli::start"}
+{"timestamp":"2026-07-06T20:21:04.226556Z","level":"INFO","fields":{"message":"Engine selected","engine":"llamacpp","version":"b9861","priority":100},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T20:21:04.228998Z","level":"INFO","fields":{"message":"Resolving HuggingFace repo","repo":"Qwen/Qwen3-Embedding-0.6B-GGUF","revision":"None"},"target":"lmforge::model::resolver"}
+{"timestamp":"2026-07-06T20:21:04.588224Z","level":"INFO","fields":{"message":"Engine selected","engine":"llamacpp","version":"b9861","priority":100},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T20:21:04.589407Z","level":"INFO","fields":{"message":"Resolving HuggingFace repo","repo":"unsloth/Qwen3.5-2B-GGUF","revision":"None"},"target":"lmforge::model::resolver"}
+{"timestamp":"2026-07-06T20:21:04.930264Z","level":"INFO","fields":{"message":"Engine selected","engine":"llamacpp","version":"b9861","priority":100},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T20:21:04.931740Z","level":"INFO","fields":{"message":"Resolving HuggingFace repo","repo":"unsloth/Qwen3-VL-2B-Instruct-GGUF","revision":"None"},"target":"lmforge::model::resolver"}
+{"timestamp":"2026-07-06T20:21:05.277173Z","level":"INFO","fields":{"message":"Engine selected","engine":"llamacpp","version":"b9861","priority":100},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T20:21:05.278532Z","level":"INFO","fields":{"message":"Resolving HuggingFace repo","repo":"mradermacher/Qwen3-Reranker-0.6B-GGUF","revision":"None"},"target":"lmforge::model::resolver"}
+{"timestamp":"2026-07-06T20:21:05.618711Z","level":"INFO","fields":{"message":"Engine selected","engine":"llamacpp","version":"b9861","priority":100},"target":"lmforge::engine::registry"}
+{"timestamp":"2026-07-06T20:21:05.620311Z","level":"INFO","fields":{"message":"Resolving HuggingFace repo","repo":"unsloth/Qwen3.5-4B-MTP-GGUF","revision":"None"},"target":"lmforge::model::resolver"}
+{"timestamp":"2026-07-06T20:21:06.057781Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:06.057855Z","level":"INFO","fields":{"message":"Cold load request for model","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:07.785706Z","level":"INFO","fields":{"message":"Spawning llama-server","model_id":"qwen3-embed:0.6b:8bit","port":11431,"gguf":"C:\\Users\\phoenixt\\.lmforge\\models\\qwen3-embedding-0.6b-gguf\\Qwen3-Embedding-0.6B-Q8_0.gguf","role":"Embed"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:21:07.785990Z","level":"INFO","fields":{"message":"llama.cpp runtime plan","model_id":"qwen3-embed:0.6b:8bit","ngl":0,"ctx_size":4096,"free_vram_gb":5.6551923751831055,"footprint_total_gb":1.4327553510665894,"spec_mode":"Off"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:21:07.786005Z","level":"INFO","fields":{"message":"CPU-only: bounding context + parallel slots to contain KV cache","ctx_size":4096,"parallel":1},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:21:07.786013Z","level":"INFO","fields":{"message":"Spawning llama-server","executable":"C:\\Users\\phoenixt\\.lmforge\\engines\\llama-server.exe","active_variant":"cpu","args":"[\"--port\", \"11431\", \"--model\", \"C:\\\\Users\\\\phoenixt\\\\.lmforge\\\\models\\\\qwen3-embedding-0.6b-gguf\\\\Qwen3-Embedding-0.6B-Q8_0.gguf\", \"-ngl\", \"0\", \"--embeddings\", \"--ctx-size\", \"4096\", \"--parallel\", \"1\"]"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:21:09.503821Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:09.503887Z","level":"INFO","fields":{"message":"Cold load request for model","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:11.177483Z","level":"INFO","fields":{"message":"Spawning llama-server","model_id":"qwen3.5:2b:4bit","port":11432,"gguf":"C:\\Users\\phoenixt\\.lmforge\\models\\qwen3.5-2b-gguf\\Qwen3.5-2B-UD-Q4_K_XL.gguf","role":"Chat"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:21:11.177763Z","level":"INFO","fields":{"message":"llama.cpp runtime plan","model_id":"qwen3.5:2b:4bit","ngl":0,"ctx_size":4096,"free_vram_gb":4.505499839782715,"footprint_total_gb":1.8352419137954712,"spec_mode":"Off"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:21:11.177781Z","level":"INFO","fields":{"message":"llama.cpp host-memory prefix cache enabled","cache_ram_mib":1024,"total_ram_gb":11.933998107910156},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:21:11.177784Z","level":"INFO","fields":{"message":"CPU-only: bounding context + parallel slots to contain KV cache","ctx_size":4096,"parallel":1},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:21:11.177788Z","level":"INFO","fields":{"message":"Spawning llama-server","executable":"C:\\Users\\phoenixt\\.lmforge\\engines\\llama-server.exe","active_variant":"cpu","args":"[\"--port\", \"11432\", \"--model\", \"C:\\\\Users\\\\phoenixt\\\\.lmforge\\\\models\\\\qwen3.5-2b-gguf\\\\Qwen3.5-2B-UD-Q4_K_XL.gguf\", \"-ngl\", \"0\", \"--cache-ram\", \"1024\", \"--ctx-size\", \"4096\", \"--parallel\", \"1\"]"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:21:15.895311Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:16.050863Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:16.173058Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:16.286461Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:16.406283Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:16.521325Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:16.636354Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:16.754138Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:16.869301Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:16.984560Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:17.106512Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:20.262611Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:23.421365Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:26.563455Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:29.719732Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:32.867645Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:36.006654Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:39.145836Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:42.280836Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:45.428109Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:48.813823Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:48.856485Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:21:50.148359Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:00.660381Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:01.643951Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:01.644471Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:01.644576Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:01.648594Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:01.756543Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:01.870398Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:02.515821Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:02.538203Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:05.820244Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-vl:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:05.820310Z","level":"INFO","fields":{"message":"Cold load request for model","model_id":"qwen3-vl:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:07.468166Z","level":"INFO","fields":{"message":"Spawning llama-server","model_id":"qwen3-vl:2b:4bit","port":11433,"gguf":"C:\\Users\\phoenixt\\.lmforge\\models\\qwen3-vl-2b-instruct-gguf\\Qwen3-VL-2B-Instruct-UD-Q4_K_XL.gguf","role":"Chat"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:07.468480Z","level":"INFO","fields":{"message":"llama.cpp runtime plan","model_id":"qwen3-vl:2b:4bit","ngl":0,"ctx_size":1024,"free_vram_gb":2.4493935108184814,"footprint_total_gb":2.324620008468628,"spec_mode":"Off"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:07.468495Z","level":"INFO","fields":{"message":"llama.cpp host-memory prefix cache enabled","cache_ram_mib":1024,"total_ram_gb":11.933998107910156},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:07.468500Z","level":"INFO","fields":{"message":"VLM mmproj sidecar detected — enabling multimodal mode","mmproj":"C:\\Users\\phoenixt\\.lmforge\\models\\qwen3-vl-2b-instruct-gguf\\mmproj-F16.gguf","ctx_size":1024},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:07.468504Z","level":"INFO","fields":{"message":"CPU-only: bounding context + parallel slots to contain KV cache","ctx_size":1024,"parallel":1},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:07.468509Z","level":"INFO","fields":{"message":"Spawning llama-server","executable":"C:\\Users\\phoenixt\\.lmforge\\engines\\llama-server.exe","active_variant":"cpu","args":"[\"--port\", \"11433\", \"--model\", \"C:\\\\Users\\\\phoenixt\\\\.lmforge\\\\models\\\\qwen3-vl-2b-instruct-gguf\\\\Qwen3-VL-2B-Instruct-UD-Q4_K_XL.gguf\", \"-ngl\", \"0\", \"--cache-ram\", \"1024\", \"--mmproj\", \"C:\\\\Users\\\\phoenixt\\\\.lmforge\\\\models\\\\qwen3-vl-2b-instruct-gguf\\\\mmproj-F16.gguf\", \"--ctx-size\", \"1024\", \"--parallel\", \"1\"]"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:12.901142Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-vl:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:16.808251Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-vl:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:20.672657Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3-reranker:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:20.672728Z","level":"INFO","fields":{"message":"Cold load request for model","model_id":"qwen3-reranker:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:21.692400Z","level":"INFO","fields":{"message":"Memory budget low (free: 0.99GB, need: 1.43GB). Evicting idle LRU model: qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:21.692423Z","level":"INFO","fields":{"message":"Sending SIGTERM to release llama-server mmap memory footprint","pid":5456,"model":"qwen3.5:2b:4bit"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:22.538306Z","level":"INFO","fields":{"message":"Spawning llama-server","model_id":"qwen3-reranker:0.6b:8bit","port":11432,"gguf":"C:\\Users\\phoenixt\\.lmforge\\models\\qwen3-reranker-0.6b-gguf\\Qwen3-Reranker-0.6B.Q8_0.gguf","role":"Rerank"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:22.538576Z","level":"INFO","fields":{"message":"llama.cpp runtime plan","model_id":"qwen3-reranker:0.6b:8bit","ngl":0,"ctx_size":4096,"free_vram_gb":3.0479156970977783,"footprint_total_gb":1.432755470275879,"spec_mode":"Off"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:22.538591Z","level":"INFO","fields":{"message":"CPU-only: bounding context + parallel slots to contain KV cache","ctx_size":4096,"parallel":1},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:22.538596Z","level":"INFO","fields":{"message":"Spawning llama-server","executable":"C:\\Users\\phoenixt\\.lmforge\\engines\\llama-server.exe","active_variant":"cpu","args":"[\"--port\", \"11432\", \"--model\", \"C:\\\\Users\\\\phoenixt\\\\.lmforge\\\\models\\\\qwen3-reranker-0.6b-gguf\\\\Qwen3-Reranker-0.6B.Q8_0.gguf\", \"-ngl\", \"0\", \"--reranking\", \"--ctx-size\", \"4096\", \"--parallel\", \"1\"]"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:24.420460Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:4b:mtp:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:24.420533Z","level":"INFO","fields":{"message":"Cold load request for model","model_id":"qwen3.5:4b:mtp:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:25.415494Z","level":"INFO","fields":{"message":"Memory budget low (free: 1.89GB, need: 9.27GB). Evicting idle LRU model: qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:25.415513Z","level":"INFO","fields":{"message":"Sending SIGTERM to release llama-server mmap memory footprint","pid":3496,"model":"qwen3-embed:0.6b:8bit"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:25.479314Z","level":"INFO","fields":{"message":"Memory budget low (free: 2.59GB, need: 9.27GB). Evicting idle LRU model: qwen3-vl:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:25.479336Z","level":"INFO","fields":{"message":"Sending SIGTERM to release llama-server mmap memory footprint","pid":9840,"model":"qwen3-vl:2b:4bit"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:25.664016Z","level":"INFO","fields":{"message":"Memory budget low (free: 5.00GB, need: 9.27GB). Evicting idle LRU model: qwen3-reranker:0.6b:8bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:25.664034Z","level":"INFO","fields":{"message":"Sending SIGTERM to release llama-server mmap memory footprint","pid":5012,"model":"qwen3-reranker:0.6b:8bit"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:26.072185Z","level":"WARN","fields":{"message":"Insufficient VRAM headroom for speculative decoding — loading with spec-dec disabled","model_id":"qwen3.5:4b:mtp:4bit","free_gb":6.144282341003418,"needed_gb":9.271443367004395,"base_gb":3.7008979320526123,"spec_mode":"Mtp"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:26.397357Z","level":"INFO","fields":{"message":"Spawning llama-server","model_id":"qwen3.5:4b:mtp:4bit","port":11431,"gguf":"C:\\Users\\phoenixt\\.lmforge\\models\\qwen3.5-4b-mtp-gguf\\Qwen3.5-4B-UD-Q4_K_XL.gguf","role":"Chat"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:26.397638Z","level":"INFO","fields":{"message":"llama.cpp runtime plan","model_id":"qwen3.5:4b:mtp:4bit","ngl":0,"ctx_size":4096,"free_vram_gb":6.144282341003418,"footprint_total_gb":3.7008979320526123,"spec_mode":"Off"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:26.397651Z","level":"INFO","fields":{"message":"llama.cpp host-memory prefix cache enabled","cache_ram_mib":1024,"total_ram_gb":11.933998107910156},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:26.397655Z","level":"INFO","fields":{"message":"CPU-only: bounding context + parallel slots to contain KV cache","ctx_size":4096,"parallel":1},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:26.397659Z","level":"INFO","fields":{"message":"Spawning llama-server","executable":"C:\\Users\\phoenixt\\.lmforge\\engines\\llama-server.exe","active_variant":"cpu","args":"[\"--port\", \"11431\", \"--model\", \"C:\\\\Users\\\\phoenixt\\\\.lmforge\\\\models\\\\qwen3.5-4b-mtp-gguf\\\\Qwen3.5-4B-UD-Q4_K_XL.gguf\", \"-ngl\", \"0\", \"--cache-ram\", \"1024\", \"--ctx-size\", \"4096\", \"--parallel\", \"1\"]"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:38.968116Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:38.968251Z","level":"INFO","fields":{"message":"Cold load request for model","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:22:40.818618Z","level":"INFO","fields":{"message":"Spawning llama-server","model_id":"qwen3.5:2b:4bit","port":11432,"gguf":"C:\\Users\\phoenixt\\.lmforge\\models\\qwen3.5-2b-gguf\\Qwen3.5-2B-UD-Q4_K_XL.gguf","role":"Chat"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:40.818913Z","level":"INFO","fields":{"message":"llama.cpp runtime plan","model_id":"qwen3.5:2b:4bit","ngl":0,"ctx_size":4096,"free_vram_gb":2.0576164722442627,"footprint_total_gb":1.8352419137954712,"spec_mode":"Off"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:40.818928Z","level":"INFO","fields":{"message":"llama.cpp host-memory prefix cache enabled","cache_ram_mib":1024,"total_ram_gb":11.933998107910156},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:40.818932Z","level":"INFO","fields":{"message":"CPU-only: bounding context + parallel slots to contain KV cache","ctx_size":4096,"parallel":1},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:40.818936Z","level":"INFO","fields":{"message":"Spawning llama-server","executable":"C:\\Users\\phoenixt\\.lmforge\\engines\\llama-server.exe","active_variant":"cpu","args":"[\"--port\", \"11432\", \"--model\", \"C:\\\\Users\\\\phoenixt\\\\.lmforge\\\\models\\\\qwen3.5-2b-gguf\\\\Qwen3.5-2B-UD-Q4_K_XL.gguf\", \"-ngl\", \"0\", \"--cache-ram\", \"1024\", \"--ctx-size\", \"4096\", \"--parallel\", \"1\"]"},"target":"lmforge::engine::adapters::llamacpp"}
+{"timestamp":"2026-07-06T20:22:42.520258Z","level":"INFO","fields":{"message":"Thinking request routing","model":"qwen3.5:2b:4bit","stream":false,"can_use_budget":true,"thinking_budget":"Some(2048)","inline_think":true,"native_reasoning":false},"target":"lmforge::server::openai"}
+{"timestamp":"2026-07-06T20:22:42.520284Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:23:31.268977Z","level":"INFO","fields":{"message":"Call-1 (non-stream) budget exhausted; executing Call-2","thinking_budget":2048,"reasoning_len":5411,"remaining_tokens":64},"target":"lmforge::server::proxy"}
+{"timestamp":"2026-07-06T20:23:41.584414Z","level":"INFO","fields":{"message":"Thinking request routing","model":"qwen3.5:2b:4bit","stream":false,"can_use_budget":true,"thinking_budget":"Some(256)","inline_think":true,"native_reasoning":false},"target":"lmforge::server::openai"}
+{"timestamp":"2026-07-06T20:23:41.584444Z","level":"INFO","fields":{"message":"Model requested — checking active slots","model_id":"qwen3.5:2b:4bit"},"target":"lmforge::engine::process_pool"}
+{"timestamp":"2026-07-06T20:23:48.187025Z","level":"INFO","fields":{"message":"Call-1 (non-stream) budget exhausted; executing Call-2","thinking_budget":256,"reasoning_len":1004,"remaining_tokens":256},"target":"lmforge::server::proxy"}

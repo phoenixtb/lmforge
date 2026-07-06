@@ -56,7 +56,8 @@
 {#if open}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div class="dialog-backdrop" onclick={handleBackdrop} role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+  <!-- svelte-ignore a11y_interactive_supports_focus -->
+  <div class="dialog-backdrop" onclick={handleBackdrop} role="dialog" aria-modal="true" aria-labelledby="dlg-title" tabindex="-1">
     <div class="dialog" class:danger>
       <div class="dlg-header">
         {#if danger}<span class="dlg-icon">⚠</span>{/if}
@@ -67,6 +68,7 @@
       {/if}
       <div class="dlg-actions">
         <button class="btn btn--ghost btn--sm" onclick={handleCancel}>{cancelLabel}</button>
+        <!-- svelte-ignore a11y_autofocus -->
         <button
           class="btn btn--sm"
           class:btn--danger={danger}

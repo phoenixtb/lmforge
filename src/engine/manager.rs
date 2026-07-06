@@ -238,8 +238,14 @@ impl ResidencyInstance {
         for_request: bool,
     ) -> Result<ModelHandle> {
         match self {
-            Self::ProcessPool(r) => r.ensure_model(model_id, keep_alive_override, for_request).await,
-            Self::SharedServer(r) => r.ensure_model(model_id, keep_alive_override, for_request).await,
+            Self::ProcessPool(r) => {
+                r.ensure_model(model_id, keep_alive_override, for_request)
+                    .await
+            }
+            Self::SharedServer(r) => {
+                r.ensure_model(model_id, keep_alive_override, for_request)
+                    .await
+            }
         }
     }
 
@@ -307,8 +313,8 @@ impl EngineManager {
     ) -> Self {
         // Phase 3: SharedServerResidency is the default for oMLX.
         // Set LMFORGE_OMLX_SHARED=0 to revert to ProcessPoolResidency for debugging.
-        let use_shared = config.id == "omlx"
-            && std::env::var("LMFORGE_OMLX_SHARED").as_deref() != Ok("0");
+        let use_shared =
+            config.id == "omlx" && std::env::var("LMFORGE_OMLX_SHARED").as_deref() != Ok("0");
 
         let residency = if use_shared {
             // Resolve the oMLX executable from the adapter (it's an OmlxAdapter).

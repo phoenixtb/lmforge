@@ -31,6 +31,7 @@
 | [ADR-006](./architecture/ADR-006-engine-residency.md) | Engine residency (SharedServer vs ProcessPool) |
 | [ADR-007](./architecture/ADR-007-thinking-pipeline.md) | Thinking pipeline (adapters, orchestrator, fixes) |
 | [ADR-008](./architecture/ADR-008-pool-residency.md) | “Pool” = residency; first-class engines + validation matrix |
+| [ADR-009](./architecture/ADR-009-low-vram-discrete-admission.md) | Low-VRAM discrete GPU admission & offload (proposed) |
 
 ## Engineering (`docs/engineering/`)
 

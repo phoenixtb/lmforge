@@ -12,6 +12,7 @@ pub mod residency;
 pub mod shared_server;
 pub mod spec_observer;
 pub mod speculative;
+pub mod throughput;
 pub mod torch_backend;
 pub mod uv;
 pub mod variant;

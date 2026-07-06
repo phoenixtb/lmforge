@@ -73,15 +73,42 @@ from nvidia.com — that ships `nvidia-smi.exe`.
 
 | Your GPU | Asset pulled at init | Notes |
 |---|---|---|
-| NVIDIA (any RTX) | `llama-b9351-bin-win-cuda-{12.4\|13.1}-x64.zip` + `cudart-llama-bin-win-cuda-*-x64.zip` | CUDA variant chosen from `nvidia-smi`-reported runtime version |
-| AMD Radeon | `llama-b9351-bin-win-vulkan-x64.zip` | Vulkan; requires `vulkan-1.dll` (shipped by AMD Adrenalin) |
-| Intel iGPU / Arc | `llama-b9351-bin-win-vulkan-x64.zip` | Vulkan; requires Intel Arc/iGPU driver |
-| No GPU | `llama-b9351-bin-win-cpu-x64.zip` | CPU only |
+| NVIDIA (any RTX) | `llama-b9861-bin-win-cuda-{12.4\|13.3}-x64.zip` + `cudart-llama-bin-win-cuda-*-x64.zip` | CUDA variant chosen from `nvidia-smi`-reported runtime version |
+| AMD Radeon | `llama-b9861-bin-win-vulkan-x64.zip` | Vulkan; requires `vulkan-1.dll` (shipped by AMD Adrenalin) |
+| Intel iGPU / Arc | `llama-b9861-bin-win-vulkan-x64.zip` | Vulkan; requires Intel Arc/iGPU driver |
+| No GPU | `llama-b9861-bin-win-cpu-x64.zip` | CPU only |
 
 NVIDIA Windows users get the CUDA build (15–25 % faster than Vulkan on
 consumer Ada/Blackwell). Other vendors get Vulkan. Override with
 `$env:LMFORGE_LLAMACPP_VARIANT="cpu"` before `lmforge init` if you want
 to force the CPU build.
+
+### ⚠ Known issue: WDDM sysmem fallback (NVIDIA) — set the driver policy
+
+Windows' display driver model (WDDM) silently pages GPU allocations into
+shared system RAM under VRAM pressure instead of failing the allocation.
+For llama.cpp this is never what you want:
+
+- decode throughput drops 4–6x for the engine's whole lifetime, and
+- on some driver/GPU combinations (observed: RTX 5060 Ti / Blackwell,
+  driver 610.x, 2026-07-06) the spilled engine produces **corrupted,
+  looping output** from the first token until the process is restarted.
+  Repeated spill events can degrade the driver's memory state so that
+  *every* subsequent engine launch is corrupt until reboot.
+
+The paging decision is made by the driver's own heuristics and can trigger
+even when `nvidia-smi` reports free VRAM, so LMForge cannot fully prevent
+it from the application side (it evicts idle models and rejects loads whose
+footprint doesn't fit, and logs a warning when the spill throughput
+signature is detected). The reliable fix is a one-time driver setting:
+
+> **NVIDIA Control Panel → Manage 3D Settings → CUDA - Sysmem Fallback
+> Policy → Prefer No Sysmem Fallback**
+
+With the policy set, over-committed allocations fail fast and LMForge
+surfaces a clear load error instead of serving slow or corrupted output.
+`lmforge init` and `lmforge doctor` print this recommendation on
+Windows + NVIDIA hosts.
 
 ## A.3 Toolchains
 

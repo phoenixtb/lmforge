@@ -105,7 +105,6 @@
     display: flex;
     gap: 0;
     -webkit-app-region: no-drag;
-    app-region: no-drag;
   }
 
   .wbtn {

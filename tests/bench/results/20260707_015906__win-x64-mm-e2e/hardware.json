@@ -1,0 +1,26 @@
+{
+    "os":  "windows",
+    "arch":  "x86_64",
+    "is_tegra":  false,
+    "gpu_vendor":  "nvidia",
+    "vram_gb":  15.428711,
+    "unified_mem":  false,
+    "total_ram_gb":  11.933998,
+    "cpu_cores":  6,
+    "cpu_model":  "Intel(R) Core(TM) Ultra 7 265K",
+    "schema_version":  2,
+    "compute_cap":  [
+                        12,
+                        0
+                    ],
+    "cuda_runtime_version":  "13.3",
+    "cuda_driver_version":  "610.62",
+    "driver_tuple":  [
+                         610,
+                         62,
+                         0
+                     ],
+    "os_family":  "windows-native",
+    "is_wsl":  false,
+    "gpu_count":  1
+}

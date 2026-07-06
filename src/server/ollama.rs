@@ -52,10 +52,7 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
     // Load the index BEFORE ensure_model so we can reject vision requests for
     // non-vision models without paying the cold-start cost of loading the wrong model.
     let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex {
-            schema_version: 1,
-            models: vec![],
-        });
+        .unwrap_or_default();
 
     // Vision capability gate: reject image_url content blocks on non-vision models.
     if let Err(resp) =
@@ -133,9 +130,14 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
                 Bytes::from(openai_body),
             )
             .await
-        } else if has_think
+        } else if (has_think
             && thinking_adapter.supports_orchestrator()
-            && !thinking_adapter.inline_think()
+            && !thinking_adapter.inline_think())
+            // Native-reasoning models on inline-think engines (llama.cpp /
+            // SGLang) emit `<think>` tags in content regardless of the think
+            // flag — split them so raw tags never reach the client.
+            || (model_caps.map(|c| c.native_reasoning).unwrap_or(false)
+                && thinking_adapter.inline_think())
         {
             proxy::proxy_stream_rewriting_think_tags(
                 &client,
@@ -214,6 +216,16 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
         .await
         {
             Ok((status, text)) => {
+                // Native-reasoning + inline-think engine: split `<think>` tags
+                // out of content before translation (parity with streaming).
+                let text = if model_caps.map(|c| c.native_reasoning).unwrap_or(false)
+                    && thinking_adapter.inline_think()
+                    && (200..300).contains(&status)
+                {
+                    thinking::split_think_in_response(&text).unwrap_or(text)
+                } else {
+                    text
+                };
                 // Translate OpenAI response back to Ollama format
                 let ollama_resp = translate_openai_to_ollama_chat(&text);
                 Response::builder()
@@ -260,10 +272,7 @@ pub async fn generate(State(state): State<AppState>, body: Bytes) -> impl IntoRe
     let engine_port = guard.port();
 
     let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex {
-            schema_version: 1,
-            models: vec![],
-        });
+        .unwrap_or_default();
     if let Some(entry) = index.get(&model_id)
         && let Some(dir_name) = std::path::Path::new(&entry.path).file_name()
         && let Some(obj) = body_value.as_object_mut()
@@ -296,10 +305,7 @@ pub async fn generate(State(state): State<AppState>, body: Bytes) -> impl IntoRe
 /// `GET /api/tags` — Ollama-compatible model list
 pub async fn tags(State(state): State<AppState>) -> impl IntoResponse {
     let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex {
-            schema_version: 1,
-            models: vec![],
-        });
+        .unwrap_or_default();
 
     let models: Vec<serde_json::Value> = index
         .list()

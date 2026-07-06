@@ -525,11 +525,18 @@ pub async fn pull_core(
     if succeeded {
         // Update ModelIndex now that weights are on disk.
         if let Ok(mut idx) = crate::model::index::ModelIndex::load(&data_dir, &models_dir) {
-            let caps = crate::model::index::detect_capabilities(
+            let mut caps = crate::model::index::detect_capabilities(
                 &model_dir,
                 Some(&resolved.id),
                 Some(&resolved.hf_repo),
             );
+            // MTP is probed separately from GGUF tensor names (mirrors the CLI
+            // pull path in cli/pull.rs). Without this, daemon-pulled models get
+            // mtp=None and speculative decoding silently resolves to Off.
+            if matches!(resolved.format, crate::model::resolver::ModelFormat::Gguf) {
+                caps.mtp =
+                    crate::model::gguf_inspect::resolve_mtp_for_model(&model_dir, resolved.mtp);
+            }
             idx.add(crate::model::index::ModelEntry {
                 id: resolved.id.clone(),
                 path: model_dir.to_string_lossy().to_string(),
@@ -744,7 +751,10 @@ pub async fn model_unload(
             .unwrap();
     }
 
-    let msg = if matches!(state.residency_kind, crate::engine::ResidencyKind::SharedServer) {
+    let msg = if matches!(
+        state.residency_kind,
+        crate::engine::ResidencyKind::SharedServer
+    ) {
         if unload_all {
             r#"{"status":"unloading","message":"oMLX shared server will be stopped. Memory is managed natively by oMLX; models will reload on next request."}"#
         } else {
@@ -1164,12 +1174,8 @@ pub async fn storage_apply(
     }
 
     // Load current index before any destructive action.
-    let idx = crate::model::index::ModelIndex::load(&old_data_dir, &old_models_dir).unwrap_or_else(
-        |_| crate::model::index::ModelIndex {
-            schema_version: 2,
-            models: vec![],
-        },
-    );
+    let idx =
+        crate::model::index::ModelIndex::load(&old_data_dir, &old_models_dir).unwrap_or_default();
 
     // Build repull queue and collect models that would be permanently lost.
     let mut would_lose: Vec<String> = vec![];
@@ -1240,10 +1246,7 @@ pub async fn storage_apply(
                 );
             }
         }
-        let empty_idx = crate::model::index::ModelIndex {
-            schema_version: 2,
-            models: vec![],
-        };
+        let empty_idx = crate::model::index::ModelIndex::default();
         let _ = empty_idx.save(&old_data_dir, &old_models_dir);
     }
 
