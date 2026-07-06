@@ -139,6 +139,7 @@ fn seed_index(data_dir: &Path, models_dir: &Path, entries: &[(&str, Option<&str>
     let mut idx = ModelIndex {
         schema_version: 2,
         models: vec![],
+        ..Default::default()
     };
     for (id, hf_repo) in entries {
         let dir_name = id.replace([':', '/'], "-");

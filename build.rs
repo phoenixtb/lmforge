@@ -30,7 +30,9 @@ fn emit_build_provenance() {
     };
 
     let sha = git(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".into());
-    let dirty = git(&["status", "--porcelain"]).map(|s| !s.is_empty()).unwrap_or(false);
+    let dirty = git(&["status", "--porcelain"])
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
     let sha = if dirty { format!("{sha}-dirty") } else { sha };
     println!("cargo:rustc-env=LMFORGE_GIT_SHA={sha}");
 

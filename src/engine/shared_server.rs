@@ -7,9 +7,7 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::engine::keepalive;
-use crate::engine::manager::{
-    EngineMetrics, EngineState, EngineStatus, ModelHandle, ModelSlot,
-};
+use crate::engine::manager::{EngineMetrics, EngineState, EngineStatus, ModelHandle, ModelSlot};
 use crate::engine::registry::EngineConfig;
 use crate::engine::residency::{Residency, ResidencyKind};
 
@@ -140,7 +138,10 @@ impl SharedServerResidency {
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     fn health_url(&self) -> String {
-        format!("http://127.0.0.1:{}{}", self.port, self.config.health_endpoint)
+        format!(
+            "http://127.0.0.1:{}{}",
+            self.port, self.config.health_endpoint
+        )
     }
 
     fn models_url(&self) -> String {
@@ -215,8 +216,7 @@ impl SharedServerResidency {
             if self.is_healthy().await {
                 info!(port = self.port, "oMLX shared server is healthy");
                 // Rebuild reverse map: new server scan may have surfaced new model subdirs.
-                self.reverse_map =
-                    Self::build_reverse_map_from(&self.data_dir, &self.models_dir);
+                self.reverse_map = Self::build_reverse_map_from(&self.data_dir, &self.models_dir);
                 return Ok(());
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -329,10 +329,7 @@ impl SharedServerResidency {
                 .cloned()
                 .unwrap_or_else(|| entry.id.clone());
 
-            let vram_gb = entry
-                .actual_size
-                .unwrap_or(entry.estimated_size) as f32
-                / BYTES_PER_GIB;
+            let vram_gb = entry.actual_size.unwrap_or(entry.estimated_size) as f32 / BYTES_PER_GIB;
 
             let idle_secs = entry
                 .last_access
@@ -362,7 +359,11 @@ impl SharedServerResidency {
         // ── Atomically replace running_models with ground truth ───────────────
         state.running_models = desired;
         crate::server::metrics::set_active_models(
-            state.running_models.values().filter(|s| s.status == EngineStatus::Ready).count() as u64,
+            state
+                .running_models
+                .values()
+                .filter(|s| s.status == EngineStatus::Ready)
+                .count() as u64,
         );
     }
 }
@@ -392,7 +393,10 @@ impl SharedServerResidency {
         };
 
         for (lmf_id, omlx_id) in idle_ids {
-            let url = format!("http://127.0.0.1:{}/v1/models/{}/unload", self.port, omlx_id);
+            let url = format!(
+                "http://127.0.0.1:{}/v1/models/{}/unload",
+                self.port, omlx_id
+            );
             match self.http.post(&url).send().await {
                 Ok(r) if r.status().is_success() => {
                     tracing::info!("oMLX idle evict: unloaded {lmf_id} (omlx: {omlx_id})");
@@ -465,8 +469,7 @@ impl Residency for SharedServerResidency {
         if !known.contains(&omlx_model_id) {
             info!(
                 model_id,
-                omlx_model_id,
-                "Model not yet in oMLX discovery list — restarting server to rescan"
+                omlx_model_id, "Model not yet in oMLX discovery list — restarting server to rescan"
             );
             self.kill_process().await;
             self.spawn_server().await?;
@@ -476,18 +479,21 @@ impl Residency for SharedServerResidency {
         // The next heartbeat sync will replace it with real data from oMLX.
         {
             let mut state = self.state.write().await;
-            state.running_models.entry(model_id.to_string()).or_insert_with(|| {
-                let size_bytes = index.get(model_id).map(|m| m.size_bytes).unwrap_or(0);
-                ModelSlot {
-                    model_id: model_id.to_string(),
-                    port: self.port,
-                    status: EngineStatus::Starting,
-                    idle_secs: 0,
-                    vram_est_gb: size_bytes as f32 / BYTES_PER_GIB,
-                    spec_mode: crate::engine::speculative::SpecMode::Off,
-                    spec_stats: None,
-                }
-            });
+            state
+                .running_models
+                .entry(model_id.to_string())
+                .or_insert_with(|| {
+                    let size_bytes = index.get(model_id).map(|m| m.size_bytes).unwrap_or(0);
+                    ModelSlot {
+                        model_id: model_id.to_string(),
+                        port: self.port,
+                        status: EngineStatus::Starting,
+                        idle_secs: 0,
+                        vram_est_gb: size_bytes as f32 / BYTES_PER_GIB,
+                        spec_mode: crate::engine::speculative::SpecMode::Off,
+                        spec_stats: None,
+                    }
+                });
             state.clear_error(model_id);
         }
         self.notify().await;

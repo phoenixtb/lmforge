@@ -105,6 +105,7 @@ fn write_model_index(
     let index = ModelIndex {
         schema_version: 1,
         models,
+        ..Default::default()
     };
     std::fs::write(
         dir.join("models.json"),
@@ -924,6 +925,7 @@ async fn tc14_model_list_resolves_relative_index_against_custom_models_dir() {
             },
             added_at: "2025-01-01".to_string(),
         }],
+        ..Default::default()
     };
     idx.save(&data_dir, &models_dir).unwrap();
 

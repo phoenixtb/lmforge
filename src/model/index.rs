@@ -19,7 +19,9 @@ const SCHEMA_VERSION: u32 = 2;
 /// **Bump this by 1 whenever `detect_capabilities` output changes** (new signal,
 /// changed classification, etc.). History:
 ///   * 1 — locked-thinking / dedicated-reasoning hint detection (GGUF `phi4:reasoning`).
-pub const CAPS_DETECTOR_VERSION: u32 = 1;
+///   * 2 — MTP tensor probe in heal/scan (daemon-pulled GGUF models had mtp=None,
+///     silently disabling speculative decoding — 2026-07-07 e2e TC-E12 skip).
+pub const CAPS_DETECTOR_VERSION: u32 = 2;
 
 /// The models.json index
 #[derive(Debug, Serialize, Deserialize)]

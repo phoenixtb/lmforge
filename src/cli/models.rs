@@ -174,9 +174,14 @@ pub(crate) fn scan(
         let mut caps = detect_capabilities(&path, Some(&dir_name), hf_repo.as_deref());
         // `detect_capabilities` does not resolve MTP (probed separately at pull
         // time via gguf_inspect). Carry forward any previously-resolved value so
-        // a rescan never silently drops speculative-decoding support.
+        // a rescan never silently drops speculative-decoding support; when there
+        // is none (e.g. the entry was written by a path that skipped the probe),
+        // probe the GGUF tensor names directly.
         if caps.mtp.is_none() {
             caps.mtp = prior.and_then(|e| e.capabilities.mtp);
+        }
+        if caps.mtp.is_none() {
+            caps.mtp = crate::model::gguf_inspect::resolve_mtp_for_model(&path, None);
         }
         let format = prior
             .map(|e| e.format.clone())
@@ -294,9 +299,14 @@ pub(crate) fn heal_capabilities_if_stale(
         // — the same signal the pull path uses, and it carries markers like
         // `:reasoning` / `:thinking` that a bare directory name may drop.
         let mut caps = detect_capabilities(path, Some(&entry.id), entry.hf_repo.as_deref());
-        // Preserve the separately-probed MTP flag (see `scan`).
+        // Preserve the separately-probed MTP flag; probe the GGUF directly when
+        // absent (entries written by the daemon pull path before it resolved
+        // MTP have mtp=None, which silently disables speculative decoding).
         if caps.mtp.is_none() {
             caps.mtp = entry.capabilities.mtp;
+        }
+        if caps.mtp.is_none() {
+            caps.mtp = crate::model::gguf_inspect::resolve_mtp_for_model(path, None);
         }
         if !capabilities_eq(&entry.capabilities, &caps) {
             updated += 1;

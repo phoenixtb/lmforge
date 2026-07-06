@@ -164,7 +164,8 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     // Prepare body for thinking orchestration: extracts intent fields, applies
     // engine transforms + sampling defaults, strips LMForge-private fields, and
     // resolves routing flags (can_use_budget, inline_think, thinking_budget).
-    let thinking_ctx = thinking::prepare_request(&mut body_value, &state.engine_config.id, model_caps);
+    let thinking_ctx =
+        thinking::prepare_request(&mut body_value, &state.engine_config.id, model_caps);
     let has_think = thinking_ctx.has_think;
     let thinking_budget = thinking_ctx.thinking_budget;
     let stream_reasoning_deltas = thinking_ctx.stream_reasoning_deltas;
@@ -181,14 +182,18 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
     // emits the role token, and regenerates a duplicate answer. Inject the
     // model's detected turn-end tokens as `stop` (client-supplied `stop` wins).
     if state.engine_config.id == "omlx" {
-        let stops: Vec<String> = model_caps.map(|c| c.stop_tokens.clone()).unwrap_or_default();
+        let stops: Vec<String> = model_caps
+            .map(|c| c.stop_tokens.clone())
+            .unwrap_or_default();
         if !stops.is_empty()
             && let Some(obj) = body_value.as_object_mut()
             && !obj.contains_key("stop")
         {
             obj.insert(
                 "stop".to_string(),
-                serde_json::Value::Array(stops.into_iter().map(serde_json::Value::String).collect()),
+                serde_json::Value::Array(
+                    stops.into_iter().map(serde_json::Value::String).collect(),
+                ),
             );
         }
     }
@@ -345,14 +350,29 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
                     }
                 };
                 if native_reasoning_dedup {
-                    proxy::proxy_stream_dedup_native_reasoning(&client, engine_port, "/v1/chat/completions", forwarded_body)
-                        .await
+                    proxy::proxy_stream_dedup_native_reasoning(
+                        &client,
+                        engine_port,
+                        "/v1/chat/completions",
+                        forwarded_body,
+                    )
+                    .await
                 } else if thinking_ctx.is_native_reasoning && inline_think {
-                    proxy::proxy_stream_rewriting_think_tags(&client, engine_port, "/v1/chat/completions", forwarded_body)
-                        .await
+                    proxy::proxy_stream_rewriting_think_tags(
+                        &client,
+                        engine_port,
+                        "/v1/chat/completions",
+                        forwarded_body,
+                    )
+                    .await
                 } else {
-                    proxy::proxy_stream(&client, engine_port, "/v1/chat/completions", forwarded_body)
-                        .await
+                    proxy::proxy_stream(
+                        &client,
+                        engine_port,
+                        "/v1/chat/completions",
+                        forwarded_body,
+                    )
+                    .await
                 }
             }
         };

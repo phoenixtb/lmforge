@@ -1,0 +1,316 @@
+{
+  "schema_version": 2,
+  "models": [
+    {
+      "id": "qwen3-embed:0.6b:8bit",
+      "path": "qwen3-embedding-0.6b-8bit",
+      "format": "mlx",
+      "engine": "mlx",
+      "hf_repo": "mlx-community/Qwen3-Embedding-0.6B-8bit",
+      "size_bytes": 647414688,
+      "capabilities": {
+        "chat": false,
+        "embeddings": true,
+        "reranking": false,
+        "thinking": false,
+        "vision": false,
+        "mmproj_path": null,
+        "embedding_dims": 1024,
+        "pooling": null,
+        "mtp": null,
+        "stop_tokens": [],
+        "native_reasoning": false
+      },
+      "added_at": "2026-06-30T09:14:27.789612+00:00"
+    },
+    {
+      "id": "qwen3.5:2b:4bit",
+      "path": "qwen3.5-2b-4bit",
+      "format": "mlx",
+      "engine": "mlx",
+      "hf_repo": "mlx-community/Qwen3.5-2B-4bit",
+      "size_bytes": 1749079691,
+      "capabilities": {
+        "chat": true,
+        "embeddings": false,
+        "reranking": false,
+        "thinking": true,
+        "vision": false,
+        "mmproj_path": null,
+        "embedding_dims": null,
+        "pooling": null,
+        "mtp": null,
+        "stop_tokens": [
+          "<|im_end|>"
+        ],
+        "native_reasoning": false
+      },
+      "added_at": "2026-06-30T09:18:21.517588+00:00"
+    },
+    {
+      "id": "qwen3-vl:2b:4bit",
+      "path": "qwen3-vl-2b-instruct-4bit",
+      "format": "mlx",
+      "engine": "mlx",
+      "hf_repo": "mlx-community/Qwen3-VL-2B-Instruct-4bit",
+      "size_bytes": 1796349752,
+      "capabilities": {
+        "chat": true,
+        "embeddings": false,
+        "reranking": false,
+        "thinking": true,
+        "vision": true,
+        "mmproj_path": null,
+        "embedding_dims": null,
+        "pooling": null,
+        "mtp": null,
+        "stop_tokens": [
+          "<|im_end|>"
+        ],
+        "native_reasoning": true
+      },
+      "added_at": "2026-06-30T09:23:56.858409+00:00"
+    },
+    {
+      "id": "qwen3-reranker:0.6b:8bit",
+      "path": "qwen3-reranker-0.6b-mxfp8",
+      "format": "mlx",
+      "engine": "mlx",
+      "hf_repo": "mlx-community/Qwen3-Reranker-0.6B-mxfp8",
+      "size_bytes": 628760408,
+      "capabilities": {
+        "chat": true,
+        "embeddings": false,
+        "reranking": true,
+        "thinking": true,
+        "vision": false,
+        "mmproj_path": null,
+        "embedding_dims": null,
+        "pooling": null,
+        "mtp": null,
+        "stop_tokens": [
+          "<|im_end|>"
+        ],
+        "native_reasoning": false
+      },
+      "added_at": "2026-06-30T09:34:48.788101+00:00"
+    },
+    {
+      "id": "qwen3.5:4b:6bit",
+      "path": "qwen3.5-4b-6bit",
+      "format": "mlx",
+      "engine": "mlx",
+      "hf_repo": "mlx-community/Qwen3.5-4B-6bit",
+      "size_bytes": 4112326825,
+      "capabilities": {
+        "chat": true,
+        "embeddings": false,
+        "reranking": false,
+        "thinking": true,
+        "vision": false,
+        "mmproj_path": null,
+        "embedding_dims": null,
+        "pooling": null,
+        "mtp": null,
+        "stop_tokens": [
+          "<|im_end|>"
+        ],
+        "native_reasoning": false
+      },
+      "added_at": "2026-06-30T17:27:02.175313+00:00"
+    },
+    {
+      "id": "qwen3:1.7b:4bit",
+      "path": "qwen3-1.7b-4bit",
+      "format": "mlx",
+      "engine": "mlx",
+      "hf_repo": "mlx-community/Qwen3-1.7B-4bit",
+      "size_bytes": 982341391,
+      "capabilities": {
+        "chat": true,
+        "embeddings": false,
+        "reranking": false,
+        "thinking": true,
+        "vision": false,
+        "mmproj_path": null,
+        "embedding_dims": null,
+        "pooling": null,
+        "mtp": null,
+        "stop_tokens": [
+          "<|im_end|>"
+        ],
+        "native_reasoning": false
+      },
+      "added_at": "2026-06-30T17:28:02.659651+00:00"
+    },
+    {
+      "id": "qwen3:8b:4bit",
+      "path": "qwen3-8b-4bit",
+      "format": "mlx",
+      "engine": "mlx",
+      "hf_repo": "mlx-community/Qwen3-8B-4bit",
+      "size_bytes": 4622110691,
+      "capabilities": {
+        "chat": true,
+        "embeddings": false,
+        "reranking": false,
+        "thinking": true,
+        "vision": false,
+        "mmproj_path": null,
+        "embedding_dims": null,
+        "pooling": null,
+        "mtp": null,
+        "stop_tokens": [
+          "<|im_end|>"
+        ],
+        "native_reasoning": false
+      },
+      "added_at": "2026-06-30T17:36:30.245872+00:00"
+    },
+    {
+      "id": "qwen2.5:7b:4bit",
+      "path": "qwen2.5-7b-instruct-4bit",
+      "format": "mlx",
+      "engine": "mlx",
+      "hf_repo": "mlx-community/Qwen2.5-7B-Instruct-4bit",
+      "size_bytes": 4294215757,
+      "capabilities": {
+        "chat": true,
+        "embeddings": false,
+        "reranking": false,
+        "thinking": false,
+        "vision": false,
+        "mmproj_path": null,
+        "embedding_dims": null,
+        "pooling": null,
+        "mtp": null,
+        "stop_tokens": [
+          "<|im_end|>"
+        ],
+        "native_reasoning": false
+      },
+      "added_at": "2026-06-30T18:24:11.880086+00:00"
+    },
+    {
+      "id": "qwen3:4b:thinking:4bit",
+      "path": "qwen3-4b-thinking-2507-4bit",
+      "format": "mlx",
+      "engine": "mlx",
+      "hf_repo": "mlx-community/Qwen3-4B-Thinking-2507-4bit",
+      "size_bytes": 2277297818,
+      "capabilities": {
+        "chat": true,
+        "embeddings": false,
+        "reranking": false,
+        "thinking": true,
+        "vision": false,
+        "mmproj_path": null,
+        "embedding_dims": null,
+        "pooling": null,
+        "mtp": null,
+        "stop_tokens": [
+          "<|im_end|>"
+        ],
+        "native_reasoning": true
+      },
+      "added_at": "2026-07-01T18:13:20.525391+00:00"
+    },
+    {
+      "id": "phi4:4b:reasoning:4bit",
+      "path": "phi-4-mini-reasoning-4bit",
+      "format": "mlx",
+      "engine": "mlx",
+      "hf_repo": "mlx-community/Phi-4-mini-reasoning-4bit",
+      "size_bytes": 2177575606,
+      "capabilities": {
+        "chat": true,
+        "embeddings": false,
+        "reranking": false,
+        "thinking": true,
+        "vision": false,
+        "mmproj_path": null,
+        "embedding_dims": null,
+        "pooling": null,
+        "mtp": null,
+        "stop_tokens": [
+          "<|end|>"
+        ],
+        "native_reasoning": true
+      },
+      "added_at": "2026-07-01T18:15:06.188489+00:00"
+    },
+    {
+      "id": "phi4:4b:4bit",
+      "path": "phi-4-mini-instruct-4bit",
+      "format": "mlx",
+      "engine": "mlx",
+      "hf_repo": "mlx-community/Phi-4-mini-instruct-4bit",
+      "size_bytes": 2177574851,
+      "capabilities": {
+        "chat": true,
+        "embeddings": false,
+        "reranking": false,
+        "thinking": false,
+        "vision": false,
+        "mmproj_path": null,
+        "embedding_dims": null,
+        "pooling": null,
+        "mtp": null,
+        "stop_tokens": [
+          "<|end|>"
+        ],
+        "native_reasoning": false
+      },
+      "added_at": "2026-07-01T18:21:51.177291+00:00"
+    },
+    {
+      "id": "gemma3:4b:4bit",
+      "path": "gemma-3-4b-it-4bit",
+      "format": "mlx",
+      "engine": "mlx",
+      "hf_repo": "mlx-community/gemma-3-4b-it-4bit",
+      "size_bytes": 3439894985,
+      "capabilities": {
+        "chat": true,
+        "embeddings": false,
+        "reranking": false,
+        "thinking": false,
+        "vision": false,
+        "mmproj_path": null,
+        "embedding_dims": null,
+        "pooling": null,
+        "mtp": null,
+        "stop_tokens": [
+          "<end_of_turn>"
+        ],
+        "native_reasoning": false
+      },
+      "added_at": "2026-07-01T18:24:41.454869+00:00"
+    },
+    {
+      "id": "llama3.1:8b:4bit",
+      "path": "meta-llama-3.1-8b-instruct-4bit",
+      "format": "mlx",
+      "engine": "mlx",
+      "hf_repo": "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit",
+      "size_bytes": 4526682492,
+      "capabilities": {
+        "chat": true,
+        "embeddings": false,
+        "reranking": false,
+        "thinking": false,
+        "vision": false,
+        "mmproj_path": null,
+        "embedding_dims": null,
+        "pooling": null,
+        "mtp": null,
+        "stop_tokens": [
+          "<|eot_id|>"
+        ],
+        "native_reasoning": false
+      },
+      "added_at": "2026-07-01T18:27:41.934372+00:00"
+    }
+  ],
+  "caps_detector_version": 1
+}

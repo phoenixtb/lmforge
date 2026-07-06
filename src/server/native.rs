@@ -525,11 +525,18 @@ pub async fn pull_core(
     if succeeded {
         // Update ModelIndex now that weights are on disk.
         if let Ok(mut idx) = crate::model::index::ModelIndex::load(&data_dir, &models_dir) {
-            let caps = crate::model::index::detect_capabilities(
+            let mut caps = crate::model::index::detect_capabilities(
                 &model_dir,
                 Some(&resolved.id),
                 Some(&resolved.hf_repo),
             );
+            // MTP is probed separately from GGUF tensor names (mirrors the CLI
+            // pull path in cli/pull.rs). Without this, daemon-pulled models get
+            // mtp=None and speculative decoding silently resolves to Off.
+            if matches!(resolved.format, crate::model::resolver::ModelFormat::Gguf) {
+                caps.mtp =
+                    crate::model::gguf_inspect::resolve_mtp_for_model(&model_dir, resolved.mtp);
+            }
             idx.add(crate::model::index::ModelEntry {
                 id: resolved.id.clone(),
                 path: model_dir.to_string_lossy().to_string(),
