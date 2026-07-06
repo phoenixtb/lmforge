@@ -187,6 +187,62 @@ fn apply_native_reasoning_budget_floor(
     NATIVE_REASONING_MIN_TOKENS
 }
 
+/// Split inline `<think>…</think>` blocks out of `message.content` in an
+/// assembled (non-streaming) chat-completions response, moving the reasoning
+/// into `message.reasoning_content`. Used for native-reasoning models on
+/// inline-think engines (llama.cpp / SGLang) whose templates hardwire
+/// reasoning: llama-server doesn't recognise every such template, so raw tags
+/// would otherwise leak into `content`. Returns `None` when nothing changed
+/// (no tags present, or unparseable body) so callers can forward the original
+/// text untouched.
+pub fn split_think_in_response(text: &str) -> Option<String> {
+    if !text.contains("<think>") {
+        return None;
+    }
+    let mut val: serde_json::Value = serde_json::from_str(text).ok()?;
+    let choices = val.get_mut("choices")?.as_array_mut()?;
+    let mut changed = false;
+    for choice in choices.iter_mut() {
+        let Some(msg) = choice.get_mut("message").and_then(|m| m.as_object_mut()) else {
+            continue;
+        };
+        let Some(content) = msg.get("content").and_then(|c| c.as_str()) else {
+            continue;
+        };
+        if !content.contains("<think>") {
+            continue;
+        }
+        let mut splitter = ThinkSplitter::default();
+        let (mut reasoning, mut answer) = splitter.push(content);
+        let (r2, a2) = splitter.flush();
+        reasoning.push_str(&r2);
+        answer.push_str(&a2);
+        if reasoning.is_empty() {
+            continue;
+        }
+        let existing = msg
+            .get("reasoning_content")
+            .and_then(|r| r.as_str())
+            .unwrap_or("");
+        let merged = if existing.is_empty() {
+            reasoning
+        } else {
+            format!("{existing}{reasoning}")
+        };
+        msg.insert(
+            "reasoning_content".to_string(),
+            serde_json::Value::String(merged),
+        );
+        msg.insert("content".to_string(), serde_json::Value::String(answer));
+        changed = true;
+    }
+    if changed {
+        serde_json::to_string(&val).ok()
+    } else {
+        None
+    }
+}
+
 /// Default reasoning-phase token cap applied when a client requests thinking
 /// (`think:true`) on an oMLX thinking model but omits `thinking_budget`.
 ///
@@ -644,6 +700,34 @@ pub fn extract_stream_reasoning_deltas(body: &serde_json::Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_think_in_response_moves_tags_to_reasoning() {
+        let resp = r#"{"choices":[{"message":{"role":"assistant","content":"<think>step by step</think>The answer is 42."},"finish_reason":"stop"}]}"#;
+        let out = split_think_in_response(resp).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let msg = &v["choices"][0]["message"];
+        assert_eq!(msg["reasoning_content"], "step by step");
+        assert_eq!(msg["content"], "The answer is 42.");
+    }
+
+    #[test]
+    fn split_think_in_response_unterminated_becomes_reasoning() {
+        // finish=length mid-think: everything after <think> is reasoning,
+        // content ends up empty (mirrors the streaming splitter's flush).
+        let resp = r#"{"choices":[{"message":{"role":"assistant","content":"<think>still going and going"},"finish_reason":"length"}]}"#;
+        let out = split_think_in_response(resp).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let msg = &v["choices"][0]["message"];
+        assert_eq!(msg["reasoning_content"], "still going and going");
+        assert_eq!(msg["content"], "");
+    }
+
+    #[test]
+    fn split_think_in_response_no_tags_is_noop() {
+        let resp = r#"{"choices":[{"message":{"role":"assistant","content":"plain answer"},"finish_reason":"stop"}]}"#;
+        assert!(split_think_in_response(resp).is_none());
+    }
 
     #[test]
     fn test_extract_think_tags_with_thinking() {

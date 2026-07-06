@@ -1620,10 +1620,14 @@ pub async fn proxy_stream_rewriting_think_tags(
     let mut byte_stream = resp.bytes_stream();
 
     let output = stream! {
-        // Safety guard — same limits as proxy_request_assembling_stream.
-        // Without these, a runaway oMLX generation streams forever to the client.
-        const MAX_SSE_LINES: usize = 4096;
-        const MAX_TOTAL_BYTES: usize = 768 * 1024; // 768 KB
+        // Safety guard against a runaway generation streaming forever. Sized to
+        // the Call-1 accumulator's guards (16384 lines / ~1 MB of text): this
+        // path also carries native-reasoning models (phi4:reasoning) whose
+        // max_tokens floor is 4096 — the previous 4096-line cap could abort a
+        // legitimate full-budget generation. The engine's own max_tokens bounds
+        // generation; these are backstops only.
+        const MAX_SSE_LINES: usize = 16384;
+        const MAX_TOTAL_BYTES: usize = 4 * 1024 * 1024; // 4 MB
         let mut sse_line_count: usize = 0;
         let mut total_bytes: usize = 0;
 

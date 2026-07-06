@@ -210,6 +210,8 @@ export interface ModelCapabilities {
   reranking: boolean;
   vision: boolean;
   code?: boolean;
+  /** Reasoning is hardwired in the model's template — always on, not toggleable. */
+  native_reasoning?: boolean;
 }
 
 export interface ModelEntry {

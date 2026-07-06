@@ -133,9 +133,14 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
                 Bytes::from(openai_body),
             )
             .await
-        } else if has_think
+        } else if (has_think
             && thinking_adapter.supports_orchestrator()
-            && !thinking_adapter.inline_think()
+            && !thinking_adapter.inline_think())
+            // Native-reasoning models on inline-think engines (llama.cpp /
+            // SGLang) emit `<think>` tags in content regardless of the think
+            // flag — split them so raw tags never reach the client.
+            || (model_caps.map(|c| c.native_reasoning).unwrap_or(false)
+                && thinking_adapter.inline_think())
         {
             proxy::proxy_stream_rewriting_think_tags(
                 &client,
@@ -214,6 +219,16 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
         .await
         {
             Ok((status, text)) => {
+                // Native-reasoning + inline-think engine: split `<think>` tags
+                // out of content before translation (parity with streaming).
+                let text = if model_caps.map(|c| c.native_reasoning).unwrap_or(false)
+                    && thinking_adapter.inline_think()
+                    && (200..300).contains(&status)
+                {
+                    thinking::split_think_in_response(&text).unwrap_or(text)
+                } else {
+                    text
+                };
                 // Translate OpenAI response back to Ollama format
                 let ollama_resp = translate_openai_to_ollama_chat(&text);
                 Response::builder()

@@ -90,6 +90,10 @@
   $: selModel = models.find((m) => m.id === selected);
   $: visionOn = !!selModel?.capabilities.vision;
   $: thinkingSupported = !!selModel?.capabilities.thinking;
+  // Native-reasoning models (phi4:reasoning, R1 distills) always think — the
+  // toggle is shown locked-on and no think flag / budget goes on the wire (the
+  // daemon splits their inline <think> output on the passthrough path).
+  $: nativeReasoning = !!selModel?.capabilities.native_reasoning;
   $: chatModels = models.filter(isChatCapable);
   $: canSend = !busy && !!selected && (input.trim().length > 0 || pendingImages.length > 0);
 
@@ -157,8 +161,9 @@
     msgs = [...msgs, { role: 'assistant', text: '', streaming: true }];
     await scrollToBottom();
 
-    // Only send the think flag for models that support it.
-    const useThink = thinkingSupported ? thinking : undefined;
+    // Only send the think flag for models that support it. Native-reasoning
+    // models never get the flag: reasoning is hardwired, not toggleable.
+    const useThink = thinkingSupported && !nativeReasoning ? thinking : undefined;
 
     busy = true;
     abort = new AbortController();
@@ -304,11 +309,14 @@
       {#if thinkingSupported}
         <button
           class="toggle"
-          class:on={thinking}
+          class:on={thinking || nativeReasoning}
+          class:locked={nativeReasoning}
           onclick={toggleThinking}
-          disabled={busy}
-          title="Toggle the model's reasoning/thinking mode (snaps sampling to the thinking profile)"
-          aria-pressed={thinking}
+          disabled={busy || nativeReasoning}
+          title={nativeReasoning
+            ? 'This model always reasons — thinking is built into its template and cannot be toggled off'
+            : 'Toggle the model\'s reasoning/thinking mode (snaps sampling to the thinking profile)'}
+          aria-pressed={thinking || nativeReasoning}
         >
           <span class="knob"></span>
           think
@@ -318,7 +326,7 @@
         temp
         <input type="number" min="0" max="2" step="0.1" bind:value={temperature} disabled={busy} />
       </label>
-      {#if thinkingSupported}
+      {#if thinkingSupported && !nativeReasoning}
         <label
           class="ctl"
           title="Thinking budget — max reasoning tokens the model may spend before it must answer. Applies only when think is on; the answer still gets the full 'max' on top."
@@ -585,6 +593,8 @@
   .toggle.on .knob { background: var(--accent); }
   .toggle.on .knob::after { transform: translateX(6px); }
   .toggle:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* Native-reasoning models: toggle locked on — full on-state visuals, just not clickable. */
+  .toggle.locked:disabled { opacity: 1; cursor: default; }
 
   .body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 

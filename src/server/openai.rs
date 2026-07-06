@@ -333,7 +333,13 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
             _ => {
                 // Plain passthrough (non-think, or non-orchestrator engine).
                 // Native-reasoning oMLX models route through the dedup proxy to
-                // strip the truncation echo (Fix #1); everything else streams raw.
+                // strip the truncation echo (Fix #1). Native-reasoning models on
+                // inline-think engines (llama.cpp / SGLang) always emit
+                // `<think>…</think>` in content regardless of the think toggle
+                // (their template hardwires reasoning), and llama-server doesn't
+                // recognise every such template — route them through the tag
+                // rewriter so raw tags never reach the client. Everything else
+                // streams raw.
                 let forwarded_body = match serde_json::to_vec(&body_value) {
                     Ok(b) => Bytes::from(b),
                     Err(e) => {
@@ -345,6 +351,9 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
                 };
                 if native_reasoning_dedup {
                     proxy::proxy_stream_dedup_native_reasoning(&client, engine_port, "/v1/chat/completions", forwarded_body)
+                        .await
+                } else if thinking_ctx.is_native_reasoning && inline_think {
+                    proxy::proxy_stream_rewriting_think_tags(&client, engine_port, "/v1/chat/completions", forwarded_body)
                         .await
                 } else {
                     proxy::proxy_stream(&client, engine_port, "/v1/chat/completions", forwarded_body)
@@ -442,11 +451,25 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> imp
         match proxy::proxy_request(&client, engine_port, "/v1/chat/completions", forwarded_body)
             .await
         {
-            Ok((status, text)) => Response::builder()
-                .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(text))
-                .unwrap(),
+            Ok((status, text)) => {
+                // Native-reasoning models on inline-think engines emit
+                // `<think>` tags in content regardless of the think toggle —
+                // split them into reasoning_content (mirrors the streaming
+                // rewriter path).
+                let text = if thinking_ctx.is_native_reasoning
+                    && inline_think
+                    && (200..300).contains(&status)
+                {
+                    thinking::split_think_in_response(&text).unwrap_or(text)
+                } else {
+                    text
+                };
+                Response::builder()
+                    .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(text))
+                    .unwrap()
+            }
             Err((status, text)) => Response::builder()
                 .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
                 .header(header::CONTENT_TYPE, "application/json")
