@@ -1,0 +1,27 @@
+{
+    "active_pull":  null,
+    "catalogs_dir":  "C:\\Users\\aist1-windows\\.lmforge\\catalogs",
+    "daemon_build":  {
+                         "sha":  "201079c",
+                         "version":  "0.1.5"
+                     },
+    "engine":  {
+                   "id":  "llamacpp",
+                   "version":  "b9861"
+               },
+    "last_errors":  {
+
+                    },
+    "metrics":  {
+                    "requests_total":  0,
+                    "restart_count":  0,
+                    "ttft_avg_ms":  0.0,
+                    "uptime_secs":  0
+                },
+    "migration":  null,
+    "overall_status":  "ready",
+    "restart_required":  false,
+    "running_models":  [
+
+                       ]
+}
