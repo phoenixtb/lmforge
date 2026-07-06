@@ -1,4 +1,4 @@
-param([string]$Exe = "$env:USERPROFILE\.lmforge\engines\llama-server.exe")
+﻿param([string]$Exe = "$env:USERPROFILE\.lmforge\engines\llama-server.exe")
 
 $model  = "$env:USERPROFILE\.lmforge\models\qwen3.5-2b-gguf\Qwen3.5-2B-UD-Q4_K_XL.gguf"
 $sargs  = @("-m", $model, "--port", "8090", "-ngl", "99", "--ctx-checkpoints", "0")
