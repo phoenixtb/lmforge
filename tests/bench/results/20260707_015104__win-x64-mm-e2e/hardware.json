@@ -1,0 +1,19 @@
+{
+    "os":  "windows",
+    "arch":  "x86_64",
+    "is_tegra":  false,
+    "gpu_vendor":  "none",
+    "vram_gb":  0.0,
+    "unified_mem":  false,
+    "total_ram_gb":  11.933998,
+    "cpu_cores":  8,
+    "cpu_model":  "Intel(R) Core(TM) Ultra 7 265K",
+    "schema_version":  2,
+    "compute_cap":  null,
+    "cuda_runtime_version":  null,
+    "cuda_driver_version":  null,
+    "driver_tuple":  null,
+    "os_family":  "windows-native",
+    "is_wsl":  false,
+    "gpu_count":  0
+}

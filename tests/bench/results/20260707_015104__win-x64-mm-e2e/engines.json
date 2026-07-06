@@ -1,0 +1,115 @@
+{
+    "active_engine_id":  "llamacpp",
+    "engines":  [
+                    {
+                        "active":  false,
+                        "compatible":  false,
+                        "id":  "omlx",
+                        "incompatible_reason":  "OS/arch/gpu mismatch (Windows X86_64 GPU:None)",
+                        "install_method":  "brew",
+                        "installed":  false,
+                        "matches_gpu":  null,
+                        "max_compute_cap":  null,
+                        "min_compute_cap":  null,
+                        "min_vram_gb":  null,
+                        "model_format":  "mlx",
+                        "name":  "oMLX",
+                        "supported_os_families":  [
+                                                      "darwin"
+                                                  ],
+                        "supports_embeddings":  true,
+                        "supports_reranking":  true,
+                        "tier":  "default",
+                        "version":  "0.4.4"
+                    },
+                    {
+                        "active":  false,
+                        "compatible":  false,
+                        "id":  "sglang",
+                        "incompatible_reason":  "OS/arch/gpu mismatch (Windows X86_64 GPU:None)",
+                        "install_method":  "pip",
+                        "installed":  false,
+                        "matches_gpu":  "nvidia",
+                        "max_compute_cap":  "10.3",
+                        "min_compute_cap":  "9.0",
+                        "min_vram_gb":  8.0,
+                        "model_format":  "safetensors",
+                        "name":  "SGLang",
+                        "supported_os_families":  [
+                                                      "linux"
+                                                  ],
+                        "supports_embeddings":  true,
+                        "supports_reranking":  false,
+                        "tier":  "experimental",
+                        "version":  "0.5.10.post1"
+                    },
+                    {
+                        "active":  true,
+                        "compatible":  true,
+                        "id":  "llamacpp",
+                        "incompatible_reason":  null,
+                        "install_method":  "binary",
+                        "installed":  true,
+                        "matches_gpu":  null,
+                        "max_compute_cap":  null,
+                        "min_compute_cap":  null,
+                        "min_vram_gb":  null,
+                        "model_format":  "gguf",
+                        "name":  "llama.cpp",
+                        "supported_os_families":  [
+                                                      "linux",
+                                                      "windows-native",
+                                                      "windows-wsl2"
+                                                  ],
+                        "supports_embeddings":  true,
+                        "supports_reranking":  true,
+                        "tier":  "default",
+                        "version":  "b9861"
+                    },
+                    {
+                        "active":  false,
+                        "compatible":  false,
+                        "id":  "vllm",
+                        "incompatible_reason":  "OS/arch/gpu mismatch (Windows X86_64 GPU:None)",
+                        "install_method":  "pip",
+                        "installed":  false,
+                        "matches_gpu":  "nvidia",
+                        "max_compute_cap":  null,
+                        "min_compute_cap":  "7.5",
+                        "min_vram_gb":  12.0,
+                        "model_format":  "safetensors",
+                        "name":  "vLLM",
+                        "supported_os_families":  [
+                                                      "linux",
+                                                      "windows-wsl2"
+                                                  ],
+                        "supports_embeddings":  false,
+                        "supports_reranking":  false,
+                        "tier":  "opt-in",
+                        "version":  "0.21.0"
+                    },
+                    {
+                        "active":  false,
+                        "compatible":  false,
+                        "id":  "tabbyapi",
+                        "incompatible_reason":  "OS/arch/gpu mismatch (Windows X86_64 GPU:None)",
+                        "install_method":  "pip",
+                        "installed":  false,
+                        "matches_gpu":  "nvidia",
+                        "max_compute_cap":  null,
+                        "min_compute_cap":  "7.5",
+                        "min_vram_gb":  6.0,
+                        "model_format":  "exl3",
+                        "name":  "TabbyAPI (ExLlamaV3)",
+                        "supported_os_families":  [
+                                                      "linux",
+                                                      "windows-wsl2"
+                                                  ],
+                        "supports_embeddings":  false,
+                        "supports_reranking":  false,
+                        "tier":  "opt-in",
+                        "version":  "0.0.37"
+                    }
+                ],
+    "has_hardware_profile":  true
+}
