@@ -30,6 +30,7 @@ pub enum ResidencyKind {
 /// manager translates into these calls.
 ///
 /// Using async fn in trait (stable since Rust 1.75 / edition 2021+).
+#[allow(async_fn_in_trait)]
 pub trait Residency: Send {
     /// Returns the residency kind (static property of the implementation).
     fn kind(&self) -> ResidencyKind;

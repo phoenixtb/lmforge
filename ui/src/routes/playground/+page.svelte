@@ -292,7 +292,7 @@
 <svelte:head><title>LMForge — Playground</title></svelte:head>
 
 <div class="page">
-  <div class="toolbar" data-tauri-drag-region onpointerdown={dragOnEmpty} role="toolbar">
+  <div class="toolbar" data-tauri-drag-region onpointerdown={dragOnEmpty} role="toolbar" tabindex="-1">
     <h1>Playground</h1>
     <div class="tr">
       <select class="model-sel" bind:value={selected} disabled={busy} aria-label="Model">

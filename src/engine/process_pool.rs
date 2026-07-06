@@ -426,6 +426,7 @@ impl ProcessPoolResidency {
     /// Called when the first spawn dies in <5s while spec-dec was active. Mutates
     /// `plan` to disable spec, records any broken draft pair, spawns once more, and
     /// waits for health.  Returns the new `ActiveEngine` on success.
+    #[allow(clippy::too_many_arguments)]
     async fn try_speculative_retry(
         &mut self,
         model_id: &str,

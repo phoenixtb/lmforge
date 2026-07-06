@@ -296,7 +296,7 @@
 <div class="page">
 
   <!-- Toolbar -->
-  <div class="toolbar" data-tauri-drag-region onpointerdown={dragOnEmpty}>
+  <div class="toolbar" data-tauri-drag-region onpointerdown={dragOnEmpty} role="toolbar" tabindex="-1">
     <h1>Settings</h1>
   </div>
 

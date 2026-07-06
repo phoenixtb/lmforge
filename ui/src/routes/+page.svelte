@@ -156,7 +156,7 @@
 
 <div class="page">
 
-  <div class="toolbar" data-tauri-drag-region onpointerdown={dragOnEmpty} role="toolbar">
+  <div class="toolbar" data-tauri-drag-region onpointerdown={dragOnEmpty} role="toolbar" tabindex="-1">
     <h1>Overview</h1>
     <div class="tr">
       {#if $isOnline}
@@ -466,7 +466,6 @@
   .ml { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
   .ms { font-size: 9.5px; color: var(--text-3); opacity: 0.7; }
   .metric--dim { opacity: 0.4; pointer-events: none; }
-  .metric--dim .mv { color: var(--text-3); }
 
   /* ── Layout panels ───────────────────────────────────────────────────────── */
   .panels { display: flex; gap: 12px; flex: 1; min-height: 0; overflow: hidden; }

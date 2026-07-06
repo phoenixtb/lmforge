@@ -124,7 +124,7 @@
 <svelte:head><title>LMForge — Observability</title></svelte:head>
 
 <div class="page">
-  <div class="toolbar" data-tauri-drag-region onpointerdown={dragOnEmpty} role="toolbar">
+  <div class="toolbar" data-tauri-drag-region onpointerdown={dragOnEmpty} role="toolbar" tabindex="-1">
     <h1>Observability</h1>
     <div class="tr">
       {#if $isOnline}

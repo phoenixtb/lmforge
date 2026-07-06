@@ -250,7 +250,7 @@
 <div class="page">
 
   <!-- Toolbar -->
-  <div class="toolbar" data-tauri-drag-region onpointerdown={dragOnEmpty}>
+  <div class="toolbar" data-tauri-drag-region onpointerdown={dragOnEmpty} role="toolbar" tabindex="-1">
     <h1>Model Library</h1>
     <div class="toolbar-right">
       {#if !loadingModels}
