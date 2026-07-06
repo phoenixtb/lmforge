@@ -284,7 +284,10 @@ pub fn apply_thinking_sampling_defaults(body: &mut serde_json::Value, has_think:
         return;
     };
     if !obj.contains_key("temperature") {
-        obj.insert("temperature".into(), serde_json::Value::from(THINK_DEFAULT_TEMPERATURE));
+        obj.insert(
+            "temperature".into(),
+            serde_json::Value::from(THINK_DEFAULT_TEMPERATURE),
+        );
     }
     if !obj.contains_key("top_p") {
         obj.insert("top_p".into(), serde_json::Value::from(THINK_DEFAULT_TOP_P));
@@ -300,7 +303,10 @@ pub fn apply_thinking_sampling_defaults(body: &mut serde_json::Value, has_think:
         || obj.contains_key("frequency_penalty")
         || obj.contains_key("repetition_penalty");
     if !has_any_penalty {
-        obj.insert("presence_penalty".into(), serde_json::Value::from(THINK_DEFAULT_PRESENCE_PENALTY));
+        obj.insert(
+            "presence_penalty".into(),
+            serde_json::Value::from(THINK_DEFAULT_PRESENCE_PENALTY),
+        );
     }
 }
 
@@ -340,7 +346,6 @@ pub fn extract_think_tags(content: &str) -> (Option<String>, String) {
     }
     (None, content.to_string())
 }
-
 
 /// Inject `reasoning_content` field into a non-streaming response JSON.
 /// Modifies the response in-place if think tags are found in the content.
@@ -640,7 +645,9 @@ pub fn apply_think_for_engine(
                 // enable_thinking=true → the model reasons until max_tokens with no
                 // answer ("blank reply bug", baseline linux-x86_64-cpu run 972dc63).
                 // Inject enable_thinking:false to make thinking opt-in on these engines.
-                debug!("Fix #3: no think intent on thinking model — injecting enable_thinking:false");
+                debug!(
+                    "Fix #3: no think intent on thinking model — injecting enable_thinking:false"
+                );
                 if let Some(obj) = body.as_object_mut() {
                     let kwargs = obj
                         .entry("chat_template_kwargs")
@@ -1321,8 +1328,10 @@ mod tests {
             "model": "x", "messages": [], "think": true, "repetition_penalty": 1.15
         });
         apply_thinking_sampling_defaults(&mut body, true);
-        assert!(body.get("presence_penalty").is_none(),
-            "must not seed presence_penalty when client already set a repetition control");
+        assert!(
+            body.get("presence_penalty").is_none(),
+            "must not seed presence_penalty when client already set a repetition control"
+        );
         assert_eq!(body["repetition_penalty"], 1.15);
     }
 
@@ -1404,7 +1413,10 @@ mod tests {
         let mut body = serde_json::json!({"model": "x", "messages": [], "max_tokens": 8192});
         let eff = apply_native_reasoning_budget_floor(&mut body, true, 8192);
         assert_eq!(eff, 8192);
-        assert_eq!(body["max_tokens"], 8192, "client value above floor must be preserved");
+        assert_eq!(
+            body["max_tokens"], 8192,
+            "client value above floor must be preserved"
+        );
     }
 
     #[test]
@@ -1412,7 +1424,10 @@ mod tests {
         let mut body = serde_json::json!({"model": "x", "messages": [], "max_tokens": 256});
         let eff = apply_native_reasoning_budget_floor(&mut body, false, 256);
         assert_eq!(eff, 256);
-        assert_eq!(body["max_tokens"], 256, "non-native models must not be floored");
+        assert_eq!(
+            body["max_tokens"], 256,
+            "non-native models must not be floored"
+        );
     }
 
     #[test]

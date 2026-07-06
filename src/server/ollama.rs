@@ -52,10 +52,7 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> impl IntoRespon
     // Load the index BEFORE ensure_model so we can reject vision requests for
     // non-vision models without paying the cold-start cost of loading the wrong model.
     let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex {
-            schema_version: 1,
-            models: vec![],
-        });
+        .unwrap_or_default();
 
     // Vision capability gate: reject image_url content blocks on non-vision models.
     if let Err(resp) =
@@ -275,10 +272,7 @@ pub async fn generate(State(state): State<AppState>, body: Bytes) -> impl IntoRe
     let engine_port = guard.port();
 
     let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex {
-            schema_version: 1,
-            models: vec![],
-        });
+        .unwrap_or_default();
     if let Some(entry) = index.get(&model_id)
         && let Some(dir_name) = std::path::Path::new(&entry.path).file_name()
         && let Some(obj) = body_value.as_object_mut()
@@ -311,10 +305,7 @@ pub async fn generate(State(state): State<AppState>, body: Bytes) -> impl IntoRe
 /// `GET /api/tags` — Ollama-compatible model list
 pub async fn tags(State(state): State<AppState>) -> impl IntoResponse {
     let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex {
-            schema_version: 1,
-            models: vec![],
-        });
+        .unwrap_or_default();
 
     let models: Vec<serde_json::Value> = index
         .list()

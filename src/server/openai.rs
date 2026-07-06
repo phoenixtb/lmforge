@@ -15,12 +15,7 @@ fn load_index(
     data_dir: &std::path::Path,
     models_dir: &std::path::Path,
 ) -> crate::model::index::ModelIndex {
-    crate::model::index::ModelIndex::load(data_dir, models_dir).unwrap_or_else(|_| {
-        crate::model::index::ModelIndex {
-            schema_version: 1,
-            models: vec![],
-        }
-    })
+    crate::model::index::ModelIndex::load(data_dir, models_dir).unwrap_or_default()
 }
 
 /// Returns true if the request body contains any multimodal image content block.
@@ -505,10 +500,7 @@ pub async fn completions(State(state): State<AppState>, body: Bytes) -> impl Int
     let engine_port = guard.port();
 
     let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex {
-            schema_version: 1,
-            models: vec![],
-        });
+        .unwrap_or_default();
     // Same engine-aware rewrite as `/v1/chat/completions`. See the comment
     // there for why vLLM is exempt.
     let needs_basename_rewrite = state.engine_config.id != "vllm";
@@ -777,10 +769,7 @@ pub async fn model_get(
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
     let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex {
-            schema_version: 1,
-            models: vec![],
-        });
+        .unwrap_or_default();
 
     let Some(m) = index.get(&id) else {
         let body = format!(
@@ -824,10 +813,7 @@ pub async fn model_get(
 /// `GET /v1/models` — List available models with capability metadata
 pub async fn models(State(state): State<AppState>) -> impl IntoResponse {
     let index = crate::model::index::ModelIndex::load(&state.data_dir, &state.models_dir)
-        .unwrap_or_else(|_| crate::model::index::ModelIndex {
-            schema_version: 1,
-            models: vec![],
-        });
+        .unwrap_or_default();
 
     let data: Vec<serde_json::Value> = index
         .list()
@@ -865,10 +851,7 @@ mod tests {
     use crate::model::index::{ModelCapabilities, ModelEntry, ModelIndex};
 
     fn empty_index() -> ModelIndex {
-        ModelIndex {
-            schema_version: 1,
-            models: vec![],
-        }
+        ModelIndex::default()
     }
 
     fn index_with(model_id: &str, vision: bool) -> ModelIndex {
@@ -888,6 +871,7 @@ mod tests {
                 },
                 added_at: "2026-01-01".to_string(),
             }],
+            ..Default::default()
         }
     }
 

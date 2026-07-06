@@ -531,10 +531,7 @@ impl ProcessPoolResidency {
             Ok(idx) => idx,
             Err(e) => {
                 warn!(error = %e, "Failed to load models.json — index will be empty");
-                crate::model::index::ModelIndex {
-                    schema_version: 1,
-                    models: vec![],
-                }
+                crate::model::index::ModelIndex::default()
             }
         };
         let role = index

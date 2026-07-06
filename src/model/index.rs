@@ -8,11 +8,39 @@ use tracing::{debug, info};
 /// only on save. v1 (absolute) indexes load fine and migrate to v2 on next save.
 const SCHEMA_VERSION: u32 = 2;
 
+/// Version of the capability *detector* (`detect_capabilities`), independent of
+/// the on-disk `SCHEMA_VERSION`. Capabilities are persisted in `models.json` and
+/// served verbatim (`GET /lf/model/list` never re-detects), so a detector fix in
+/// a new build does **not** reach models pulled by an older build until they are
+/// re-detected. Bumping this constant makes the daemon re-detect every model's
+/// capabilities once on next start (see `cli::models::heal_capabilities_if_stale`),
+/// so fixes self-heal without a manual `lmforge models scan`.
+///
+/// **Bump this by 1 whenever `detect_capabilities` output changes** (new signal,
+/// changed classification, etc.). History:
+///   * 1 — locked-thinking / dedicated-reasoning hint detection (GGUF `phi4:reasoning`).
+pub const CAPS_DETECTOR_VERSION: u32 = 1;
+
 /// The models.json index
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ModelIndex {
     pub schema_version: u32,
     pub models: Vec<ModelEntry>,
+    /// Detector version that produced the persisted `capabilities`. Absent in
+    /// indexes written before this field existed → deserializes to `0`, which is
+    /// `< CAPS_DETECTOR_VERSION`, triggering a one-time self-heal re-detect.
+    #[serde(default)]
+    pub caps_detector_version: u32,
+}
+
+impl Default for ModelIndex {
+    fn default() -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            models: vec![],
+            caps_detector_version: CAPS_DETECTOR_VERSION,
+        }
+    }
 }
 
 /// A single model entry in the index
@@ -88,10 +116,7 @@ impl ModelIndex {
     pub fn load(data_dir: &std::path::Path, models_dir: &std::path::Path) -> Result<Self> {
         let path = data_dir.join("models.json");
         if !path.exists() {
-            return Ok(Self {
-                schema_version: SCHEMA_VERSION,
-                models: vec![],
-            });
+            return Ok(Self::default());
         }
 
         let content = std::fs::read_to_string(&path).context("Failed to read models.json")?;
@@ -117,10 +142,14 @@ impl ModelIndex {
         let tmp_path = data_dir.join("models.json.tmp");
 
         // Relativize a clone for on-disk persistence; the in-memory index keeps
-        // absolute paths so callers are unaffected.
+        // absolute paths so callers are unaffected. `caps_detector_version` is
+        // preserved (not force-stamped) so a single-model pull/remove doesn't
+        // mark the whole index as freshly detected — only a full re-detect
+        // (`scan` / `heal_capabilities_if_stale`) advances it.
         let mut out = Self {
             schema_version: SCHEMA_VERSION,
             models: self.models.clone(),
+            caps_detector_version: self.caps_detector_version,
         };
         for entry in &mut out.models {
             entry.path = relativize_model_path(&entry.path, models_dir);
@@ -967,6 +996,7 @@ mod tests {
         let idx = ModelIndex {
             schema_version: 2,
             models: vec![sample_entry("qwen3:8b", &abs)],
+            ..Default::default()
         };
         idx.save(&data_dir, &models_dir).unwrap();
 
@@ -1028,6 +1058,7 @@ mod tests {
         let idx = ModelIndex {
             schema_version: 2,
             models: vec![sample_entry("llama3", &foreign)],
+            ..Default::default()
         };
         idx.save(&data_dir, &models_dir).unwrap();
 
@@ -1051,6 +1082,7 @@ mod tests {
         let mut index = ModelIndex {
             schema_version: 1,
             models: vec![],
+            ..Default::default()
         };
 
         assert_eq!(index.list().len(), 0);
@@ -1083,6 +1115,7 @@ mod tests {
         let mut index = ModelIndex {
             schema_version: 1,
             models: vec![],
+            ..Default::default()
         };
 
         let entry = ModelEntry {

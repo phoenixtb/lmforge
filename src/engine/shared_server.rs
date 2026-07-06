@@ -283,11 +283,7 @@ impl SharedServerResidency {
     /// This is a pure function; callers cache the result in `self.reverse_map`
     /// and only rebuild it after a server restart (new models may be discovered).
     fn build_reverse_map_from(data_dir: &Path, models_dir: &Path) -> HashMap<String, String> {
-        let index = crate::model::index::ModelIndex::load(data_dir, models_dir)
-            .unwrap_or(crate::model::index::ModelIndex {
-                schema_version: 1,
-                models: vec![],
-            });
+        let index = crate::model::index::ModelIndex::load(data_dir, models_dir).unwrap_or_default();
         index
             .models
             .into_iter()
@@ -437,10 +433,7 @@ impl Residency for SharedServerResidency {
         for_request: bool,
     ) -> Result<ModelHandle> {
         let index = crate::model::index::ModelIndex::load(&self.data_dir, &self.models_dir)
-            .unwrap_or(crate::model::index::ModelIndex {
-                schema_version: 1,
-                models: vec![],
-            });
+            .unwrap_or_default();
 
         // Verify the model has been pulled (subdir on disk).
         let model_dir = index

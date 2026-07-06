@@ -744,7 +744,10 @@ pub async fn model_unload(
             .unwrap();
     }
 
-    let msg = if matches!(state.residency_kind, crate::engine::ResidencyKind::SharedServer) {
+    let msg = if matches!(
+        state.residency_kind,
+        crate::engine::ResidencyKind::SharedServer
+    ) {
         if unload_all {
             r#"{"status":"unloading","message":"oMLX shared server will be stopped. Memory is managed natively by oMLX; models will reload on next request."}"#
         } else {
@@ -1164,12 +1167,8 @@ pub async fn storage_apply(
     }
 
     // Load current index before any destructive action.
-    let idx = crate::model::index::ModelIndex::load(&old_data_dir, &old_models_dir).unwrap_or_else(
-        |_| crate::model::index::ModelIndex {
-            schema_version: 2,
-            models: vec![],
-        },
-    );
+    let idx =
+        crate::model::index::ModelIndex::load(&old_data_dir, &old_models_dir).unwrap_or_default();
 
     // Build repull queue and collect models that would be permanently lost.
     let mut would_lose: Vec<String> = vec![];
@@ -1240,10 +1239,7 @@ pub async fn storage_apply(
                 );
             }
         }
-        let empty_idx = crate::model::index::ModelIndex {
-            schema_version: 2,
-            models: vec![],
-        };
+        let empty_idx = crate::model::index::ModelIndex::default();
         let _ = empty_idx.save(&old_data_dir, &old_models_dir);
     }
 
