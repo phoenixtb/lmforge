@@ -121,14 +121,19 @@ record_skip() { TC_RESULTS+=("$1|SKIP|$2|$3"); printf '%s\tSKIP\t%s\t%s\n' "$1" 
 # Render report.md from the ledger + provenance. Called from the EXIT trap so it
 # runs on every exit path — pass, hard fail(), or crash.
 write_report_file() {
-    local ver="" sha=""
+    local ver="" sha="" engine="" vendor="" vram=""
     [[ -n "${LF_BIN:-}" ]] && ver="$("$LF_BIN" --version 2>/dev/null | head -1 || true)"
     sha="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    # Engine + GPU verdict from the snapshots taken after the health gate —
+    # the slug alone can't distinguish CUDA vs Vulkan vs CPU on the same box.
+    engine="$(jq -r '.active_engine_id // empty' "$RESULTS_DIR/engines.json" 2>/dev/null || true)"
+    vendor="$(jq -r '.gpu_vendor // empty' "$RESULTS_DIR/hardware.json" 2>/dev/null || true)"
+    vram="$(jq -r '.vram_gb // empty' "$RESULTS_DIR/hardware.json" 2>/dev/null || true)"
     {
         echo "# multi_model_e2e report"
         echo ""
         echo "- when: $RESULTS_TS"
-        echo "- machine: **${RESULTS_SLUG}**"
+        echo "- machine: **${RESULTS_SLUG}** | gpu: ${vendor:-unknown}${vram:+ (${vram} GB)} | engine: ${engine:-unknown}"
         echo "- build: ${ver:-unknown} | checkout: ${sha}"
         echo "- models: chat=$CHAT_MODEL embed=$EMBED_MODEL vlm=$VLM_MODEL rerank=$RERANK_MODEL mtp=$MTP_MODEL"
         echo "- config: N=$N no_burst=$NO_BURST vlm=$DO_VLM rerank=$DO_RERANK mtp=$DO_MTP chat_max_tokens=${E2E_CHAT_MAX_TOKENS:-128}"
@@ -154,6 +159,11 @@ write_report_file() {
     mkdir -p "$RESULTS_DIR/logs"
     tail -n 400 "$HOME/.lmforge/logs/daemon.err.log" > "$RESULTS_DIR/logs/daemon.err.log" 2>/dev/null || true
     tail -n 100 "$HOME/.lmforge/logs/daemon.out.log" > "$RESULTS_DIR/logs/daemon.out.log" 2>/dev/null || true
+    # Structured daemon log (tracing output). Date-rotated on Unix
+    # (lmforge.log.YYYY-MM-DD) — grab the newest rotation.
+    local lmf_log
+    lmf_log="$(ls -t "$HOME"/.lmforge/logs/lmforge.log* 2>/dev/null | head -1 || true)"
+    [[ -n "$lmf_log" ]] && tail -n 400 "$lmf_log" > "$RESULTS_DIR/logs/lmforge.log" 2>/dev/null || true
     # Engine stderr: head carries build/version + template init lines, tail the
     # recent traffic — capture both.
     local eng
@@ -457,6 +467,16 @@ if [[ -n "$bin_sha" && "$daemon_sha" != "$bin_sha" ]]; then
 Stop the installed/service daemon (lmforge stop; systemctl --user stop lmforge 2>/dev/null; pkill -f 'lmforge start') and re-run."
 fi
 ok "Daemon build verified: ${daemon_sha}"
+
+# Provenance snapshots for post-run analysis. The results slug is only
+# <os>-<arch>, so these files are what distinguish a CUDA run from a
+# Vulkan/CPU run on the same box (mirrors think_bench's /lf/hardware usage).
+# Captured now, while the daemon is known-healthy, so they exist even if the
+# suite aborts later. models.json records the capability verdicts under test.
+curl -sf "${LF_HOST}/lf/hardware" -o "$RESULTS_DIR/hardware.json" 2>/dev/null || true
+curl -sf "${LF_HOST}/lf/engines" -o "$RESULTS_DIR/engines.json" 2>/dev/null || true
+curl -sf "${LF_HOST}/lf/status" -o "$RESULTS_DIR/status.json" 2>/dev/null || true
+cp "$HOME/.lmforge/models.json" "$RESULTS_DIR/models.json" 2>/dev/null || true
 sep
 
 # ─── Helpers: thin wrappers over scripts/lib/e2e-api.sh ───────────────────────

@@ -67,14 +67,22 @@ function Record([string]$Id, [string]$Status, [string]$Desc, [string]$Detail) {
 # Render report.md from the ledger + provenance. Called from finally so it runs
 # on every exit path — pass, hard Fail(), or crash.
 function Write-ReportFile {
-    $ver = ""; $sha = "unknown"
+    $ver = ""; $sha = "unknown"; $engine = ""; $vendor = ""; $vram = ""
     if ($Bin) { try { $ver = (& $Bin --version 2>$null | Select-Object -First 1) } catch {} }
     try { $sha = (git -C $RepoRoot rev-parse --short HEAD 2>$null) } catch {}
+    # Engine + GPU verdict from the snapshots taken after the health gate —
+    # the slug alone can't distinguish CUDA vs Vulkan vs CPU on the same box.
+    try { $engine = (Get-Content (Join-Path $ResultsDir "engines.json") -Raw | ConvertFrom-Json).active_engine_id } catch {}
+    try {
+        $hw = Get-Content (Join-Path $ResultsDir "hardware.json") -Raw | ConvertFrom-Json
+        $vendor = $hw.gpu_vendor; $vram = $hw.vram_gb
+    } catch {}
+    $gpuLabel = if ($vendor) { "$vendor$(if ($vram) { " ($vram GB)" })" } else { "unknown" }
     $lines = @(
         "# multi_model_e2e report"
         ""
         "- when: $ResultsTs"
-        "- machine: **$ResultsSlug**"
+        "- machine: **$ResultsSlug** | gpu: $gpuLabel | engine: $(if ($engine) { $engine } else { 'unknown' })"
         "- build: $(if ($ver) { $ver } else { 'unknown' }) | checkout: $sha"
         "- models: chat=$($script:ChatModel) embed=$($script:EmbedModel) vlm=$($script:VlmModel) rerank=$($script:RerankModel) mtp=$($script:MtpModel)"
         "- config: N=$N no_burst=$NoBurstMode vlm=$DoVlm rerank=$DoRerank mtp=$DoMtp chat_max_tokens=$E2E_CHAT_MAX_TOKENS"
@@ -94,11 +102,18 @@ function Write-ReportFile {
     New-Item -ItemType Directory -Force -Path $outLogs | Out-Null
     # daemon.err/out only exist where a service manager redirects stdio
     # (launchd/systemd); the Windows daemon logs to lmforge.log directly.
-    foreach ($pair in @(@("daemon.err.log", 400), @("daemon.out.log", 100), @("lmforge.log", 400))) {
+    foreach ($pair in @(@("daemon.err.log", 400), @("daemon.out.log", 100))) {
         $src = Join-Path $logDir $pair[0]
         if (Test-Path $src) {
             Get-Content $src -Tail $pair[1] | Set-Content -Path (Join-Path $outLogs $pair[0])
         }
+    }
+    # Structured daemon log (tracing output) — may be date-rotated
+    # (lmforge.log.YYYY-MM-DD); grab the newest.
+    $lmfLog = Get-ChildItem -Path $logDir -Filter "lmforge.log*" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($lmfLog) {
+        Get-Content $lmfLog.FullName -Tail 400 | Set-Content -Path (Join-Path $outLogs "lmforge.log")
     }
     # Engine stderr: head carries build/version + template init lines, tail the
     # recent traffic — capture both.
@@ -213,6 +228,19 @@ try {
         Fail "STALE DAEMON: port served by build '$daemonSha' but test binary is '$binSha'. Stop the installed daemon (lmforge stop / Stop-Service lmforge) and re-run."
     }
     Ok "Daemon build verified: $daemonSha"
+
+    # Provenance snapshots for post-run analysis. The results slug is only
+    # win-<arch>, so these files are what distinguish a CUDA run from a
+    # Vulkan/CPU run on the same box (mirrors think_bench's /lf/hardware usage).
+    # Captured now, while the daemon is known-healthy, so they exist even if
+    # the suite aborts later. models.json records the capability verdicts.
+    foreach ($snap in @(@("lf/hardware", "hardware.json"), @("lf/engines", "engines.json"), @("lf/status", "status.json"))) {
+        try {
+            Invoke-RestMethod -Uri "$($script:LfHost)/$($snap[0])" -TimeoutSec 10 |
+                ConvertTo-Json -Depth 12 | Set-Content -Path (Join-Path $ResultsDir $snap[1])
+        } catch {}
+    }
+    try { Copy-Item (Join-Path $env:USERPROFILE ".lmforge\models.json") (Join-Path $ResultsDir "models.json") } catch {}
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     try { $r = Invoke-E2eEmbed -Text $E2E_EMBED_COLD }
