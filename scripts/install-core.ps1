@@ -1,4 +1,4 @@
-﻿# =============================================================================
+# =============================================================================
 # LMForge Core - Windows PowerShell Installer
 # Downloads the pre-built binary from GitHub Releases, installs it to the
 # current user's local bin directory, adds it to PATH, runs init, and
@@ -13,7 +13,7 @@
 #                       at a custom path instead of %USERPROFILE%\.lmforge. This
 #                       is pinned into config at install time; the data dir is
 #                       NOT relocatable later from the UI (only the models dir is).
-#   LMFORGE_LOCAL_BIN   Path to a locally built lmforge.exe — skips the GitHub
+#   LMFORGE_LOCAL_BIN   Path to a locally built lmforge.exe - skips the GitHub
 #                       download. Used by the E2E harness/CI; not for end users.
 # =============================================================================
 $ErrorActionPreference = "Stop"
@@ -90,7 +90,7 @@ Write-Host "  Install: $InstallDir\$Binary"
 Write-Host ""
 
 # --- Idempotency check ---
-# A local build (LMFORGE_LOCAL_BIN) or LMFORGE_UPGRADE=1 always overwrites — an
+# A local build (LMFORGE_LOCAL_BIN) or LMFORGE_UPGRADE=1 always overwrites - an
 # explicit dev/upgrade action. The early-exit only guards plain release installs.
 $env:PATH = "$InstallDir;$env:PATH"
 $LmforgeCmd = Get-Command "lmforge" -ErrorAction SilentlyContinue

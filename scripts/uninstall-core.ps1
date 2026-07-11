@@ -1,4 +1,4 @@
-﻿# =============================================================================
+# =============================================================================
 # LMForge Core - Windows PowerShell Uninstaller
 # Stops the daemon, removes autostart (Run key + legacy Scheduled Task),
 # removes the binary and PATH.
@@ -105,7 +105,7 @@ if (-not $taskRemoved) {
     if ($LASTEXITCODE -eq 0) {
         $taskRemoved = $true
     } elseif ($schtasksOut -match 'cannot find|does not exist|not found') {
-        # nothing to remove — fresh installs use the Run key, not a task
+        # nothing to remove - fresh installs use the Run key, not a task
     } elseif ($schtasksOut -match 'Access is denied|access is denied') {
         Warn "Legacy scheduled task '$TaskName' still registered (access denied)."
         Warn "Remove from an elevated PowerShell: schtasks /Delete /TN `"$TaskName`" /F"
@@ -128,8 +128,8 @@ try {
 } catch {}
 
 Get-Process -Name "lmforge" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-# Stop engine subprocesses (e.g. llama-server) that keep DLL handles (cublas, …)
-# open under the engines dir — otherwise a --purge can't delete them on Windows.
+# Stop engine subprocesses (e.g. llama-server) that keep DLL handles (cublas, ...)
+# open under the engines dir - otherwise a --purge can't delete them on Windows.
 Get-Process -Name "llama-server" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 try {
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |

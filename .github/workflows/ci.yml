@@ -56,6 +56,20 @@ jobs:
               fi
             fi
           done < <(git ls-files '*.ps1')
+          # Scripts published for `irm … | iex` must be pure ASCII without BOM.
+          # iex treats a leading BOM as literal input ("ï»¿#") on Windows PS 5.1.
+          for f in scripts/install-core.ps1 scripts/install-ui.ps1 \
+                   scripts/uninstall-core.ps1 scripts/uninstall-ui.ps1; do
+            bom=$(head -c3 "$f" | od -An -tx1 | tr -d ' \n')
+            if [ "$bom" = "efbbbf" ]; then
+              echo "::error file=$f::UTF-8 BOM breaks irm | iex; save as UTF-8 without BOM (ASCII only)"
+              fail=1
+            fi
+            if LC_ALL=C grep -qP '[\x80-\xFF]' "$f"; then
+              echo "::error file=$f::non-ASCII breaks irm | iex on Windows; use ASCII punctuation only"
+              fail=1
+            fi
+          done
           if [ "$fail" -ne 0 ]; then exit 1; fi
           echo "All .ps1 files OK."
 
