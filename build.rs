@@ -10,6 +10,34 @@ fn main() {
 
     #[cfg(target_os = "macos")]
     compile_gpu_probe();
+
+    #[cfg(target_os = "windows")]
+    embed_windows_resources();
+}
+
+/// Embed VERSIONINFO, icon, and an asInvoker manifest into lmforge.exe.
+/// A bare console exe with no publisher metadata is a classic Defender
+/// heuristic trigger; this (plus Authenticode signing in the release
+/// pipeline) is the standard false-positive mitigation.
+#[cfg(target_os = "windows")]
+fn embed_windows_resources() {
+    let mut res = winresource::WindowsResource::new();
+    res.set_icon("ui/src-tauri/icons/icon.ico");
+    res.set("ProductName", "LMForge");
+    res.set(
+        "FileDescription",
+        "LMForge - local LLM inference orchestrator (daemon + CLI)",
+    );
+    res.set("CompanyName", "LMForge open source project");
+    res.set(
+        "LegalCopyright",
+        "Copyright (c) LMForge contributors. MIT license.",
+    );
+    res.set("OriginalFilename", "lmforge.exe");
+    res.set("InternalName", "lmforge");
+    if let Err(e) = res.compile() {
+        println!("cargo:warning=Windows resource embedding failed: {e}");
+    }
 }
 
 /// Bake build provenance into the binary so `lmforge --version` self-identifies

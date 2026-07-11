@@ -1,5 +1,23 @@
 name: Release
 
+# ── Windows code signing (SignPath Foundation — free for OSS) ────────────────
+# Unsigned Windows binaries get quarantined by Defender/BitDefender heuristics.
+# SignPath Foundation signs OSS releases for free (signpath.io/solutions/open-source-community).
+# Signing activates automatically once these are set; until then releases ship
+# unsigned (workflow still succeeds, with a warning).
+#
+# One-time setup:
+#   1. Apply at https://signpath.io with the GitHub account owning this repo.
+#      Requirements: OSI license, public repo, released project, MFA. ~1 week.
+#   2. In the SignPath dashboard: link this repo as a trusted build system,
+#      create a project + signing policy (approval mode "Automatic" avoids
+#      per-release clicks), add an artifact configuration with a <pe-file>.
+#   3. Repo Settings → Secrets and variables → Actions:
+#        Secret:   SIGNPATH_API_TOKEN
+#        Variables: SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG,
+#                   SIGNPATH_SIGNING_POLICY_SLUG
+# ──────────────────────────────────────────────────────────────────────────────
+
 on:
   push:
     tags:
@@ -85,10 +103,52 @@ jobs:
         run: Copy-Item "target/${{ matrix.target }}/release/lmforge.exe" "${{ matrix.asset_name }}"
 
       - uses: actions/upload-artifact@v6
+        id: upload-unsigned
         with:
           name: ${{ matrix.asset_name }}
           path: ${{ matrix.asset_name }}
           retention-days: 1
+
+      # --- Optional Windows Authenticode signing (see header comment) ---
+      - name: Check SignPath configuration
+        id: signpath-check
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          ORG: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          PROJECT: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          POLICY: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+        run: |
+          if [ -n "$TOKEN" ] && [ -n "$ORG" ] && [ -n "$PROJECT" ] && [ -n "$POLICY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::SignPath not configured — Windows core binary ships UNSIGNED (see header of release.yml)"
+          fi
+
+      - name: Sign Windows binary (SignPath)
+        if: runner.os == 'Windows' && steps.signpath-check.outputs.enabled == 'true'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed/
+
+      # Replace the unsigned artifact so the E2E gate and the release job
+      # both consume the signed binary.
+      - name: Upload signed binary (replaces unsigned)
+        if: runner.os == 'Windows' && steps.signpath-check.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.asset_name }}
+          path: signed/${{ matrix.asset_name }}
+          retention-days: 1
+          overwrite: true
 
   # ─────────────────────────────────────────────────────────────────────────────
   #  Tauri UI — macOS DMG + Linux (deb/rpm native + AppImage fallback) + Windows NSIS
@@ -231,12 +291,56 @@ jobs:
 
       - name: Upload Windows installer
         if: runner.os == 'Windows'
+        id: upload-installer-unsigned
         uses: actions/upload-artifact@v6
         with:
           name: LMForge-UI-${{ matrix.platform }}.exe
           path: LMForge-UI-${{ matrix.platform }}.exe
           if-no-files-found: error
           retention-days: 1
+
+      # --- Optional NSIS installer signing (see header comment). The NSIS
+      #     installer is a PE, so the same <pe-file> artifact configuration
+      #     signs it; SignPath deep-signing can additionally sign the inner
+      #     LMForge.exe if configured in the dashboard. ---
+      - name: Check SignPath configuration
+        id: signpath-check
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          ORG: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          PROJECT: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          POLICY: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+        run: |
+          if [ -n "$TOKEN" ] && [ -n "$ORG" ] && [ -n "$PROJECT" ] && [ -n "$POLICY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::SignPath not configured — Windows UI installer ships UNSIGNED (see header of release.yml)"
+          fi
+
+      - name: Sign Windows installer (SignPath)
+        if: runner.os == 'Windows' && steps.signpath-check.outputs.enabled == 'true'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload-installer-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed/
+
+      - name: Upload signed installer (replaces unsigned)
+        if: runner.os == 'Windows' && steps.signpath-check.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: LMForge-UI-${{ matrix.platform }}.exe
+          path: signed/LMForge-UI-${{ matrix.platform }}.exe
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
 
   # ─────────────────────────────────────────────────────────────────────────────
   #  E2E gate — run the full install lifecycle against the exact artifacts

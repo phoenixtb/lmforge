@@ -10,6 +10,12 @@ repository = "https://github.com/phoenixtb/lmforge"
 name = "lmforge"
 path = "src/main.rs"
 
+# Windows-only: embed VERSIONINFO + icon + manifest into lmforge.exe.
+# Anonymous unsigned PEs (no metadata) score high on AV heuristics; proper
+# resources are also a SignPath code-signing prerequisite.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 # Version pinning strategy:
 # - Cargo.toml uses minimum compatible versions (e.g., "0.8" or "1.0")
 # - Cargo.lock (checked into version control) pins exact versions for reproducibility
