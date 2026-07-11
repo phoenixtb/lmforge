@@ -14,7 +14,10 @@ $ErrorActionPreference = "Stop"
 function Info    { param($m) Write-Host "  [*] $m" -ForegroundColor Cyan }
 function Success { param($m) Write-Host "  [+] $m" -ForegroundColor Green }
 function Warn    { param($m) Write-Host "  [!] $m" -ForegroundColor Yellow }
-function Err     { param($m) Write-Host "  [x] $m" -ForegroundColor Red; exit 1 }
+# throw, never `exit`: under `irm | iex` there is no script scope, so `exit`
+# kills the user's whole terminal session. throw stops the script either way
+# and still yields exit code 1 when run via `powershell -File`.
+function Err     { param($m) Write-Host "  [x] $m" -ForegroundColor Red; throw "install-ui failed: $m" }
 function Section { param($m) Write-Host ""; Write-Host "  $m" -ForegroundColor White }
 
 $Repo            = "phoenixtb/lmforge"
@@ -45,7 +48,8 @@ if ((Test-Path $AppExe) -and -not $UiIsLocal -and -not $UiIsUpgrade) {
     Warn "  irm https://github.com/$Repo/releases/latest/download/uninstall-ui.ps1 | iex"
     Info "Launching existing app..."
     Start-Process $AppExe
-    exit 0
+    # `return`, not `exit`: safe under both `irm | iex` and `powershell -File`.
+    return
 }
 if ((Test-Path $AppExe) -and ($UiIsLocal -or $UiIsUpgrade)) {
     if ($UiIsLocal) { Info "Updating existing LMForge UI from local build (overwriting $AppExe)" }

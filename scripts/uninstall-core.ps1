@@ -61,7 +61,8 @@ if (-not $Yes) {
     $confirm = Read-Host "  Continue? [y/N]"
     if ($confirm -notmatch '^[Yy]$') {
         Write-Host "  Aborted."
-        exit 0
+        # `return`, not `exit`: `exit` under `irm | iex` closes the terminal.
+        return
     }
 }
 

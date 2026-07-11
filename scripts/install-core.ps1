@@ -21,7 +21,10 @@ $ErrorActionPreference = "Stop"
 function Info    { param($m) Write-Host "  [*] $m" -ForegroundColor Cyan }
 function Success { param($m) Write-Host "  [+] $m" -ForegroundColor Green }
 function Warn    { param($m) Write-Host "  [!] $m" -ForegroundColor Yellow }
-function Err     { param($m) Write-Host "  [x] $m" -ForegroundColor Red; exit 1 }
+# throw, never `exit`: under `irm | iex` there is no script scope, so `exit`
+# kills the user's whole terminal session. throw stops the script either way
+# and still yields exit code 1 when run via `powershell -File`.
+function Err     { param($m) Write-Host "  [x] $m" -ForegroundColor Red; throw "install-core failed: $m" }
 
 function Test-LmforgeHealth {
     param([int]$TimeoutSec = 3)
@@ -114,7 +117,8 @@ if ($AlreadyInstalled -and -not $IsLocal -and -not $IsUpgrade) {
     Warn "To upgrade in place: `$env:LMFORGE_UPGRADE = '1'; irm https://github.com/$Repo/releases/latest/download/install-core.ps1 | iex"
     Warn "To reinstall:"
     Warn "  irm https://github.com/$Repo/releases/latest/download/uninstall-core.ps1 | iex"
-    exit 0
+    # `return`, not `exit`: safe under both `irm | iex` and `powershell -File`.
+    return
 }
 if ($AlreadyInstalled -and ($IsLocal -or $IsUpgrade)) {
     $CoreBin = if ($LmforgeCmd) { $LmforgeCmd.Source } else { "$InstallDir\$Binary" }

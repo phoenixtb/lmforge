@@ -37,7 +37,8 @@ if (-not $Yes) {
     $confirm = Read-Host "  Continue? [y/N]"
     if ($confirm -notmatch '^[Yy]$') {
         Write-Host "  Aborted."
-        exit 0
+        # `return`, not `exit`: `exit` under `irm | iex` closes the terminal.
+        return
     }
 }
 
@@ -163,5 +164,6 @@ Write-Host ""
 Write-Host "  To reinstall the UI, run install-ui.ps1 from the same release." -ForegroundColor White
 Write-Host ""
 
-if (Test-Path $AppExe) { exit 1 }
-exit 0
+# throw, never `exit`: under `irm | iex` `exit` closes the terminal; throw
+# still yields exit code 1 when run via `powershell -File`.
+if (Test-Path $AppExe) { throw "uninstall-ui: $AppExe still present (app running? quit it from the tray and re-run)" }
