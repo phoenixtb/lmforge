@@ -24,7 +24,7 @@ received the **same** parent directory, N loaded models produced N redundant pro
 each discovering all models — contrary to the design intent and wasteful of memory
 and file descriptors.
 
-Phase 0 empirical validation confirmed (see `docs/dev/OMLX_SHARED_SERVER_FINDINGS.md`):
+Phase 0 empirical validation confirmed (see `docs/archive/OMLX_SHARED_SERVER_FINDINGS.md`):
 - One `omlx serve --model-dir <dir>` discovers all model subdirs at startup.
 - Requests to the same port with different `model` fields load different weights on-demand.
 - Embeddings, reranking, VLM, and reasoning all work from one process.
@@ -134,7 +134,7 @@ fixes.
 Rejected: `mlx_lm.server` is single-model/text-only. Re-implementing oMLX's pool,
 LRU, VLM, embeddings, and reranking is a larger and riskier change. oMLX 0.4.4 is
 the correct tool; the problem was how LMForge managed it. Documented in
-`docs/dev/OMLX_SHARED_SERVER_FINDINGS.md`.
+`docs/archive/OMLX_SHARED_SERVER_FINDINGS.md`.
 
 ### `Box<dyn Residency>` (dynamic dispatch)
 
@@ -149,4 +149,4 @@ overhead and align with the existing `EngineAdapterInstance` pattern.
 - `src/engine/process_pool.rs` — `ProcessPoolResidency`
 - `src/engine/shared_server.rs` — `SharedServerResidency`
 - `src/engine/manager.rs` — `EngineManager` (thin dispatcher)
-- `docs/dev/OMLX_SHARED_SERVER_FINDINGS.md` — Phase 0 empirical spike results
+- `docs/archive/OMLX_SHARED_SERVER_FINDINGS.md` — Phase 0 empirical spike results

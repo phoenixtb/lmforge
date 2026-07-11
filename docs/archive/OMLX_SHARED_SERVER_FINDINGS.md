@@ -1,5 +1,9 @@
 # Phase 0 Spike Findings — oMLX 0.4.4 Shared-Server Behavior
 
+> **Archived.** Empirical spike notes used to write
+> [`../architecture/ADR-006-engine-residency.md`](../architecture/ADR-006-engine-residency.md).
+> Not maintained; may lag current oMLX.
+
 Empirical validation against the actual running `omlx serve` process.
 All tests run against the existing LMForge-managed instance on port 11431
 (which already passes `--model-dir <parent>` due to the current adapter code).

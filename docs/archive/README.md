@@ -1,6 +1,6 @@
 # Archive
 
-Historical planning notes, one-off test checklists, and superseded specs.
+Historical planning notes, spikes, shipped playbooks, and superseded specs.
 **May be wrong** relative to current `main` — use living docs instead:
 
 | Need | Living doc |
@@ -9,12 +9,15 @@ Historical planning notes, one-off test checklists, and superseded specs.
 | Platform setup | [`../dev/INSTALL_*.md`](../dev/) |
 | Release process | [`../dev/RELEASE.md`](../dev/RELEASE.md) |
 | Runtime architecture | [`../architecture/ARCHITECTURE.md`](../architecture/ARCHITECTURE.md) |
-| Design decisions | [`../architecture/ADR-*.md`](../architecture/) |
+| Accepted decisions | [`../architecture/ADR-*.md`](../architecture/) |
+| Proposed decisions | [`../architecture/proposals/`](../architecture/proposals/) |
 
 ## Contents
 
 | File | Was | Superseded by |
 |------|-----|---------------|
+| `THINKING_REFACTOR.md` | Thinking-layer execution playbook | ADR-007 |
+| `OMLX_SHARED_SERVER_FINDINGS.md` | oMLX Phase 0 spike | ADR-006 |
 | `plan-v0.2.0-cuda-mtp.md` | v0.2.0 execution tracker | ADR-004, ADR-005, shipped code |
 | `plan-v0.2.1-vlm-mtp-cuda13.md` | v0.2.1 planning | `multi_model_e2e`, ADRs |
 | `test-v0.2.0-post-tarball.md` | One-off tarball checklist | CI + `multi_model_e2e` |

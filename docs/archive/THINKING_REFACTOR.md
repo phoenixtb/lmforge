@@ -1,5 +1,8 @@
 # Thinking Layer Refactor — Execution Playbook
 
+> **Archived.** Historical execution playbook. Source of truth:
+> [`../architecture/ADR-007-thinking-pipeline.md`](../architecture/ADR-007-thinking-pipeline.md).
+
 > Status: **SHIPPED** (commits `cc20617` → Phase 1, `acdb1fd` → Phase 2,
 > `719b5f3` → Phase 3, `df6a1b7` → Phase 4, + Phase 5 playbook reconciliation).
 > The implemented design is documented in **`docs/architecture/ADR-007-thinking-pipeline.md`**,

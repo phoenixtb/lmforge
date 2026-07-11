@@ -1,5 +1,9 @@
 # Annual engine review
 
+> **Maintainer-only.** Cadence checklist for re-evaluating the engine tier
+> roster. Contributors building or debugging engines should start with
+> [`ADR-001`](../architecture/ADR-001-engine-tiers.md) instead.
+
 **Cadence:** every 12 months, plus on any of the [re-evaluation triggers](#re-evaluation-triggers) below.
 **Owner:** project maintainer (currently @phoenixt).
 **Source of truth:** [`docs/architecture/ADR-001-engine-tiers.md`](../architecture/ADR-001-engine-tiers.md), [`data/engines.toml`](../../data/engines.toml).

@@ -1,5 +1,9 @@
 # Cloudflare R2 — llama.cpp CUDA engine tarballs
 
+> **Maintainer-only.** CDN bucket layout, API tokens, and publish procedure for
+> engine tarballs. End users do not need this — installs resolve CDN URLs from
+> the shipped `variants-manifest.json`.
+
 Engine binaries (~1 GB each) are stored on **Cloudflare R2**, served via a **custom CDN subdomain**. GitHub releases ship only the small `lmforge` CLI/UI artifacts.
 
 **Bucket:** `lmforge-engine-assets`  

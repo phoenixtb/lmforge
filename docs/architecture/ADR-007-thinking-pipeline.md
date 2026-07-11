@@ -58,7 +58,7 @@ comparisons with adapter calls.
 
 ### Phase 3 — Three bug fixes
 
-> **Numbering note.** The original `docs/dev/THINKING_REFACTOR.md` playbook and
+> **Numbering note.** The original `docs/archive/THINKING_REFACTOR.md` playbook and
 > this ADR ended up with different Fix #1/#2 definitions. This ADR is the source
 > of truth; Phase 5 below folds in the remaining playbook fixes and reconciles
 > the two.
@@ -248,5 +248,5 @@ the llamacpp thinking adapter but is **experimental opt-in only** (see ADR-001).
 - `src/server/proxy.rs` — `proxy_stream_with_thinking_budget`, `proxy_nonstream_with_thinking_budget`
 - `src/server/openai.rs` — `chat_completions` handler
 - `src/server/ollama.rs` — `chat` handler (Ollama compatibility layer)
-- `docs/dev/OMLX_SHARED_SERVER_FINDINGS.md` — oMLX engine behaviour reference
+- `docs/archive/OMLX_SHARED_SERVER_FINDINGS.md` — oMLX engine behaviour reference (archived spike)
 - [ADR-008](./ADR-008-pool-residency.md) — residency terminology + platform validation matrix

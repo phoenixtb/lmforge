@@ -55,20 +55,24 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 
 ## Features
 
-- **Multi-model orchestration** — run inference *and* embedding models simultaneously, each independently managed with its own keep-alive lifecycle
-- **Hardware-aware engine selection** — automatically picks the best engine:
-  - 🍎 **Apple Silicon** → [oMLX](https://github.com/jundot/omlx) — OpenAI-compatible server, runs natively on Metal via MLX
-  - 🖥️ **NVIDIA GPU (Linux)** → [SGLang](https://github.com/sgl-project/sglang) — CUDA, high-concurrency (8 GB+ VRAM; tune `LMFORGE_SGLANG_MEM_FRACTION` down on 8 GB cards)
-  - 🪟 **NVIDIA GPU (Windows)** → [llama.cpp](https://github.com/ggerganov/llama.cpp) with CUDA prebuilts — SGLang is Linux-only upstream; use WSL2 if you need it
-  - 💻 **CPU / any hardware** → [llama.cpp](https://github.com/ggerganov/llama.cpp) — universal cross-platform fallback
-- **VRAM-aware LRU eviction** — loads models up to detected VRAM budget; evicts least-recently-used when full
+- **Multi-model orchestration** — chat, embeddings, vision, and rerank models can be resident together; per-model `keep_alive`, VRAM admission, and LRU eviction
+- **Hardware-aware engine selection** — automatically picks the best engine / build:
+  - 🍎 **Apple Silicon** → [oMLX](https://github.com/jundot/omlx) — OpenAI-compatible server on Metal via MLX
+  - 🖥️ **NVIDIA GPU (Linux)** → [SGLang](https://github.com/sgl-project/sglang) (8 GB+ VRAM) or [llama.cpp](https://github.com/ggerganov/llama.cpp) CUDA (`cuda12` / opt-in `cuda13`)
+  - 🪟 **NVIDIA GPU (Windows)** → llama.cpp CUDA prebuilts — SGLang is Linux-only upstream; use WSL2 if you need it
+  - 🎮 **AMD / Intel GPU** → llama.cpp Vulkan
+  - 💻 **CPU / any hardware** → llama.cpp — universal fallback
+- **Engine tiers** — `default` / `opt-in` / `experimental`; `lmforge doctor` shows installed variants and which is active
 - **OpenAI-compatible API** — `/v1/chat/completions`, `/v1/embeddings`, `/v1/models`, `/v1/rerank`
 - **Ollama-compatible API** — `/api/chat`, `/api/generate`, `/api/tags` for tools that expect Ollama
-- **Thinking model support** — native two-call reasoning workflow for Qwen3/DeepSeek-R1 style models with `thinking_budget` token cap, live reasoning delta streaming, and a `call2_prefill` status event for UI feedback during the answer-generation phase
-- **Model catalog** — curated shortcut names (`family:size:quant`) resolving to the right HuggingFace repo and format for your hardware automatically
-- **System service on all platforms** — launchd (macOS), systemd user unit (Linux), Windows Scheduled Task — all via `lmforge service install`, no admin required
-- **Real-time telemetry** — live GPU/CPU/memory metrics, per-model RSS, request latency, request counts
-- **Desktop UI** — optional Tauri app with model browser, hardware panel, and live metrics dashboard
+- **Thinking / reasoning** — two-call `thinking_budget` workflow, live reasoning deltas, chat vs thinking sampling profiles; dedicated `:thinking` / `:reasoning` catalog models stay locked on (`native_reasoning`)
+- **MTP speculative decoding** — GGUF models with MTP heads get llama.cpp draft-MTP when VRAM headroom allows (catalog `:mtp` shortcuts)
+- **Capability detection** — pull (and startup self-heal) records `chat` / `vision` / `embeddings` / `thinking` / `native_reasoning` / `mtp` / … without a forced re-download after detector fixes
+- **Model catalog** — shortcuts `family:size:quant[:variant]` resolve to the right HuggingFace repo and format for your hardware
+- **Desktop UI** — optional Tauri app: Model Library, **Playground** (think toggle + Advanced sampling), Observability, Settings (incl. relocatable model storage)
+- **System service on all platforms** — launchd (macOS), systemd user unit (Linux), HKCU Run key (Windows) — `lmforge service install`, no admin required
+- **Real-time telemetry** — live GPU/CPU/memory metrics, Prometheus `/metrics`, request latency/counts, engine `last_errors`
+- **Secure by default** — localhost bind; optional API key + `trusted_networks` for LAN
 - **Idempotent CLI** — `lmforge start` is safe to call from any script; no-ops if already running
 
 ---
@@ -330,7 +334,7 @@ LMForge registers a native service on every platform — no admin/root required:
 |---|---|---|
 | macOS | launchd user agent | `~/Library/LaunchAgents/com.lmforge.daemon.plist` |
 | Linux | systemd user unit | `~/.config/systemd/user/lmforge.service` |
-| Windows | Scheduled Task (At Logon) | Task Scheduler → `LMForge Daemon` |
+| Windows | HKCU Run key (At Logon) | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` → `LMForge` |
 
 ---
 
@@ -370,9 +374,10 @@ For tools that target Ollama (Open WebUI, Continue, etc.):
 | Endpoint | Method | Description |
 |---|---|---|
 | `/health` | GET | Health check |
-| `/lf/status` | GET | Engine state snapshot |
+| `/lf/status` | GET | Engine state snapshot (includes `last_errors`) |
 | `/lf/status/stream` | GET | SSE stream of state changes |
 | `/lf/hardware` | GET | Detected hardware (GPU, CPU, VRAM, engine) |
+| `/lf/engines` | GET | Engine registry (tiers, variants, active engine) |
 | `/lf/sysinfo` | GET | Live system metrics (GPU%, VRAM, CPU, RAM) |
 | `/lf/model/list` | GET | Installed models with sizes and capabilities |
 | `/lf/model/pull` | POST | Download a model (SSE progress stream) |
@@ -412,9 +417,10 @@ curl -s http://127.0.0.1:11430/v1/models/qwen2.5-vl:7b:4bit | jq
 # Single-model lookup with full metadata (size_bytes, format, mmproj_path, ...)
 ```
 
-Capability bits: `chat`, `embeddings`, `reranking`, `thinking`, `vision`,
-`embedding_dims` (auto-detected on first /v1/embeddings call), `mmproj_path`
-(GGUF VLMs only).
+Capability bits: `chat`, `embeddings`, `reranking`, `thinking`, `native_reasoning`,
+`vision`, `mtp`, `stop_tokens`, `embedding_dims` (auto-detected on first
+`/v1/embeddings` call), `mmproj_path` (GGUF VLMs only). Detector fixes self-heal
+on daemon startup when `caps_detector_version` advances — no re-pull required.
 
 ### Vision (multimodal) requests
 
@@ -565,9 +571,15 @@ DocIntel-relevant changes since the previous release:
 
 ### Thinking Models
 
-For models with native reasoning capability (Qwen3, DeepSeek-R1 distillations), LMForge
-implements a **two-call thinking-budget workflow** that gives you control over how long
-the model reasons before it answers. It runs across engines (oMLX, llama.cpp, SGLang).
+For models with reasoning capability (Qwen3 Thinking, DeepSeek-R1 distillations,
+Phi-4 Reasoning, etc.), LMForge implements a **two-call thinking-budget workflow**
+that caps how long the model reasons before it answers. It runs across engines
+(oMLX, llama.cpp, SGLang).
+
+**Catalog hint:** shortcuts with `:thinking` or `:reasoning` set
+`capabilities.native_reasoning = true`. Thinking stays **on** for those models
+(Playground shows a locked gray toggle). Toggleable thinking applies to models
+that support optional reasoning without being dedicated reasoning builds.
 
 #### How it works
 
@@ -577,7 +589,7 @@ the model reasons before it answers. It runs across engines (oMLX, llama.cpp, SG
 2. **Call 2 — Answer phase:** Once the budget is exhausted, LMForge appends the
    accumulated reasoning as a closed `<think>…</think>` assistant turn and sends a second
    request with `enable_thinking: false`. The answer streams directly to the client
-   token-by-token.
+   token-by-token. A `call2_prefill` status event marks the switch for UI feedback.
 
 #### Request parameters
 
@@ -668,6 +680,16 @@ Sampling fixes the engine-default loop but won't make a tiny model reason: prefe
 **≥ 4B** models for `think:true` and use `think:false` for chat (guidance, not
 enforced — LMForge runs any model). Full rationale, the cross-platform benchmark,
 and tuning notes: [docs/dev/DEV_GUIDE.md → Sampling & thinking](docs/dev/DEV_GUIDE.md#sampling--thinking).
+
+### Speculative decoding (MTP)
+
+GGUF models with Multi-Token Prediction heads (catalog shortcuts containing
+`:mtp`, or tensors detected on pull) advertise `capabilities.mtp = true`. On
+llama.cpp, LMForge enables `--spec-type draft-mtp` when VRAM headroom allows.
+Clients keep using the same `/v1/chat/completions` API — no extra request fields.
+
+See [ADR-005](docs/architecture/ADR-005-speculative-decoding.md) for the
+admission rules and probe precedence.
 
 ---
 
@@ -1045,9 +1067,10 @@ lmforge start --port 8080 --log-level debug
 
 The quick-start below works on every supported OS. For platform-specific
 notes (CUDA toolkit when needed, WSL2 vs native Windows, Apple Silicon
-quirks, opt-in engine installs, cleanup procedures) see the platform
-dev docs: [`docs/README.md`](docs/README.md) (install guides, dev scripts,
-architecture ADRs).
+quirks, opt-in engine installs, cleanup procedures) see
+[`docs/README.md`](docs/README.md) — install guides, Accepted ADRs, and
+maintainer docs. Product narrative: [`docs/product-overview.md`](docs/product-overview.md).
+Proposed (not Accepted) ADRs live under `docs/architecture/proposals/`.
 
 ```bash
 git clone https://github.com/phoenixtb/lmforge
@@ -1588,10 +1611,13 @@ lmforge/
 ├── ui/
 │   ├── src/           # SvelteKit frontend
 │   └── src-tauri/     # Tauri shell (HTTP client — no daemon code)
+├── docs/              # Product overview, ADRs, install / release guides
 ├── tests/             # Integration test suite (Rust + shell)
 ├── scripts/           # Install / uninstall scripts
 └── .github/workflows/ # CI (ci.yml) and release (release.yml) pipelines
 ```
+
+Docs index: [`docs/README.md`](docs/README.md).
 
 ### Opening Issues
 

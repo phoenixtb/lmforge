@@ -3,7 +3,9 @@
 **Status:** Proposed
 **Date:** 2026-07-06
 **Author:** lmforge core team
-**Related:** [ADR-006](./ADR-006-engine-residency.md) · [ADR-008](./ADR-008-pool-residency.md) · [ADR-005](./ADR-005-speculative-decoding.md)
+**Related:** [ADR-006](../ADR-006-engine-residency.md) · [ADR-008](../ADR-008-pool-residency.md) · [ADR-005](../ADR-005-speculative-decoding.md)
+
+> Lives under `architecture/proposals/` until Accepted. Not scheduled.
 
 ---
 
