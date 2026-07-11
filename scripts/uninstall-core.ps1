@@ -141,13 +141,24 @@ Start-Sleep -Seconds 1
 Info "No lmforge processes running"
 
 # --- 4. Remove binary ---
+# Non-fatal: an AV-quarantined/blocked exe denies delete; the remaining
+# cleanup steps must still run.
 Section "Removing binary..."
 if (Test-Path "$InstallDir\$Binary") {
-    Remove-Item "$InstallDir\$Binary" -Force
-    Info "Removed $InstallDir\$Binary"
+    try {
+        Remove-Item "$InstallDir\$Binary" -Force -ErrorAction Stop
+        Info "Removed $InstallDir\$Binary"
+    } catch {
+        Warn "Could not remove $InstallDir\$Binary ($($_.Exception.Message))."
+        Warn "Your antivirus has locked it. Restore/allow it in the AV quarantine UI,"
+        Warn "or delete the folder manually after a reboot: $InstallDir"
+    }
 } else {
     Warn "lmforge binary not found at $InstallDir\$Binary"
 }
+# Rename-aside leftovers from AV-blocked upgrades (lmforge.exe.old.<pid>)
+Get-ChildItem "$InstallDir\*.exe.old*" -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
 
 # --- 5. Remove install dir if empty ---
 if (Test-Path $InstallDir) {

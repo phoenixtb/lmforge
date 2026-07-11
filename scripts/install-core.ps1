@@ -77,6 +77,55 @@ function Stop-LmforgeForInstall {
     Start-Sleep -Seconds 1
 }
 
+# Place $Source at $Target, surviving a locked or AV-blocked existing file.
+# A plain `Copy-Item -Force` onto a quarantined/blocked exe throws
+# UnauthorizedAccessException even when writing a NEW file to the same folder
+# would succeed. So: stop processes, try delete, fall back to rename-aside
+# (rename usually works when overwrite/delete is denied), then copy fresh.
+function Install-LmforgeBinary {
+    param([string]$Source, [string]$Target)
+    $Dir = Split-Path $Target -Parent
+    New-Item -ItemType Directory -Path $Dir -Force | Out-Null
+
+    # Sweep rename-aside leftovers from previous runs (best-effort).
+    Get-ChildItem "$Dir\*.exe.old*" -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+
+    if (Test-Path $Target) {
+        Get-Process -Name "lmforge" -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 500
+        try {
+            Remove-Item $Target -Force -ErrorAction Stop
+        } catch {
+            $Aside = "$Target.old.$PID"
+            try {
+                Move-Item $Target $Aside -Force -ErrorAction Stop
+                Warn "Old binary was locked (likely AV) - moved aside to $Aside"
+            } catch {
+                Warn "Cannot delete or rename the existing binary at $Target"
+                Warn "Your antivirus has locked it. To fix:"
+                Warn "  1. Open your AV (Bitdefender: Protection > Antivirus > Settings > Manage Exceptions;"
+                Warn "     Windows Security: Virus & threat protection > Protection history > Restore/Allow)"
+                Warn "  2. Restore or allow lmforge.exe, and add an exclusion for the folder:"
+                Warn "     $Dir"
+                Warn "  3. Re-run this installer."
+                Err "Existing binary is locked by antivirus: $Target"
+            }
+        }
+    }
+
+    try {
+        Copy-Item $Source $Target -Force -ErrorAction Stop
+    } catch {
+        Warn "Could not write $Target ($($_.Exception.Message))."
+        Warn "Your antivirus is blocking writes to this folder. Add an exclusion for:"
+        Warn "  $Dir"
+        Warn "then re-run this installer."
+        Err "Antivirus blocked binary install"
+    }
+}
+
 Write-Host ""
 Write-Host "  LMForge Core - Installer" -ForegroundColor Cyan
 Write-Host ""
@@ -145,8 +194,7 @@ if ($env:LMFORGE_LOCAL_BIN) {
         Err "LMFORGE_LOCAL_BIN set but not found: $env:LMFORGE_LOCAL_BIN"
     }
     Info "Using local binary: $env:LMFORGE_LOCAL_BIN"
-    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    Copy-Item $env:LMFORGE_LOCAL_BIN "$InstallDir\$Binary" -Force
+    Install-LmforgeBinary $env:LMFORGE_LOCAL_BIN "$InstallDir\$Binary"
     $Version = "local"
 } else {
 if ($Version -eq "latest") {
@@ -172,8 +220,7 @@ try {
     Err "Download failed from $DownloadUrl`n  Check https://github.com/$Repo/releases for available versions."
 }
 
-New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-Copy-Item $TmpExe "$InstallDir\$Binary" -Force
+Install-LmforgeBinary $TmpExe "$InstallDir\$Binary"
 Remove-Item $TmpExe -ErrorAction SilentlyContinue
 }
 Success "Binary installed to $InstallDir\$Binary"
