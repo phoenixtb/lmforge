@@ -164,12 +164,19 @@ if (Test-Path "$env:LOCALAPPDATA\lmforge") {
 }
 
 # --- 6. PATH cleanup ---
+# Non-fatal: AV behavior-blocking can deny registry env writes from a piped
+# script. A failed PATH edit must not abort the remaining purge steps.
 Section "Cleaning up PATH..."
-$UserPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
-if ($UserPath -like "*$InstallDir*") {
-    $newPath = ($UserPath -split ';' | Where-Object { $_ -and $_ -ne $InstallDir }) -join ';'
-    [System.Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
-    Info "Removed $InstallDir from user PATH"
+try {
+    $UserPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+    if ($UserPath -like "*$InstallDir*") {
+        $newPath = ($UserPath -split ';' | Where-Object { $_ -and $_ -ne $InstallDir }) -join ';'
+        [System.Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
+        Info "Removed $InstallDir from user PATH"
+    }
+} catch {
+    Warn "Could not update user PATH ($($_.Exception.Message))."
+    Warn "Remove '$InstallDir' from PATH manually: Settings > System > About > Advanced system settings > Environment Variables"
 }
 
 # --- 7. PID / socket files ---

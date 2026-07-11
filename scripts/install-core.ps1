@@ -102,8 +102,20 @@ $IsLocal   = [bool]$env:LMFORGE_LOCAL_BIN
 $IsUpgrade = ($env:LMFORGE_UPGRADE -eq "1")
 if ($AlreadyInstalled -and -not $IsLocal -and -not $IsUpgrade) {
     $CoreBin = if ($LmforgeCmd) { $LmforgeCmd.Source } else { "$InstallDir\$Binary" }
-    $CoreVerRaw = & $CoreBin --version 2>$null
-    $CoreVerMatch = [regex]::Match($CoreVerRaw, '(\d+\.\d+\.\d+)')
+    # The probe must not abort the install: if the binary exists but cannot run
+    # (AV quarantine block -> "Access is denied"), treat it as a broken install
+    # and fall through to a fresh download over it instead of dying here.
+    $CoreVerRaw = $null
+    try { $CoreVerRaw = & $CoreBin --version 2>$null } catch {
+        Warn "Existing binary at $CoreBin cannot run ($($_.Exception.Message))."
+        Warn "Likely antivirus quarantine - reinstalling over it."
+        Warn "If this repeats: Windows Security > Protection history > restore/allow lmforge.exe,"
+        Warn "then consider an exclusion for $InstallDir"
+        $AlreadyInstalled = $false
+    }
+}
+if ($AlreadyInstalled -and -not $IsLocal -and -not $IsUpgrade) {
+    $CoreVerMatch = [regex]::Match("$CoreVerRaw", '(\d+\.\d+\.\d+)')
     $CoreVer = if ($CoreVerMatch.Success) { $CoreVerMatch.Groups[1].Value } else { "unknown" }
     Warn "lmforge $CoreVer is already installed at $CoreBin"
     if (-not (Test-LmforgeHealth -TimeoutSec 3)) {
@@ -177,15 +189,22 @@ Info "Creating LMForge data directories at $DataDir ..."
 }
 
 # --- PATH update ---
-$UserPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
-if ($UserPath -notlike "*$InstallDir*") {
-    [System.Environment]::SetEnvironmentVariable(
-        "PATH",
-        "$UserPath;$InstallDir",
-        "User"
-    )
-    $env:PATH += ";$InstallDir"
-    Success "Added $InstallDir to your user PATH (restart terminal to take effect)"
+# Non-fatal: AV behavior-blocking can deny registry env writes from a piped
+# script. The session PATH (set above) still works for the rest of this run.
+try {
+    $UserPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+    if ($UserPath -notlike "*$InstallDir*") {
+        [System.Environment]::SetEnvironmentVariable(
+            "PATH",
+            "$UserPath;$InstallDir",
+            "User"
+        )
+        $env:PATH += ";$InstallDir"
+        Success "Added $InstallDir to your user PATH (restart terminal to take effect)"
+    }
+} catch {
+    Warn "Could not persist $InstallDir to user PATH ($($_.Exception.Message))."
+    Warn "Add it manually: Settings > System > About > Advanced system settings > Environment Variables"
 }
 
 # --- Init + Service install ---
