@@ -1,0 +1,29 @@
+PackageIdentifier: phoenixtb.lmforge
+PackageVersion: 0.1.6
+PackageLocale: en-US
+Publisher: phoenixtb
+PublisherUrl: https://github.com/phoenixtb
+PublisherSupportUrl: https://github.com/phoenixtb/lmforge/issues
+PackageName: LMForge
+PackageUrl: https://github.com/phoenixtb/lmforge
+License: MIT
+LicenseUrl: https://github.com/phoenixtb/lmforge/blob/main/LICENSE
+ShortDescription: Hardware-aware LLM inference orchestrator - from edge to server
+Description: |-
+  LMForge probes your hardware (GPU vendor, VRAM, RAM), selects and installs
+  the best local inference engine, and serves OpenAI- and Ollama-compatible
+  APIs for local LLMs. Includes model management, an interactive REPL, and
+  multi-model orchestration.
+  After installing, run "lmforge init" once to detect hardware and install
+  the inference engine, then "lmforge start".
+Moniker: lmforge
+Tags:
+  - llm
+  - ai
+  - inference
+  - llama-cpp
+  - openai-api
+  - ollama
+ReleaseNotesUrl: https://github.com/phoenixtb/lmforge/releases/tag/v0.1.6
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
