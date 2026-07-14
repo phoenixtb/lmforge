@@ -46,22 +46,22 @@ function Wait-LmforgeHealth {
     return $false
 }
 
+# Returns $true when the daemon is healthy, $false otherwise - the caller
+# must not report success on $false.
 function Ensure-LmforgeDaemon {
     param([string]$Binary)
     if (Test-LmforgeHealth -TimeoutSec 3) {
         Info "Daemon is running at http://127.0.0.1:11430"
-        return
+        return $true
     }
     Warn "Daemon not reachable yet. Starting engine..."
     & $Binary start
     if (Wait-LmforgeHealth -TimeoutSec 120) {
         Success "Daemon is running at http://127.0.0.1:11430"
-    } else {
-        Warn "Daemon still not reachable after 120s."
-        Warn "Check: lmforge service status"
-        Warn "Log:  $env:USERPROFILE\.lmforge\logs\daemon.out.log"
-        Warn "Debug: lmforge start --foreground"
+        return $true
     }
+    Warn "Daemon still not reachable after 120s."
+    return $false
 }
 
 # Stop the daemon/service so the (locked) .exe can be overwritten on reinstall.
@@ -170,7 +170,7 @@ if ($AlreadyInstalled -and -not $IsLocal -and -not $IsUpgrade) {
     if (-not (Test-LmforgeHealth -TimeoutSec 3)) {
         Warn "Daemon is not running - repairing service and starting engine..."
         & $CoreBin service install
-        Ensure-LmforgeDaemon $CoreBin
+        $null = Ensure-LmforgeDaemon $CoreBin
     } else {
         Info "Daemon is running at http://127.0.0.1:11430"
     }
@@ -255,11 +255,25 @@ try {
 }
 
 # --- Init + Service install ---
+# Each step's outcome is tracked so the final summary tells the truth. `init`
+# downloads the inference engine from GitHub; a failure here (firewall/AV
+# blocking lmforge.exe's outbound connections, no network) means the daemon
+# cannot serve models, so it must not be reported as a working install.
 Info "Running lmforge init..."
 if ($env:LMFORGE_DATA_DIR) {
     & "$InstallDir\$Binary" init --data-dir $env:LMFORGE_DATA_DIR
 } else {
     & "$InstallDir\$Binary" init
+}
+$InitOk = ($LASTEXITCODE -eq 0)
+if (-not $InitOk) {
+    Warn "lmforge init failed (exit $LASTEXITCODE) - engine setup is incomplete."
+    Warn "If the error above mentions 'os error 10013' or a tcp connect error:"
+    Warn "  your firewall/antivirus is blocking OUTBOUND connections from lmforge.exe"
+    Warn "  (PowerShell could reach GitHub, but lmforge.exe was denied)."
+    Warn "  Bitdefender: Protection > Firewall > Rules > allow $InstallDir\$Binary"
+    Warn "  Windows Firewall: check outbound rules for lmforge.exe"
+    Warn "Then re-run: lmforge init"
 }
 
 Info "Registering auto-start at logon (HKCU Run key)..."
@@ -267,21 +281,56 @@ $ServiceRegistered = $true
 & "$InstallDir\$Binary" service install
 if ($LASTEXITCODE -ne 0) {
     $ServiceRegistered = $false
-    Warn "Service registration failed (exit $LASTEXITCODE). Daemon will still start now; retry: lmforge service install"
+    Warn "Service registration failed (exit $LASTEXITCODE). Retry later: lmforge service install"
 }
 
-Ensure-LmforgeDaemon "$InstallDir\$Binary"
-
-Write-Host ""
-Success "LMForge $Version installed successfully!"
-Write-Host ""
-if ($ServiceRegistered) {
-    Write-Host "  The daemon is running and starts automatically at logon." -ForegroundColor White
+# Without a working engine the daemon cannot become healthy - skip the 2 min
+# wait and keep the init failure as the headline problem.
+$DaemonUp = $false
+if ($InitOk) {
+    $DaemonUp = Ensure-LmforgeDaemon "$InstallDir\$Binary"
 } else {
-    Write-Host "  The daemon is running now. Auto-start at logon was NOT registered." -ForegroundColor Yellow
-    Write-Host "  Retry: lmforge service install" -ForegroundColor Yellow
+    Warn "Skipping daemon startup check (init failed)."
 }
-Write-Host "  API:  http://127.0.0.1:11430" -ForegroundColor White
+
+Write-Host ""
+if ($InitOk -and $DaemonUp) {
+    Success "LMForge $Version installed successfully!"
+    Write-Host ""
+    if ($ServiceRegistered) {
+        Write-Host "  The daemon is running and starts automatically at logon." -ForegroundColor White
+    } else {
+        Write-Host "  The daemon is running now. Auto-start at logon was NOT registered." -ForegroundColor Yellow
+        Write-Host "  Retry: lmforge service install" -ForegroundColor Yellow
+    }
+    Write-Host "  API:  http://127.0.0.1:11430" -ForegroundColor White
+} else {
+    Warn "LMForge $Version installed WITH PROBLEMS - it is not usable yet:"
+    Write-Host ""
+    Write-Host "    Binary            : OK ($InstallDir\$Binary)" -ForegroundColor White
+    if ($InitOk) {
+        Write-Host "    Engine (init)     : OK" -ForegroundColor White
+    } else {
+        Write-Host "    Engine (init)     : FAILED - see [!] notes above" -ForegroundColor Red
+    }
+    if ($ServiceRegistered) {
+        Write-Host "    Autostart         : OK" -ForegroundColor White
+    } else {
+        Write-Host "    Autostart         : FAILED - retry: lmforge service install" -ForegroundColor Red
+    }
+    if ($DaemonUp) {
+        Write-Host "    Daemon            : running at http://127.0.0.1:11430" -ForegroundColor White
+    } elseif ($InitOk) {
+        Write-Host "    Daemon            : NOT reachable - log: $env:USERPROFILE\.lmforge\logs\daemon.out.log" -ForegroundColor Red
+        Write-Host "                        debug: lmforge start --foreground" -ForegroundColor Red
+    } else {
+        Write-Host "    Daemon            : not started (needs engine)" -ForegroundColor Red
+    }
+    Write-Host ""
+    Write-Host "  After fixing the issue(s), run:" -ForegroundColor White
+    Write-Host "    lmforge init                 # finish engine setup"
+    Write-Host "    lmforge start                # start the daemon"
+}
 Write-Host ""
 Write-Host "  Next steps:" -ForegroundColor White
 Write-Host "    lmforge pull qwen3-8b        # download your first model"
