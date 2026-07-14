@@ -26,8 +26,13 @@ $MinCoreVersion  = [version]"0.1.0"
 $AssetName       = "LMForge-UI-windows-x86_64.exe"
 $InstallDir      = "$env:LOCALAPPDATA\LMForge"
 $AppExe          = "$InstallDir\lmforge-ui.exe"
-$CoreInstallDir  = "$env:LOCALAPPDATA\lmforge\bin"
+$CoreInstallDir  = "$env:USERPROFILE\.lmforge\bin"
 $CoreExe         = "$CoreInstallDir\lmforge.exe"
+# Installs <= v0.1.6 placed the core binary under hidden AppData.
+if (-not (Test-Path $CoreExe) -and (Test-Path "$env:LOCALAPPDATA\lmforge\bin\lmforge.exe")) {
+    $CoreInstallDir = "$env:LOCALAPPDATA\lmforge\bin"
+    $CoreExe        = "$CoreInstallDir\lmforge.exe"
+}
 
 Write-Host ""
 Write-Host "  LMForge UI - Installer" -ForegroundColor Cyan

@@ -979,7 +979,7 @@ async fn download_file(url: &str, dest: &std::path::Path) -> Result<()> {
         .get(url)
         .send()
         .await
-        .context("Failed to start download")?;
+        .map_err(|e| crate::util::net::explain_send_error(e, "engine", url))?;
 
     if !resp.status().is_success() {
         bail!("Download failed: HTTP {}", resp.status());
@@ -1836,7 +1836,7 @@ async fn download_with_sha256(url: &str, dest: &std::path::Path, expected_hex: &
         .get(url)
         .send()
         .await
-        .with_context(|| format!("Failed to start download: {url}"))?;
+        .map_err(|e| crate::util::net::explain_send_error(e, "engine", url))?;
 
     if !resp.status().is_success() {
         bail!("Variant download failed: HTTP {} at {}", resp.status(), url);

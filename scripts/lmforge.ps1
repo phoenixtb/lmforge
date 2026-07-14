@@ -57,7 +57,7 @@ function Invoke-Action([string]$Key) {
             if (Test-Path (Join-Path $Util "dev_status.sh")) {
                 bash (Join-Path $Util "dev_status.sh")
             } else {
-                Write-Host "  core: $(Test-Path "$env:LOCALAPPDATA\lmforge\bin\lmforge.exe")"
+                Write-Host "  core: $(Test-Path "$env:USERPROFILE\.lmforge\bin\lmforge.exe")"
                 Write-Host "  ui:   $(Test-Path $UiExe)"
                 try {
                     $h = Invoke-WebRequest "http://127.0.0.1:11430/health" -UseBasicParsing -TimeoutSec 3

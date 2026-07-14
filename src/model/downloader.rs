@@ -245,7 +245,10 @@ async fn download_file(
         }
     }
 
-    let resp = request.send().await.context("Failed to start download")?;
+    let resp = request
+        .send()
+        .await
+        .map_err(|e| crate::util::net::explain_send_error(e, "model", url))?;
 
     if resp.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
         return Ok(0);

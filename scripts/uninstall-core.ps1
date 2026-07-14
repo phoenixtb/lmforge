@@ -43,7 +43,10 @@ function Remove-Tree {
 
 $Repo       = "phoenixtb/lmforge"
 $Binary     = "lmforge.exe"
-$InstallDir = "$env:LOCALAPPDATA\lmforge\bin"
+# Current install location; installs <= v0.1.6 used the hidden AppData path.
+# Both are cleaned up.
+$InstallDir       = "$env:USERPROFILE\.lmforge\bin"
+$LegacyInstallDir = "$env:LOCALAPPDATA\lmforge\bin"
 $DataDir    = "$env:USERPROFILE\.lmforge"
 $TaskName   = "LMForge Daemon"
 
@@ -68,9 +71,12 @@ if (-not $Yes) {
 
 # --- 1. Stop + unregister service via CLI ---
 Section "Stopping daemon and removing service..."
-$env:PATH = "$InstallDir;$env:PATH"
+$env:PATH = "$InstallDir;$LegacyInstallDir;$env:PATH"
 $LmforgeCmd = Get-Command "lmforge" -ErrorAction SilentlyContinue
-$CoreBin = if ($LmforgeCmd) { $LmforgeCmd.Source } elseif (Test-Path "$InstallDir\$Binary") { "$InstallDir\$Binary" } else { $null }
+$CoreBin = $null
+if ($LmforgeCmd) { $CoreBin = $LmforgeCmd.Source }
+elseif (Test-Path "$InstallDir\$Binary") { $CoreBin = "$InstallDir\$Binary" }
+elseif (Test-Path "$LegacyInstallDir\$Binary") { $CoreBin = "$LegacyInstallDir\$Binary" }
 
 if ($CoreBin) {
     & $CoreBin service stop       2>$null | Out-Null
@@ -140,31 +146,38 @@ try {
 Start-Sleep -Seconds 1
 Info "No lmforge processes running"
 
-# --- 4. Remove binary ---
-# Non-fatal: an AV-quarantined/blocked exe denies delete; the remaining
+# --- 4. Remove binary (current + legacy locations) ---
+# Non-fatal: a quarantined/blocked exe denies delete; the remaining
 # cleanup steps must still run.
 Section "Removing binary..."
-if (Test-Path "$InstallDir\$Binary") {
-    try {
-        Remove-Item "$InstallDir\$Binary" -Force -ErrorAction Stop
-        Info "Removed $InstallDir\$Binary"
-    } catch {
-        Warn "Could not remove $InstallDir\$Binary ($($_.Exception.Message))."
-        Warn "Your antivirus has locked it. Restore/allow it in the AV quarantine UI,"
-        Warn "or delete the folder manually after a reboot: $InstallDir"
+$found = $false
+foreach ($dir in @($InstallDir, $LegacyInstallDir)) {
+    if (Test-Path "$dir\$Binary") {
+        $found = $true
+        try {
+            Remove-Item "$dir\$Binary" -Force -ErrorAction Stop
+            Info "Removed $dir\$Binary"
+        } catch {
+            Warn "Could not remove $dir\$Binary ($($_.Exception.Message))."
+            Warn "Your security software has locked it. Restore/allow it in the"
+            Warn "quarantine UI, or delete the folder manually after a reboot: $dir"
+        }
     }
-} else {
+    # Rename-aside leftovers from blocked upgrades (lmforge.exe.old.<pid>)
+    Get-ChildItem "$dir\*.exe.old*" -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+}
+if (-not $found) {
     Warn "lmforge binary not found at $InstallDir\$Binary"
 }
-# Rename-aside leftovers from AV-blocked upgrades (lmforge.exe.old.<pid>)
-Get-ChildItem "$InstallDir\*.exe.old*" -ErrorAction SilentlyContinue |
-    Remove-Item -Force -ErrorAction SilentlyContinue
 
-# --- 5. Remove install dir if empty ---
-if (Test-Path $InstallDir) {
-    $remaining = Get-ChildItem $InstallDir -ErrorAction SilentlyContinue
-    if (-not $remaining) {
-        Remove-Item $InstallDir -Force -ErrorAction SilentlyContinue
+# --- 5. Remove install dirs if empty ---
+foreach ($dir in @($InstallDir, $LegacyInstallDir)) {
+    if (Test-Path $dir) {
+        $remaining = Get-ChildItem $dir -ErrorAction SilentlyContinue
+        if (-not $remaining) {
+            Remove-Item $dir -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 if (Test-Path "$env:LOCALAPPDATA\lmforge") {
@@ -174,16 +187,17 @@ if (Test-Path "$env:LOCALAPPDATA\lmforge") {
     }
 }
 
-# --- 6. PATH cleanup ---
-# Non-fatal: AV behavior-blocking can deny registry env writes from a piped
+# --- 6. PATH cleanup (current + legacy entries) ---
+# Non-fatal: security software can deny registry env writes from a piped
 # script. A failed PATH edit must not abort the remaining purge steps.
 Section "Cleaning up PATH..."
 try {
     $UserPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
-    if ($UserPath -like "*$InstallDir*") {
-        $newPath = ($UserPath -split ';' | Where-Object { $_ -and $_ -ne $InstallDir }) -join ';'
+    $newPath = ($UserPath -split ';' |
+        Where-Object { $_ -and $_ -ne $InstallDir -and $_ -ne $LegacyInstallDir }) -join ';'
+    if ($newPath -ne $UserPath) {
         [System.Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
-        Info "Removed $InstallDir from user PATH"
+        Info "Removed install dir from user PATH"
     }
 } catch {
     Warn "Could not update user PATH ($($_.Exception.Message))."

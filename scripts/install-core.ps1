@@ -101,16 +101,15 @@ function Install-LmforgeBinary {
             $Aside = "$Target.old.$PID"
             try {
                 Move-Item $Target $Aside -Force -ErrorAction Stop
-                Warn "Old binary was locked (likely AV) - moved aside to $Aside"
+                Warn "Old binary was locked - moved aside to $Aside"
             } catch {
-                Warn "Cannot delete or rename the existing binary at $Target"
-                Warn "Your antivirus has locked it. To fix:"
-                Warn "  1. Open your AV (Bitdefender: Protection > Antivirus > Settings > Manage Exceptions;"
-                Warn "     Windows Security: Virus & threat protection > Protection history > Restore/Allow)"
-                Warn "  2. Restore or allow lmforge.exe, and add an exclusion for the folder:"
-                Warn "     $Dir"
+                Warn "Cannot replace the existing file at $Target - it is locked,"
+                Warn "most likely quarantined by your security software. To fix:"
+                Warn "  1. Open your security software's quarantine / protection history"
+                Warn "     and restore or allow lmforge.exe"
+                Warn "  2. Add an exclusion for the folder: $Dir"
                 Warn "  3. Re-run this installer."
-                Err "Existing binary is locked by antivirus: $Target"
+                Err "Existing binary is locked: $Target"
             }
         }
     }
@@ -119,10 +118,9 @@ function Install-LmforgeBinary {
         Copy-Item $Source $Target -Force -ErrorAction Stop
     } catch {
         Warn "Could not write $Target ($($_.Exception.Message))."
-        Warn "Your antivirus is blocking writes to this folder. Add an exclusion for:"
-        Warn "  $Dir"
-        Warn "then re-run this installer."
-        Err "Antivirus blocked binary install"
+        Warn "Your security software is blocking writes to this folder."
+        Warn "Add an exclusion for $Dir and re-run this installer."
+        Err "Binary install blocked: $Target"
     }
 }
 
@@ -133,7 +131,13 @@ Write-Host ""
 $Repo       = "phoenixtb/lmforge"
 $Binary     = "lmforge.exe"
 $AssetName  = "lmforge-windows-x86_64.exe"
-$InstallDir = "$env:LOCALAPPDATA\lmforge\bin"
+# Everything LMForge owns lives under ONE visible root: %USERPROFILE%\.lmforge
+# (binary in bin\, models, engines, logs, config). One folder to find, one
+# folder to exclude in security software, one folder to delete.
+# Installs <= v0.1.6 used %LOCALAPPDATA%\lmforge\bin (hidden under AppData);
+# those are migrated below.
+$InstallDir       = "$env:USERPROFILE\.lmforge\bin"
+$LegacyInstallDir = "$env:LOCALAPPDATA\lmforge\bin"
 $Version    = if ($env:LMFORGE_VERSION) { $env:LMFORGE_VERSION } else { "latest" }
 
 Write-Host "  Repo   : https://github.com/$Repo"
@@ -141,12 +145,24 @@ Write-Host "  Version: $Version"
 Write-Host "  Install: $InstallDir\$Binary"
 Write-Host ""
 
+# --- Legacy location migration ---
+# A binary at the old hidden AppData path forces a fresh install into the new
+# location; the old copy and its PATH entry are removed after success.
+$LegacyPresent = Test-Path "$LegacyInstallDir\$Binary"
+if ($LegacyPresent) {
+    Info "Found existing install at old location ($LegacyInstallDir) - migrating to $InstallDir"
+    Stop-LmforgeForInstall "$LegacyInstallDir\$Binary"
+}
+
 # --- Idempotency check ---
 # A local build (LMFORGE_LOCAL_BIN) or LMFORGE_UPGRADE=1 always overwrites - an
 # explicit dev/upgrade action. The early-exit only guards plain release installs.
 $env:PATH = "$InstallDir;$env:PATH"
 $LmforgeCmd = Get-Command "lmforge" -ErrorAction SilentlyContinue
-$AlreadyInstalled = ($LmforgeCmd -or (Test-Path "$InstallDir\$Binary"))
+# A command resolving to the legacy dir does not count as installed - it is
+# being migrated.
+if ($LmforgeCmd -and $LmforgeCmd.Source -like "$LegacyInstallDir*") { $LmforgeCmd = $null }
+$AlreadyInstalled = (-not $LegacyPresent) -and ($LmforgeCmd -or (Test-Path "$InstallDir\$Binary"))
 $IsLocal   = [bool]$env:LMFORGE_LOCAL_BIN
 $IsUpgrade = ($env:LMFORGE_UPGRADE -eq "1")
 if ($AlreadyInstalled -and -not $IsLocal -and -not $IsUpgrade) {
@@ -157,9 +173,9 @@ if ($AlreadyInstalled -and -not $IsLocal -and -not $IsUpgrade) {
     $CoreVerRaw = $null
     try { $CoreVerRaw = & $CoreBin --version 2>$null } catch {
         Warn "Existing binary at $CoreBin cannot run ($($_.Exception.Message))."
-        Warn "Likely antivirus quarantine - reinstalling over it."
-        Warn "If this repeats: Windows Security > Protection history > restore/allow lmforge.exe,"
-        Warn "then consider an exclusion for $InstallDir"
+        Warn "It was probably quarantined by your security software - reinstalling over it."
+        Warn "If this repeats, restore/allow lmforge.exe in your security software's"
+        Warn "quarantine and add an exclusion for $InstallDir"
         $AlreadyInstalled = $false
     }
 }
@@ -235,17 +251,36 @@ Info "Creating LMForge data directories at $DataDir ..."
     New-Item -ItemType Directory -Path "$DataDir\$_" -Force | Out-Null
 }
 
+# --- Legacy install cleanup (after the new binary is in place) ---
+if ($LegacyPresent) {
+    try {
+        Remove-Item "$LegacyInstallDir\$Binary" -Force -ErrorAction Stop
+        # Remove the whole %LOCALAPPDATA%\lmforge tree if nothing else lives there.
+        $left = Get-ChildItem "$env:LOCALAPPDATA\lmforge" -Recurse -File -ErrorAction SilentlyContinue
+        if (-not $left) { Remove-Item "$env:LOCALAPPDATA\lmforge" -Recurse -Force -ErrorAction SilentlyContinue }
+        Info "Removed old binary at $LegacyInstallDir"
+    } catch {
+        Warn "Could not remove old binary at $LegacyInstallDir\$Binary - delete it manually."
+    }
+}
+
 # --- PATH update ---
-# Non-fatal: AV behavior-blocking can deny registry env writes from a piped
+# Non-fatal: security software can deny registry env writes from a piped
 # script. The session PATH (set above) still works for the rest of this run.
 try {
     $UserPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
-    if ($UserPath -notlike "*$InstallDir*") {
-        [System.Environment]::SetEnvironmentVariable(
-            "PATH",
-            "$UserPath;$InstallDir",
-            "User"
-        )
+    $Entries  = @($UserPath -split ';' | Where-Object { $_ })
+    $Changed  = $false
+    if ($Entries -contains $LegacyInstallDir) {
+        $Entries = @($Entries | Where-Object { $_ -ne $LegacyInstallDir })
+        $Changed = $true
+    }
+    if ($Entries -notcontains $InstallDir) {
+        $Entries += $InstallDir
+        $Changed = $true
+    }
+    if ($Changed) {
+        [System.Environment]::SetEnvironmentVariable("PATH", ($Entries -join ';'), "User")
         $env:PATH += ";$InstallDir"
         Success "Added $InstallDir to your user PATH (restart terminal to take effect)"
     }
@@ -256,24 +291,47 @@ try {
 
 # --- Init + Service install ---
 # Each step's outcome is tracked so the final summary tells the truth. `init`
-# downloads the inference engine from GitHub; a failure here (firewall/AV
-# blocking lmforge.exe's outbound connections, no network) means the daemon
+# downloads the inference engine from GitHub; a failure here means the daemon
 # cannot serve models, so it must not be reported as a working install.
+# Output is captured (while still streaming to the console) so a failure can
+# be diagnosed and explained in plain language instead of a raw error chain.
 Info "Running lmforge init..."
-if ($env:LMFORGE_DATA_DIR) {
-    & "$InstallDir\$Binary" init --data-dir $env:LMFORGE_DATA_DIR
-} else {
-    & "$InstallDir\$Binary" init
+$InitArgs = @("init")
+if ($env:LMFORGE_DATA_DIR) { $InitArgs += @("--data-dir", $env:LMFORGE_DATA_DIR) }
+$InitOut = New-Object System.Collections.Generic.List[string]
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"   # native stderr must not become terminating
+& "$InstallDir\$Binary" @InitArgs 2>&1 | ForEach-Object {
+    $line = "$_"
+    $InitOut.Add($line)
+    Write-Host $line
 }
 $InitOk = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = $prevEap
 if (-not $InitOk) {
-    Warn "lmforge init failed (exit $LASTEXITCODE) - engine setup is incomplete."
-    Warn "If the error above mentions 'os error 10013' or a tcp connect error:"
-    Warn "  your firewall/antivirus is blocking OUTBOUND connections from lmforge.exe"
-    Warn "  (PowerShell could reach GitHub, but lmforge.exe was denied)."
-    Warn "  Bitdefender: Protection > Firewall > Rules > allow $InstallDir\$Binary"
-    Warn "  Windows Firewall: check outbound rules for lmforge.exe"
-    Warn "Then re-run: lmforge init"
+    $InitText = $InitOut -join "`n"
+    Write-Host ""
+    Warn "Engine setup failed."
+    if ($InitText -match 'os error 10013') {
+        Warn "Cause: Windows refused the network connection (socket error 10013)."
+        Warn "  Your firewall or security software is blocking lmforge.exe from"
+        Warn "  accessing the internet. This installer script could reach GitHub,"
+        Warn "  so the block applies to lmforge.exe specifically."
+        Warn "Fix: allow outbound network access for this program in your firewall:"
+        Warn "  $InstallDir\$Binary"
+        Warn "Then run: lmforge init"
+    } elseif ($InitText -match 'tcp connect error|client error \(Connect\)|dns error|timed out|connection refused') {
+        Warn "Cause: lmforge.exe could not reach github.com (network error)."
+        Warn "Fix: check your internet connection, VPN/proxy, and firewall."
+        Warn "Then run: lmforge init"
+    } elseif ($InitText -match 'HTTP 4\d\d|HTTP 5\d\d|Download failed') {
+        Warn "Cause: the engine download was rejected by the server (see the HTTP"
+        Warn "  status above). This is usually temporary."
+        Warn "Fix: try again in a few minutes: lmforge init"
+    } else {
+        Warn "Cause: see the 'Error:' lines above."
+        Warn "After fixing it, run: lmforge init"
+    }
 }
 
 Info "Registering auto-start at logon (HKCU Run key)..."

@@ -53,6 +53,7 @@ function Resolve-E2eBin {
         $env:LF_BIN,
         (Join-Path $RepoRoot "target\debug\lmforge.exe"),
         (Join-Path $RepoRoot "target\release\lmforge.exe"),
+        "$env:USERPROFILE\.lmforge\bin\lmforge.exe",
         "$env:LOCALAPPDATA\lmforge\bin\lmforge.exe"
     ) | Where-Object { $_ }
     foreach ($c in $candidates) {

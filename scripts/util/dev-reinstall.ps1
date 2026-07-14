@@ -54,7 +54,7 @@ $Profile    = if ($Debug) { "debug" } else { "release" }
 # (the data dir is fixed per machine — only the models dir is relocatable later).
 $CustomDataDir = [bool]$DataDir
 $DataDir    = if ($DataDir) { $DataDir } else { "$env:USERPROFILE\.lmforge" }
-$InstallDir = "$env:LOCALAPPDATA\lmforge\bin"
+$InstallDir = "$env:USERPROFILE\.lmforge\bin"
 $CoreBin    = "$InstallDir\lmforge.exe"
 $UiInstall  = "$env:LOCALAPPDATA\LMForge"
 $UiExe      = "$UiInstall\lmforge-ui.exe"

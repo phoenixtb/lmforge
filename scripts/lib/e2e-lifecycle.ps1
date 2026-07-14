@@ -12,7 +12,7 @@
 $E2E_Repo     = "phoenixtb/lmforge"
 $E2E_RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $E2E_Api      = "http://127.0.0.1:11430"
-$E2E_Bin      = "$env:LOCALAPPDATA\lmforge\bin\lmforge.exe"
+$E2E_Bin      = "$env:USERPROFILE\.lmforge\bin\lmforge.exe"
 $E2E_UiExe    = "$env:LOCALAPPDATA\LMForge\lmforge-ui.exe"
 $E2E_RunKey   = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $E2E_Vbs      = Join-Path $env:USERPROFILE ".lmforge\daemon-task.vbs"
