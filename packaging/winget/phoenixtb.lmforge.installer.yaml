@@ -2,7 +2,7 @@
 # the `lmforge` command on PATH. It does NOT run post-install steps, so the
 # user finishes setup with `lmforge init` (mentioned in the locale manifest).
 PackageIdentifier: phoenixtb.lmforge
-PackageVersion: 0.1.6
+PackageVersion: 0.1.7
 Platform:
   - Windows.Desktop
 MinimumOSVersion: 10.0.17763.0
@@ -12,7 +12,7 @@ Commands:
 UpgradeBehavior: uninstallPrevious
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/phoenixtb/lmforge/releases/download/v0.1.6/lmforge-windows-x86_64.exe
-    InstallerSha256: 598112E88399DA9B2DDCB8FEADBBD747DB12F56591D9501405D2AFC6244A0065
+    InstallerUrl: https://github.com/phoenixtb/lmforge/releases/download/v0.1.7/lmforge-windows-x86_64.exe
+    InstallerSha256: 436B4FCC8E9115DD2715DAE7EB73FB299DDBB5E238F5B0EF7FF539A15C186466
 ManifestType: installer
 ManifestVersion: 1.6.0

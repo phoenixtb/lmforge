@@ -1,10 +1,10 @@
 # Version manifest. Submit all three files in this directory to
 # https://github.com/microsoft/winget-pkgs under
-#   manifests/p/phoenixtb/lmforge/0.1.6/
+#   manifests/p/phoenixtb/lmforge/0.1.7/
 # via PR (or `wingetcreate submit`). Per release: bump PackageVersion,
 # InstallerUrl and InstallerSha256, then re-submit.
 PackageIdentifier: phoenixtb.lmforge
-PackageVersion: 0.1.6
+PackageVersion: 0.1.7
 DefaultLocale: en-US
 ManifestType: version
 ManifestVersion: 1.6.0

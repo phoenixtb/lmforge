@@ -1,5 +1,5 @@
 PackageIdentifier: phoenixtb.lmforge
-PackageVersion: 0.1.6
+PackageVersion: 0.1.7
 PackageLocale: en-US
 Publisher: phoenixtb
 PublisherUrl: https://github.com/phoenixtb
@@ -24,6 +24,6 @@ Tags:
   - llama-cpp
   - openai-api
   - ollama
-ReleaseNotesUrl: https://github.com/phoenixtb/lmforge/releases/tag/v0.1.6
+ReleaseNotesUrl: https://github.com/phoenixtb/lmforge/releases/tag/v0.1.7
 ManifestType: defaultLocale
 ManifestVersion: 1.6.0
