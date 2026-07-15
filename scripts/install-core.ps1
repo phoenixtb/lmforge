@@ -124,6 +124,16 @@ function Install-LmforgeBinary {
     }
 }
 
+# Pure-ASCII banner: box-drawing/block glyphs (as used by the .sh installer)
+# would garble under `irm | iex` on legacy codepages and violate the ASCII-only
+# rule for published ps1 scripts.
+Write-Host ""
+Write-Host '   _     __  __ _____                     ' -ForegroundColor Cyan
+Write-Host '  | |   |  \/  |  ___|__  _ __ __ _  ___  ' -ForegroundColor Cyan
+Write-Host '  | |   | |\/| | |_ / _ \| ''__/ _` |/ _ \ ' -ForegroundColor Cyan
+Write-Host '  | |___| |  | |  _| (_) | | | (_| |  __/ ' -ForegroundColor Cyan
+Write-Host '  |_____|_|  |_|_|  \___/|_|  \__, |\___| ' -ForegroundColor Cyan
+Write-Host '                              |___/       ' -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  LMForge Core - Installer" -ForegroundColor Cyan
 Write-Host ""
@@ -293,45 +303,21 @@ try {
 # Each step's outcome is tracked so the final summary tells the truth. `init`
 # downloads the inference engine from GitHub; a failure here means the daemon
 # cannot serve models, so it must not be reported as a working install.
-# Output is captured (while still streaming to the console) so a failure can
-# be diagnosed and explained in plain language instead of a raw error chain.
+# init runs DIRECTLY on the console (no output capture): piping would garble
+# the binary's UTF-8 output into the legacy OEM codepage (mojibake) and hide
+# its download progress bars. The binary itself prints a plain-language cause
+# for network failures, so only the exit code is needed here.
 Info "Running lmforge init..."
-$InitArgs = @("init")
-if ($env:LMFORGE_DATA_DIR) { $InitArgs += @("--data-dir", $env:LMFORGE_DATA_DIR) }
-$InitOut = New-Object System.Collections.Generic.List[string]
-$prevEap = $ErrorActionPreference
-$ErrorActionPreference = "Continue"   # native stderr must not become terminating
-& "$InstallDir\$Binary" @InitArgs 2>&1 | ForEach-Object {
-    $line = "$_"
-    $InitOut.Add($line)
-    Write-Host $line
+if ($env:LMFORGE_DATA_DIR) {
+    & "$InstallDir\$Binary" init --data-dir $env:LMFORGE_DATA_DIR
+} else {
+    & "$InstallDir\$Binary" init
 }
 $InitOk = ($LASTEXITCODE -eq 0)
-$ErrorActionPreference = $prevEap
 if (-not $InitOk) {
-    $InitText = $InitOut -join "`n"
     Write-Host ""
-    Warn "Engine setup failed."
-    if ($InitText -match 'os error 10013') {
-        Warn "Cause: Windows refused the network connection (socket error 10013)."
-        Warn "  Your firewall or security software is blocking lmforge.exe from"
-        Warn "  accessing the internet. This installer script could reach GitHub,"
-        Warn "  so the block applies to lmforge.exe specifically."
-        Warn "Fix: allow outbound network access for this program in your firewall:"
-        Warn "  $InstallDir\$Binary"
-        Warn "Then run: lmforge init"
-    } elseif ($InitText -match 'tcp connect error|client error \(Connect\)|dns error|timed out|connection refused') {
-        Warn "Cause: lmforge.exe could not reach github.com (network error)."
-        Warn "Fix: check your internet connection, VPN/proxy, and firewall."
-        Warn "Then run: lmforge init"
-    } elseif ($InitText -match 'HTTP 4\d\d|HTTP 5\d\d|Download failed') {
-        Warn "Cause: the engine download was rejected by the server (see the HTTP"
-        Warn "  status above). This is usually temporary."
-        Warn "Fix: try again in a few minutes: lmforge init"
-    } else {
-        Warn "Cause: see the 'Error:' lines above."
-        Warn "After fixing it, run: lmforge init"
-    }
+    Warn "Engine setup failed - the message above explains the cause."
+    Warn "After fixing it, run: lmforge init"
 }
 
 Info "Registering auto-start at logon (HKCU Run key)..."
