@@ -223,9 +223,11 @@ if ($Purge) {
     if (Test-Path $DataDir) {
         if (Remove-Tree $DataDir) { Info "Data directory removed" }
     }
-    $uiData = "$env:APPDATA\com.lmforge.app"
-    if (Test-Path $uiData) {
-        if (Remove-Tree $uiData) { Info "Removed $uiData" }
+    # UI data: Roaming = config/state, Local = WebView2 browser data (cache).
+    foreach ($uiData in @("$env:APPDATA\com.lmforge.app", "$env:LOCALAPPDATA\com.lmforge.app")) {
+        if (Test-Path $uiData) {
+            if (Remove-Tree $uiData) { Info "Removed $uiData" }
+        }
     }
 } else {
     Info "Keeping $DataDir (set LMFORGE_PURGE=1 to remove)"

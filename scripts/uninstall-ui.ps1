@@ -144,13 +144,16 @@ if (Test-Path $InstallDir) {
 }
 
 # --- Remove app data (Tauri identifier: com.lmforge.app) ---
-$AppDataDir = "$env:APPDATA\com.lmforge.app"
-if (Test-Path $AppDataDir) {
-    try {
-        Remove-Item -LiteralPath $AppDataDir -Recurse -Force -ErrorAction Stop
-        Info "Removed $AppDataDir"
-    } catch {
-        Warn "Could not remove $AppDataDir : $($_.Exception.Message)"
+# Roaming holds the UI's config/state; Local holds the WebView2 browser data
+# (cache, cookies, localStorage) that Windows creates for the embedded webview.
+foreach ($d in @("$env:APPDATA\com.lmforge.app", "$env:LOCALAPPDATA\com.lmforge.app")) {
+    if (Test-Path $d) {
+        try {
+            Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction Stop
+            Info "Removed $d"
+        } catch {
+            Warn "Could not remove $d : $($_.Exception.Message)"
+        }
     }
 }
 
