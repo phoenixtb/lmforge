@@ -64,6 +64,30 @@ function Ensure-LmforgeDaemon {
     return $false
 }
 
+# Warn upfront when third-party security software is present. LMForge ships
+# unsigned (free OSS project); behavior-based protection in some products
+# quarantines unsigned binaries that autostart, spawn engine processes, and
+# open localhost sockets - which is exactly what LMForge does by design.
+# Detecting it BEFORE download turns a mid-install mystery quarantine into an
+# informed choice. Vendor-neutral: reads the Windows Security Center registry.
+function Show-SecuritySoftwareNotice {
+    param([string]$DataRoot)
+    try {
+        $avs = Get-CimInstance -Namespace "root/SecurityCenter2" -ClassName AntiVirusProduct -ErrorAction Stop |
+            Select-Object -ExpandProperty displayName -Unique |
+            Where-Object { $_ -notmatch 'Windows Defender|Microsoft Defender' }
+        if ($avs) {
+            Warn "Detected security software: $($avs -join ', ')"
+            Warn "LMForge is a free open-source project and its binaries are not yet"
+            Warn "code-signed, so behavioral protection may quarantine them when the"
+            Warn "daemon or UI starts. If that happens (or to avoid it), add an"
+            Warn "exclusion in your security software for this folder:"
+            Warn "  $DataRoot"
+            Write-Host ""
+        }
+    } catch {}
+}
+
 # Stop the daemon/service so the (locked) .exe can be overwritten on reinstall.
 function Stop-LmforgeForInstall {
     param([string]$Binary)
@@ -154,6 +178,8 @@ Write-Host "  Repo   : https://github.com/$Repo"
 Write-Host "  Version: $Version"
 Write-Host "  Install: $InstallDir\$Binary"
 Write-Host ""
+
+Show-SecuritySoftwareNotice "$env:USERPROFILE\.lmforge"
 
 # --- Legacy location migration ---
 # A binary at the old hidden AppData path forces a fresh install into the new

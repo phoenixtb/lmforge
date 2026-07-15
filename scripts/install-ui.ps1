@@ -40,6 +40,23 @@ Write-Host "  Repo   : https://github.com/$Repo"
 Write-Host "  Version: $Version"
 Write-Host ""
 
+# Unsigned OSS binaries + behavioral AV protection = quarantine risk the
+# moment the app starts talking to the daemon. Warn upfront, vendor-neutral.
+try {
+    $avs = Get-CimInstance -Namespace "root/SecurityCenter2" -ClassName AntiVirusProduct -ErrorAction Stop |
+        Select-Object -ExpandProperty displayName -Unique |
+        Where-Object { $_ -notmatch 'Windows Defender|Microsoft Defender' }
+    if ($avs) {
+        Warn "Detected security software: $($avs -join ', ')"
+        Warn "LMForge binaries are not yet code-signed; behavioral protection may"
+        Warn "quarantine them when the app connects to the daemon. To avoid this,"
+        Warn "add exclusions for these folders in your security software:"
+        Warn "  $env:USERPROFILE\.lmforge"
+        Warn "  $InstallDir"
+        Write-Host ""
+    }
+} catch {}
+
 # --- Idempotency: already installed ---
 # A local build ($env:LMFORGE_UI_LOCAL) or LMFORGE_UPGRADE=1 is an explicit
 # "update" request, so let the installer overwrite. The early-exit only guards
