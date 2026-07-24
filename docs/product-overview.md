@@ -59,7 +59,11 @@ curl -fsSL https://github.com/phoenixtb/lmforge/releases/latest/download/install
 
 The installer sets everything up, starts the engine, and registers it to **start automatically when you log in** (user autostart on Windows, `launchd` on macOS, `systemd --user` on Linux). The AI server lives at `http://localhost:11430`.
 
+Everything LMForge owns lives under **one visible folder** — `~/.lmforge` (`C:\Users\<you>\.lmforge` on Windows): the binary, engines, models, logs, and config. One folder to find, one to back up or exclude, one to delete.
+
 **Test it:** open the LMForge app, or run `lmforge status` in a terminal. You should see the engine reported as **ready**.
+
+> **Good to know — security software on Windows.** LMForge is a free open-source project and its binaries are **not yet code-signed** (signing via SignPath Foundation is in progress). Windows Defender works fine, but some third-party antivirus products (e.g. behavioral protection suites) may quarantine the engine when it first starts. The installer detects installed security software and warns you upfront; if it happens, restore the files from quarantine and add an exclusion for `C:\Users\<you>\.lmforge`, then re-run the installer.
 
 ---
 
@@ -225,9 +229,9 @@ curl http://localhost:11430/v1/chat/completions \
 
 ### 15. Secure by default
 
-**What:** Binds to `localhost` only by default. Network sharing is explicit: API key and/or trusted CIDR ranges in config.
+**What:** Binds to `localhost` only by default. Network sharing is explicit: API key and/or trusted CIDR ranges in config. Engine downloads are **sha256-verified** against pinned checksums before install.
 
-**Why it matters:** Your AI server is not exposed by accident. Opening it up is deliberate.
+**Why it matters:** Your AI server is not exposed by accident, and the inference engine you run is exactly the one that was published. Opening the API up to your network is deliberate.
 
 **Try it:** by default only your machine reaches the API. Network sharing is configured in `config.toml` (`api_key`, `trusted_networks`).
 
