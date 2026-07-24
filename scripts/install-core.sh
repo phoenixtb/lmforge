@@ -32,8 +32,15 @@ warn()    { echo -e "${YELLOW}  ⚠${NC} $*"; }
 error()   { echo -e "${RED}  ✗${NC} $*" >&2; exit 1; }
 section() { echo -e "\n${BOLD}$*${NC}"; }
 
-# shellcheck source=banner.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/banner.sh" 2>/dev/null || true
+# Optional shared banner. MUST be guarded with -f: under `curl | bash` there
+# is no banner.sh next to the script, and macOS bash 3.2 treats a failed
+# `source` as fatal even with `|| true` - the script would die silently
+# before printing anything.
+BANNER_FILE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/banner.sh"
+if [ -f "$BANNER_FILE" ]; then
+    # shellcheck source=banner.sh
+    source "$BANNER_FILE"
+fi
 if ! declare -F print_lmforge_banner &>/dev/null; then
     print_lmforge_banner() {
         echo ""
