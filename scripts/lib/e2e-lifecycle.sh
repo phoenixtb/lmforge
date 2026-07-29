@@ -526,6 +526,7 @@ e2e_thinking() {
     $launcher "$E2E_REPO_ROOT/tests/bench/think_bench.py" \
         --base "${E2E_API:-http://127.0.0.1:11430}" \
         --models $models \
+        --pull-missing \
         --quick --assert ${strict[@]+"${strict[@]}"} \
         --outdir "$outdir" --no-capture-logs
     local rc=$?

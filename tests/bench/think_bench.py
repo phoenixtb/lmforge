@@ -402,15 +402,20 @@ def host_fingerprint(base: str, label: str | None) -> dict:
     return fp
 
 
-def http_models(base: str) -> dict:
-    """Return {id: capabilities} from /v1/models."""
+def http_models(base: str) -> tuple[bool, dict]:
+    """Probe /v1/models.
+
+    Returns (reachable, {id: capabilities}). An empty inventory is still
+    reachable — a fresh install has a live daemon and zero models. Callers
+    must not treat `not models` as "daemon down"; that blocks --pull-missing.
+    """
     try:
         with urllib.request.urlopen(base + "/v1/models", timeout=15) as r:
             data = json.load(r)
-        return {m["id"]: m.get("capabilities", {}) for m in data.get("data", [])}
-    except Exception as e:
+        return True, {m["id"]: m.get("capabilities", {}) for m in data.get("data", [])}
+    except Exception as e:  # noqa: BLE001
         print(f"  ! could not reach {base}/v1/models: {e}", file=sys.stderr)
-        return {}
+        return False, {}
 
 
 def stream_chat(base: str, model: str, prompt: str, think: bool) -> dict:
@@ -597,24 +602,34 @@ def main() -> int:
     else:
         wanted = CANDIDATE_MODELS
 
-    installed = http_models(base)
-    if not installed:
-        print("No daemon / no models reachable. Is `lmforge` running?", file=sys.stderr)
+    # Reachability ≠ inventory. Fresh installs are reachable with data=[].
+    reachable, installed = http_models(base)
+    if not reachable:
+        print(f"Daemon not reachable at {base}. Is `lmforge` running?", file=sys.stderr)
         return 2
 
-    # Pull missing (only those flagged pull or explicitly requested)
+    # Pull missing (only those flagged pull or explicitly requested). Allowed
+    # against an empty inventory — that's the whole point of --pull-missing.
     if args.pull_missing:
         for m in wanted:
             if m["id"] not in installed and (m.get("pull") or args.models):
                 if pull_model(m["id"]):
-                    installed = http_models(base)
+                    _, installed = http_models(base)
 
     run_models = [m for m in wanted if m["id"] in installed]
     skipped = [m["id"] for m in wanted if m["id"] not in installed]
     if skipped:
-        print(f"Skipping not-installed (use --pull-missing): {', '.join(skipped)}")
+        hint = "" if args.pull_missing else " (use --pull-missing)"
+        print(f"Skipping not-installed{hint}: {', '.join(skipped)}")
     if not run_models:
-        print("No installed models to run.", file=sys.stderr)
+        if args.pull_missing:
+            print("No candidate models available after pull.", file=sys.stderr)
+        else:
+            print(
+                "No installed models to run. Re-run with --pull-missing "
+                "to download the candidate matrix.",
+                file=sys.stderr,
+            )
         return 2
 
     prompts = PROMPTS

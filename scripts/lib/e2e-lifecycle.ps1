@@ -355,7 +355,7 @@ function E2eThinking {
     $outdir = Join-Path ([System.IO.Path]::GetTempPath()) "lmforge-think-$PID"
     $bench = Join-Path $E2E_RepoRoot "tests\bench\think_bench.py"
     $argv = @($bench, "--base", $base, "--models") + ($models -split '\s+') +
-            @("--quick", "--assert", "--outdir", $outdir, "--no-capture-logs")
+            @("--pull-missing", "--quick", "--assert", "--outdir", $outdir, "--no-capture-logs")
     if ($env:E2E_THINK_STRICT -eq "1") { $argv += "--assert-strict" }
     $exe = $launcher[0]
     $argv = @($launcher | Select-Object -Skip 1) + $argv
