@@ -74,8 +74,8 @@ clippy/rustfmt.
    so any *pre-existing* models are removed first; the suite re-pulls the default
    E2E models and `--keep-install` leaves *those* in place. To exercise inference
    against models you already have **without** any clean/pull, run the multi-model
-   tier against a live daemon instead: `SKIP_PULL=1 SKIP_BUILD=1 scripts/lmforge.sh
-   test-multi` (see [DEV_GUIDE.md](./DEV_GUIDE.md)).
+   tier against a live daemon instead: `SKIP_PULL=1 SKIP_BUILD=1 SKIP_START=1
+   SKIP_STALE_CHECK=1 scripts/lmforge.sh test-multi` (see [DEV_GUIDE.md](./DEV_GUIDE.md)).
 
 ### E2E platform matrix
 

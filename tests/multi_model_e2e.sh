@@ -27,6 +27,8 @@
 #    SKIP_PULL     Set to 1 to skip pull step (models must already be present)
 #    SKIP_START    Set to 1 to skip daemon start (daemon must already be running)
 #    SKIP_BUILD    Set to 1 to skip `cargo build` (use installed LF_BIN / PATH)
+#    SKIP_STALE_CHECK  Set to 1 to allow daemon SHA != LF_BIN SHA (API-only
+#                   runs against an installed daemon when local binary differs)
 #    DO_VLM/DO_RERANK/DO_MTP  Default 1 (all suites on). Set 0 to disable.
 #    NO_BURST       Set to 1 for low-memory hosts: skip parallel/co-resident
 #                   probes (TC-E04/E05) and don't require co-residency in
@@ -64,6 +66,7 @@ N="${N_REQUESTS:-10}"
 SKIP_PULL="${SKIP_PULL:-0}"
 SKIP_START="${SKIP_START:-0}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
+SKIP_STALE_CHECK="${SKIP_STALE_CHECK:-0}"
 DO_VLM="${DO_VLM:-1}"
 DO_RERANK="${DO_RERANK:-1}"
 DO_MTP="${DO_MTP:-1}"
@@ -459,14 +462,21 @@ fi
 
 # Build-provenance gate: the daemon answering on the port MUST be the binary we
 # just built. A stale installed/service daemon holding the port silently
-# invalidates every result (bit us twice already).
+# invalidates every result (bit us twice already). Override with
+# SKIP_STALE_CHECK=1 for API-only runs against an installed daemon when the
+# local LF_BIN SHA differs (e.g. script-only checkout, no rebuild).
 bin_sha=$("$LF_BIN" --version 2>/dev/null | sed -n 's/.*(\([^ ]*\) .*/\1/p')
 daemon_sha=$(curl -sf "${LF_HOST}/lf/status" 2>/dev/null | jq -r '.daemon_build.sha // "missing"' 2>/dev/null)
 if [[ -n "$bin_sha" && "$daemon_sha" != "$bin_sha" ]]; then
-    fail "STALE DAEMON: port is served by build '${daemon_sha}' but test binary is '${bin_sha}'. \
-Stop the installed/service daemon (lmforge stop; systemctl --user stop lmforge 2>/dev/null; pkill -f 'lmforge start') and re-run."
+    msg="STALE DAEMON: port is served by build '${daemon_sha}' but test binary is '${bin_sha}'"
+    if [[ "$SKIP_STALE_CHECK" -eq 1 ]]; then
+        warn "$msg — continuing (SKIP_STALE_CHECK=1)"
+    else
+        fail "$msg. Stop the installed/service daemon (lmforge stop; systemctl --user stop lmforge 2>/dev/null; pkill -f 'lmforge start') and re-run, or set SKIP_STALE_CHECK=1."
+    fi
+else
+    ok "Daemon build verified: ${daemon_sha}"
 fi
-ok "Daemon build verified: ${daemon_sha}"
 
 # Provenance snapshots for post-run analysis. The results slug is only
 # <os>-<arch>, so these files are what distinguish a CUDA run from a

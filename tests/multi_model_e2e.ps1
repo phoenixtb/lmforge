@@ -18,9 +18,10 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $RepoRoot "scripts\lib\e2e-api.ps1")
 
-$SkipPull    = ($env:SKIP_PULL -match '^(1|true|yes)$')
-$SkipStart   = ($env:SKIP_START -match '^(1|true|yes)$')
-$SkipBuild   = ($env:SKIP_BUILD -match '^(1|true|yes)$')
+$SkipPull       = ($env:SKIP_PULL -match '^(1|true|yes)$')
+$SkipStart      = ($env:SKIP_START -match '^(1|true|yes)$')
+$SkipBuild      = ($env:SKIP_BUILD -match '^(1|true|yes)$')
+$SkipStaleCheck = ($env:SKIP_STALE_CHECK -match '^(1|true|yes)$')
 # Low-memory mode: skip parallel/co-resident probes (TC-E04/E05) and don't
 # require co-residency in TC-E01/E07. Mirrors --no-burst in the bash script.
 $NoBurstMode = $NoBurst.IsPresent -or ($env:NO_BURST -match '^(1|true|yes)$')
@@ -219,15 +220,23 @@ try {
 
     # Build-provenance gate: the daemon on the port MUST be the binary we just
     # built. A stale installed/service daemon silently invalidates every result.
+    # Override with SKIP_STALE_CHECK=1 for API-only runs against an installed
+    # daemon when the local LF_BIN SHA differs (e.g. script-only checkout).
     $binVer = (& $Bin --version 2>$null | Select-Object -First 1)
     $binSha = if ($binVer -match '\(([^\s)]+)\s') { $Matches[1] } else { "" }
     try {
         $daemonSha = (Invoke-RestMethod -Uri "$($script:LfHost)/lf/status" -TimeoutSec 10).daemon_build.sha
     } catch { $daemonSha = "missing" }
     if ($binSha -and $daemonSha -ne $binSha) {
-        Fail "STALE DAEMON: port served by build '$daemonSha' but test binary is '$binSha'. Stop the installed daemon (lmforge stop / Stop-Service lmforge) and re-run."
+        $msg = "STALE DAEMON: port served by build '$daemonSha' but test binary is '$binSha'"
+        if ($SkipStaleCheck) {
+            Warn "$msg — continuing (SKIP_STALE_CHECK=1)"
+        } else {
+            Fail "$msg. Stop the installed daemon (lmforge stop / Stop-Service lmforge) and re-run, or set SKIP_STALE_CHECK=1."
+        }
+    } else {
+        Ok "Daemon build verified: $daemonSha"
     }
-    Ok "Daemon build verified: $daemonSha"
 
     # Provenance snapshots for post-run analysis. The results slug is only
     # win-<arch>, so these files are what distinguish a CUDA run from a

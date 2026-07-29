@@ -136,12 +136,16 @@ rerank). Override via `scripts/lib/e2e-defaults.*`.
 
 **Against an installed daemon (think_bench-style — no build/start/pull):**
 
+Prefer pointing `LF_BIN` at the same binary the daemon is running. If the local
+checkout binary differs (script-only pull, no rebuild), add `SKIP_STALE_CHECK=1`
+to bypass the daemon↔binary SHA gate:
+
 ```bash
-SKIP_BUILD=1 SKIP_START=1 SKIP_PULL=1 bash tests/multi_model_e2e.sh
+SKIP_BUILD=1 SKIP_START=1 SKIP_PULL=1 SKIP_STALE_CHECK=1 bash tests/multi_model_e2e.sh
 ```
 
 ```powershell
-$env:SKIP_BUILD=1; $env:SKIP_START=1; $env:SKIP_PULL=1
+$env:SKIP_BUILD=1; $env:SKIP_START=1; $env:SKIP_PULL=1; $env:SKIP_STALE_CHECK=1
 .\tests\multi_model_e2e.ps1
 ```
 
@@ -199,6 +203,7 @@ Shared API helpers (health, pull, chat, embed, VLM, rerank, MTP, assertions):
 | `SKIP_BUILD` | Use existing binary instead of `cargo build` |
 | `SKIP_PULL` | Skip model downloads (models must already be installed) |
 | `SKIP_START` | Assume daemon already running |
+| `SKIP_STALE_CHECK` | Allow daemon SHA ≠ `LF_BIN` SHA (API-only vs installed daemon) |
 | `DO_VLM` / `DO_RERANK` / `DO_MTP` | Default `1`; set `0` or use `--skip-*` to disable a suite |
 | `LMFORGE_VERSION` | Release tag for release-oriented scripts |
 | `LMFORGE_DATA_DIR` | Override data dir (default `~/.lmforge`) |
