@@ -134,6 +134,21 @@ default**; unavailable models/engine features → `SKIP` (others continue).
 Workloads are paragraph-scale (`E2E_CHAT_MAX_TOKENS=128`, picsum VLM, 5-doc
 rerank). Override via `scripts/lib/e2e-defaults.*`.
 
+**Against an installed daemon (think_bench-style — no build/start/pull):**
+
+```bash
+SKIP_BUILD=1 SKIP_START=1 SKIP_PULL=1 bash tests/multi_model_e2e.sh
+```
+
+```powershell
+$env:SKIP_BUILD=1; $env:SKIP_START=1; $env:SKIP_PULL=1
+.\tests\multi_model_e2e.ps1
+```
+
+Low-RAM hosts: add `--no-burst` / `-NoBurst` (sequential probes, no co-residency).
+
+Other variants:
+
 ```bash
 bash tests/multi_model_e2e.sh
 bash tests/multi_model_e2e.sh --skip-mtp
