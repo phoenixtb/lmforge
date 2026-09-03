@@ -194,10 +194,27 @@ impl ProcessPoolResidency {
         Ok(())
     }
 
+    /// Sum of estimated VRAM footprint (GB) for every currently-resident
+    /// slot, per the same size-only heuristic
+    /// ([`crate::hardware::vram::estimate_model_vram`]) the CPU-only
+    /// residency path uses. Shared by the CPU-only admission branch and the
+    /// GPU probe-failure ledger fallback in [`Self::memory_free_gb`].
+    fn resident_footprint_sum_gb(&self) -> f32 {
+        self.active_slots
+            .values()
+            .map(|s| crate::hardware::vram::estimate_model_vram(s.size_bytes))
+            .sum()
+    }
+
     /// Memory (GB) currently free to admit *another* model. Accelerator-aware:
     /// - **Discrete GPU / unified memory**: live free VRAM from
     ///   [`crate::hardware::vram::get_free_vram`], which already nets out our own
-    ///   resident models and other GPU consumers.
+    ///   resident models and other GPU consumers. On probe failure (`None` —
+    ///   e.g. `nvidia-smi` missing/erroring, distinct from a successful "0 GB
+    ///   free" reading) we do NOT silently degrade to CPU planning; instead
+    ///   fall back to a ledger estimate (`profile.vram_gb` minus our own
+    ///   resident footprints) so a healthy GPU box with a flaky probe still
+    ///   gets GPU-shaped admission decisions.
     /// - **CPU-only** (`GpuVendor::None`): safety-first admission control
     ///   ([`crate::hardware::vram::cpu_residency_free`]) — the tighter of live
     ///   `available` RAM minus an OS reserve and a hard total-RAM footprint cap.
@@ -205,25 +222,30 @@ impl ProcessPoolResidency {
         use crate::hardware::probe::GpuVendor;
         use crate::hardware::vram;
         if matches!(profile.gpu_vendor, GpuVendor::None) {
-            let resident_sum_gb: f32 = self
-                .active_slots
-                .values()
-                .map(|s| vram::estimate_model_vram(s.size_bytes))
-                .sum();
             vram::cpu_residency_free(
                 vram::free_system_ram_gb(),
-                resident_sum_gb,
+                self.resident_footprint_sum_gb(),
                 profile.total_ram_gb,
             )
         } else {
-            vram::get_free_vram(profile)
+            match vram::get_free_vram(profile) {
+                Some(free) => free,
+                None => {
+                    warn!(
+                        gpu_vendor = ?profile.gpu_vendor,
+                        "free-VRAM probe failed — falling back to ledger estimate \
+                         (profile.vram_gb minus resident slot footprints)"
+                    );
+                    vram::vram_ledger_fallback(profile.vram_gb, self.resident_footprint_sum_gb())
+                }
+            }
         }
     }
 
     /// Evict least-recently-used **idle** models until the new load's memory need
     /// fits, or until only actively-serving models remain.
     async fn evict_for_memory(&mut self, needed_gb: f32) -> Result<()> {
-        let profile = crate::hardware::probe::detect_platform().unwrap_or_default();
+        let profile = crate::hardware::state::identity(&self.data_dir);
 
         loop {
             let free_gb = self.memory_free_gb(&profile);
@@ -591,7 +613,7 @@ impl ProcessPoolResidency {
         };
         let model_dir = PathBuf::from(entry_path);
 
-        let profile = crate::hardware::probe::detect_platform().unwrap_or_default();
+        let profile = crate::hardware::state::identity(&self.data_dir);
         let free_before = self.memory_free_gb(&profile);
         let mut plan = self.adapter.plan_load(
             model_id,
@@ -716,6 +738,64 @@ impl ProcessPoolResidency {
             );
         }
 
+        // Effective planned GPU offload for THIS adapter. llama.cpp's plan
+        // carries the real planned `-ngl`; every other adapter doesn't do
+        // partial-offload planning — its `LoadPlan::runtime` is
+        // `RuntimePlan::default()` (ngl=0) — and always runs fully on the
+        // accelerator, so `99` ("fully offloaded") is the accurate value for
+        // them, NOT the misleading default `0`. Resolved once here because it
+        // feeds both the host-RAM admission gate below and the `/lf/status`
+        // surfacing (`ModelSlot::ngl`): using the raw default for the gate
+        // would treat a fully-GPU vLLM/SGLang load as 100% RAM-resident and
+        // spuriously reject it on memory-tight boxes.
+        let ngl = if self.config.id == "llamacpp" {
+            plan.runtime.ngl
+        } else {
+            99
+        };
+
+        // Host-RAM admission gate for partial GPU offload (`ngl` < 99) on a
+        // discrete-GPU box. In practice the VRAM gate above already rejects
+        // most of these (a partial-offload plan means `needed > free` for the
+        // same reason `plan_runtime` chose a partial `ngl`), but multi-GPU /
+        // tensor-split configurations and future planner changes could admit
+        // a plan where the VRAM check passes while a chunk of the footprint
+        // is still destined for host RAM (`ngl < 99`). Previously this gate
+        // (`cpu_residency_free`) only ran for `GpuVendor::None` boxes — a GPU
+        // box with `ngl < 99` had no RAM check at all and could OOM the host
+        // exactly like the CPU-only path is guarded against.
+        if discrete_gpu {
+            let ram_share_gb = crate::hardware::vram::host_ram_share_gb(needed_final, ngl);
+            if ram_share_gb > 0.0 {
+                warn!(
+                    model_id,
+                    ngl,
+                    free_vram_gb = free_now,
+                    model_size_gb = plan.footprint.weights_gb,
+                    ram_share_gb,
+                    "planned ngl < 99 on a GPU-identity box — part of the model's \
+                     footprint will be resident in host RAM"
+                );
+                let ram_free = crate::hardware::vram::cpu_residency_free(
+                    crate::hardware::vram::free_system_ram_gb(),
+                    self.resident_footprint_sum_gb(),
+                    profile.total_ram_gb,
+                );
+                if ram_free < ram_share_gb {
+                    bail!(
+                        "Insufficient host RAM to load '{}': partial GPU offload (ngl={}) \
+                         leaves ~{:.1} GB of the model in host RAM but only {:.1} GB is \
+                         available there (after the OS reserve / co-resident model cap). \
+                         Would not fit in host RAM. Unload a model or free up RAM.",
+                        model_id,
+                        ngl,
+                        ram_share_gb,
+                        ram_free
+                    );
+                }
+            }
+        }
+
         let vram_est_gb = plan.footprint.effective_total_gb();
         let port = self.allocate_port();
 
@@ -729,6 +809,7 @@ impl ProcessPoolResidency {
                     status: EngineStatus::Starting,
                     idle_secs: 0,
                     vram_est_gb,
+                    ngl,
                     spec_mode: plan.spec.mode,
                     spec_stats: None,
                 },

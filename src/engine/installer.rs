@@ -1764,8 +1764,9 @@ fn variant_binary_name(profile: &HardwareProfile) -> &'static str {
 }
 
 /// Read `VERSION` from a variant install, returning the `llamacpp_tag`
-/// line value when present. Used for idempotency in `install_variant`.
-fn read_installed_tag(install_dir: &std::path::Path) -> Option<String> {
+/// line value when present. Used for idempotency in `install_variant` and
+/// for the version-skew display fix in `active_installed_llamacpp_tag`.
+pub(crate) fn read_installed_tag(install_dir: &std::path::Path) -> Option<String> {
     let content = std::fs::read_to_string(install_dir.join("VERSION")).ok()?;
     for line in content.lines() {
         if let Some(v) = line.strip_prefix("llamacpp_tag=") {
@@ -1773,6 +1774,44 @@ fn read_installed_tag(install_dir: &std::path::Path) -> Option<String> {
         }
     }
     None
+}
+
+/// The `llamacpp_tag` actually installed for the currently-*active* variant
+/// (per `variant::select`), read straight from that variant's on-disk
+/// `VERSION` file. `None` when no variant is installed or its `VERSION` file
+/// is missing/unparseable.
+///
+/// This is "ground truth" for what will actually run, as opposed to
+/// `engines.toml`'s `version` field, which is only the *registry pin* — the
+/// version LMForge would install fresh today. The two drift apart whenever
+/// the registry pin is bumped (e.g. b9351 → b9861) without every existing
+/// install being re-run through `lmforge engine install llamacpp`, which is
+/// exactly what happened during the 2026-08 incident triage: `doctor` /
+/// `engine list` were reporting b9861 (the registry pin) while the box had
+/// b9351 actually installed and running.
+pub fn active_installed_llamacpp_tag(
+    data_dir: &std::path::Path,
+    profile: &HardwareProfile,
+) -> Option<String> {
+    let state = scan_variant_state(data_dir, profile);
+    let active = crate::engine::variant::select(profile, &state);
+    let dir = variant_install_dir(data_dir, active);
+    read_installed_tag(&dir)
+}
+
+/// Format a llama.cpp version string for display, preferring the ACTIVE
+/// installed variant's true `llamacpp_tag` (read from its `VERSION` file)
+/// over the `engines.toml` registry pin. Falls back to the registry pin —
+/// annotated so the discrepancy is visible rather than silently misleading —
+/// when no installed tag is available (fresh box, legacy flat install with no
+/// `VERSION` file, etc.).
+///
+/// Pure/display-only: does not change install or variant-selection logic.
+pub fn llamacpp_version_display(installed_tag: Option<&str>, registry_version: &str) -> String {
+    match installed_tag {
+        Some(tag) => tag.to_string(),
+        None => format!("{registry_version} (registry pin; installed build may differ)"),
+    }
 }
 
 /// Recursive size of a directory, in bytes. Returns 0 on read errors so
@@ -2439,5 +2478,103 @@ mod tests {
             let expected = format!("cudart-llama-bin-win-cuda-{}-x64.zip", variant);
             assert_eq!(resolved, expected, "cudart pattern drift detected");
         }
+    }
+
+    // ── P2: version-skew display fix ────────────────────────────────────────
+    //
+    // Registry-pin (engines.toml `version`) vs. the ACTUALLY-installed
+    // variant's `llamacpp_tag` (its VERSION file) can drift after a registry
+    // bump that hasn't been re-installed everywhere. `doctor` / `engine list`
+    // must show the installed truth, not the registry pin, when available.
+
+    #[test]
+    fn llamacpp_version_display_prefers_installed_tag() {
+        assert_eq!(
+            llamacpp_version_display(Some("b9351"), "b9861"),
+            "b9351",
+            "installed VERSION tag must win over the registry pin"
+        );
+    }
+
+    #[test]
+    fn llamacpp_version_display_falls_back_to_registry_pin_with_note() {
+        let display = llamacpp_version_display(None, "b9861");
+        assert!(display.starts_with("b9861"));
+        assert!(
+            display.contains("registry pin"),
+            "fallback must be annotated so the discrepancy is visible: {display}"
+        );
+    }
+
+    #[test]
+    fn read_installed_tag_parses_version_file() {
+        let dir = std::env::temp_dir().join("lmforge_test_read_installed_tag");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("VERSION"),
+            "llamacpp_tag=b9351\ninstalled_at=2026-07-01T00:00:00Z\n",
+        )
+        .unwrap();
+
+        assert_eq!(read_installed_tag(&dir), Some("b9351".to_string()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn read_installed_tag_none_when_file_missing() {
+        let dir = std::env::temp_dir().join("lmforge_test_read_installed_tag_missing");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(read_installed_tag(&dir), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn active_installed_llamacpp_tag_reads_active_variant_version_file() {
+        // Simulate the exact incident scenario: a cuda12 variant staged on
+        // disk with a VERSION file recording b9351 (older than whatever the
+        // registry currently pins).
+        let dir = std::env::temp_dir().join("lmforge_test_active_installed_tag");
+        let _ = std::fs::remove_dir_all(&dir);
+        let profile = mk(
+            Os::Linux,
+            Arch::X86_64,
+            crate::hardware::probe::GpuVendor::Nvidia,
+        );
+
+        let variant_dir = variant_install_dir(&dir, crate::engine::variant::LlamaVariant::Cuda12);
+        std::fs::create_dir_all(&variant_dir).unwrap();
+        std::fs::write(variant_dir.join("llama-server"), b"#!/bin/sh\n").unwrap();
+        std::fs::write(variant_dir.join("VERSION"), "llamacpp_tag=b9351\n").unwrap();
+
+        // A driver floor high enough that `variant::select` actually picks
+        // CUDA12 for this synthetic profile — otherwise the selector could
+        // fall back to Vulkan/CPU and this test would read the wrong dir.
+        let mut profile = profile;
+        profile.driver_tuple = Some((999, 0, 0));
+        profile.compute_cap = Some((9, 0));
+
+        let tag = active_installed_llamacpp_tag(&dir, &profile);
+        assert_eq!(tag, Some("b9351".to_string()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn active_installed_llamacpp_tag_none_when_nothing_installed() {
+        let dir = std::env::temp_dir().join("lmforge_test_active_installed_tag_none");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let profile = mk(
+            Os::Linux,
+            Arch::X86_64,
+            crate::hardware::probe::GpuVendor::None,
+        );
+
+        assert_eq!(active_installed_llamacpp_tag(&dir, &profile), None);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

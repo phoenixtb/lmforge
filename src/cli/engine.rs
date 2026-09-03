@@ -81,11 +81,26 @@ fn list(registry: &EngineRegistry, profile: &HardwareProfile) -> Result<()> {
     for engine in registry.all() {
         let installed = install_state(engine, &data_dir);
         let (compat, note) = compatibility(engine, profile);
+        // llamacpp: prefer the ACTIVE installed variant's true build tag
+        // (read from its VERSION file) over the engines.toml registry pin —
+        // they drift whenever the pin is bumped without every existing
+        // install being re-run (2026-08 incident: doctor/engine-list showed
+        // b9861 while the box actually had b9351 running). Display-only.
+        let version_display = if engine.id == "llamacpp" {
+            let installed_tag =
+                crate::engine::installer::active_installed_llamacpp_tag(&data_dir, profile);
+            crate::engine::installer::llamacpp_version_display(
+                installed_tag.as_deref(),
+                &engine.version,
+            )
+        } else {
+            engine.version.clone()
+        };
         println!(
             "{:<10} {:<14} {:<13} {:<10} {:<12} {}",
             engine.id,
             tier_label(engine.tier),
-            engine.version,
+            version_display,
             if installed { "yes" } else { "no" },
             if compat { "yes" } else { "no" },
             note,
@@ -507,9 +522,19 @@ fn status(
 
     let installed = install_state(engine, data_dir);
     let (compat, note) = compatibility(engine, profile);
+    let version_display = if engine.id == "llamacpp" {
+        let installed_tag =
+            crate::engine::installer::active_installed_llamacpp_tag(data_dir, profile);
+        crate::engine::installer::llamacpp_version_display(
+            installed_tag.as_deref(),
+            &engine.version,
+        )
+    } else {
+        engine.version.clone()
+    };
 
     println!("  Engine:     {} ({})", engine.name, engine.id);
-    println!("  Version:    {}", engine.version);
+    println!("  Version:    {}", version_display);
     println!("  Tier:       {}", tier_label(engine.tier));
     println!("  Install:    {}", engine.install_method);
     println!("  Format:     {}", engine.model_format);

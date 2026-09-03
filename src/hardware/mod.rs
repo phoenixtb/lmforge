@@ -1,4 +1,5 @@
 pub mod probe;
+pub mod state;
 pub mod vram;
 
 pub use probe::{

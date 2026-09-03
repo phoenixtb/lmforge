@@ -21,12 +21,32 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     println!("lmforge doctor");
     println!("──────────────────────────────────────────────────────────────");
     print_hardware(&profile);
+    print_live_vram_probe_check(&profile);
     println!();
     print_engine_state(&profile, &data_dir, active, &variant_state);
     print_active_engine_gate(&profile, &data_dir);
     println!();
     print_runtime_hints(&profile, active);
     Ok(())
+}
+
+/// P1c hardening check: when the hardware identity records a GPU vendor, a
+/// live free-VRAM probe failure means the engine layer's admission control
+/// will silently fall back to a ledger estimate at best, or degrade planning
+/// entirely at worst — surfaces it here so operators catch a broken
+/// `nvidia-smi` / driver environment before a load fails or misbehaves at
+/// runtime rather than after.
+fn print_live_vram_probe_check(profile: &HardwareProfile) {
+    use crate::hardware::probe::GpuVendor;
+    if profile.gpu_vendor == GpuVendor::None {
+        return;
+    }
+    if crate::hardware::vram::get_free_vram(profile).is_none() {
+        println!(
+            "  ⚠ GPU in profile but live probe failed — engines would degrade; \
+             check nvidia-smi in the daemon's environment"
+        );
+    }
 }
 
 /// Report the version gate for the registry-selected active engine. Only prints

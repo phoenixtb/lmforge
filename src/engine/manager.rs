@@ -51,6 +51,15 @@ pub struct ModelSlot {
     pub status: EngineStatus,
     pub idle_secs: u64,
     pub vram_est_gb: f32,
+    /// Planned GPU offload (`-ngl` for llama.cpp): `99` means "fully
+    /// offloaded", `0` means the whole model runs on/from host RAM, and
+    /// `1..=98` is a partial offload with the remainder resident in host
+    /// RAM. Non-llamacpp adapters don't do partial-offload planning and
+    /// always report `99` (fully on the accelerator) rather than a
+    /// misleading default of `0`. Surfaced in `/lf/status` so the RAM
+    /// admission gate's decisions are visible to operators, not just logged.
+    #[serde(default)]
+    pub ngl: u32,
     /// Speculative-decoding mode this slot was started with — one of
     /// `auto` / `mtp` / `draft-model` / `off`. Resolved by
     /// `engine::speculative::resolve` at spawn time. Surfaced so the UI

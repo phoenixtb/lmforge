@@ -56,17 +56,66 @@ pub fn quant_tier(vram_gb: f32, total_ram_gb: f32) -> Option<&'static str> {
     }
 }
 
-/// Get currently free VRAM in GB at the current moment
-pub fn get_free_vram(profile: &HardwareProfile) -> f32 {
+/// Get currently free VRAM in GB at the current moment.
+///
+/// Returns `None` when the underlying probe genuinely failed (e.g.
+/// `nvidia-smi` missing/erroring/unparseable) — distinct from a *successful*
+/// probe that measured 0 GB free. Before this distinction existed, a probe
+/// failure and "the GPU is completely full" were indistinguishable, and both
+/// silently degraded planning to `0.0` (i.e. CPU-only). Callers must treat
+/// `None` as "we don't know" and apply their own fallback (see
+/// `process_pool::memory_free_gb`'s ledger-estimate fallback), never as `0.0`.
+///
+/// Apple (unified memory via `sysinfo`), Intel (shared-RAM heuristic), and
+/// `GpuVendor::None` (no GPU to probe) are effectively infallible and always
+/// return `Some`.
+pub fn get_free_vram(profile: &HardwareProfile) -> Option<f32> {
     let free_vram = match profile.gpu_vendor {
-        GpuVendor::Apple => get_free_apple_vram(),
+        GpuVendor::Apple => Some(get_free_apple_vram()),
         GpuVendor::Nvidia => get_free_nvidia_vram(),
         GpuVendor::Amd => get_free_amd_vram(),
-        GpuVendor::Intel => get_free_intel_vram(profile),
-        GpuVendor::None => 0.0,
+        GpuVendor::Intel => Some(get_free_intel_vram(profile)),
+        GpuVendor::None => Some(0.0),
     };
-    debug!(gpu_vendor = ?profile.gpu_vendor, free_vram_gb = free_vram, "Free VRAM probed");
+    debug!(gpu_vendor = ?profile.gpu_vendor, free_vram_gb = ?free_vram, "Free VRAM probed");
     free_vram
+}
+
+/// Ledger-based fallback for [`get_free_vram`] returning `None` (probe
+/// failure) on a box whose *identity* says GPU. Rather than silently
+/// treating a failed probe as "0 GB free" (which degrades a healthy GPU box
+/// to CPU-only planning), estimate free VRAM from the box's total capacity
+/// minus what LMForge itself believes is currently resident — the same
+/// bookkeeping the CPU-only residency path already relies on
+/// (`estimate_model_vram` summed over active slots). Clamped to `>= 0.0`
+/// since a stale/optimistic ledger must never go negative.
+///
+/// Pure function — the caller is responsible for logging the WARN that a
+/// probe failure occurred; this only does the arithmetic.
+pub fn vram_ledger_fallback(total_vram_gb: f32, resident_sum_gb: f32) -> f32 {
+    (total_vram_gb - resident_sum_gb).max(0.0)
+}
+
+/// Host-RAM share (GB) of a model's footprint left resident in system RAM by
+/// a partial GPU offload (`-ngl` < 99) on a discrete-GPU box.
+///
+/// llama.cpp's `-ngl` controls how many transformer layers are uploaded to
+/// the GPU; anything not offloaded stays mmap'd / computed on the CPU in
+/// host RAM. `ngl == 0` means the *entire* footprint sits in RAM (CPU-only
+/// execution despite GPU identity); `ngl == 99` (LMForge's "fully offloaded"
+/// sentinel) means nothing does; `1..=98` is a proportional partial offload.
+/// The proportional case is deliberately linear in layer count — a rough but
+/// serviceable approximation, since actual layer memory cost varies slightly
+/// by position (embedding/output layers are heavier) but not enough to
+/// justify a GGUF-geometry-aware model here.
+pub fn host_ram_share_gb(footprint_gb: f32, ngl: u32) -> f32 {
+    if ngl >= 99 {
+        0.0
+    } else if ngl == 0 {
+        footprint_gb.max(0.0)
+    } else {
+        (footprint_gb * (1.0 - ngl as f32 / 99.0)).max(0.0)
+    }
 }
 
 // NOTE on Windows/WDDM: no static VRAM reserve is applied here. WDDM pages
@@ -241,8 +290,10 @@ fn estimate_nvidia_vram() -> f32 {
     0.0
 }
 
-/// NVIDIA free memory
-fn get_free_nvidia_vram() -> f32 {
+/// NVIDIA free memory. `None` when `nvidia-smi` is missing, errors, or emits
+/// unparseable output — the caller must NOT treat that the same as "0 GB
+/// free" (see [`get_free_vram`] doc).
+fn get_free_nvidia_vram() -> Option<f32> {
     if let Ok(output) = crate::util::subprocess::hidden("nvidia-smi")
         .args(["--query-gpu=memory.free", "--format=csv,noheader,nounits"])
         .output()
@@ -252,9 +303,9 @@ fn get_free_nvidia_vram() -> f32 {
         && let Ok(free_mib) = first_line.trim().parse::<f32>()
     {
         let free_gb = free_mib / 1024.0;
-        return (free_gb - 0.5).max(0.0); // 512MB safety pad
+        return Some((free_gb - 0.5).max(0.0)); // 512MB safety pad
     }
-    0.0
+    None
 }
 
 /// Windows AMD: read dedicated VRAM from Win32_VideoController.AdapterRAM.
@@ -344,13 +395,15 @@ fn get_free_intel_vram(profile: &HardwareProfile) -> f32 {
     free_ram_gb.min(cap).max(0.0)
 }
 
-/// AMD ROCm free memory
-fn get_free_amd_vram() -> f32 {
+/// AMD ROCm free memory. `None` when neither the Windows CIM path nor
+/// `rocm-smi` yields a usable reading — see [`get_free_vram`] doc for why
+/// this must not collapse to `0.0`.
+fn get_free_amd_vram() -> Option<f32> {
     #[cfg(target_os = "windows")]
     if let Some(total) = windows_amd_adapter_ram_gb() {
         // AdapterRAM is total dedicated memory; no free-memory API without ADL.
         // Return total minus a conservative OS/driver pad.
-        return (total - 0.5).max(0.0);
+        return Some((total - 0.5).max(0.0));
     }
 
     if let Ok(output) = crate::util::subprocess::hidden("rocm-smi")
@@ -376,10 +429,10 @@ fn get_free_amd_vram() -> f32 {
             }
         }
         if total > 0.0 {
-            return (total - used - 0.5).max(0.0) as f32; // 512MB safety pad
+            return Some((total - used - 0.5).max(0.0) as f32); // 512MB safety pad
         }
     }
-    0.0
+    None
 }
 
 #[cfg(test)]
@@ -465,14 +518,55 @@ mod tests {
     #[test]
     fn no_gpu_free_vram_stays_zero_for_offload_planner() {
         // The offload planner still sees 0 VRAM on a CPU box; only the residency
-        // admission control diverges (RAM-based).
+        // admission control diverges (RAM-based). GpuVendor::None is
+        // infallible — always Some(0.0), never a probe failure.
         let p = make_profile(GpuVendor::None, 32.0);
         assert_eq!(
             get_free_vram(&p),
-            0.0,
-            "CPU VRAM must stay 0 for the offload planner"
+            Some(0.0),
+            "CPU VRAM must stay Some(0.0) for the offload planner"
         );
         assert!(cpu_residency_free(20.0, 0.0, p.total_ram_gb) > 0.0);
+    }
+
+    // --- Option<f32> probe-failure semantics (P1b) ---
+
+    #[test]
+    fn vram_ledger_fallback_subtracts_resident_and_clamps() {
+        assert!((vram_ledger_fallback(16.0, 6.0) - 10.0).abs() < 1e-6);
+        // Never negative even when the ledger over-counts residency.
+        assert_eq!(vram_ledger_fallback(4.0, 10.0), 0.0);
+    }
+
+    #[test]
+    fn vram_ledger_fallback_zero_resident_returns_total() {
+        assert_eq!(vram_ledger_fallback(24.0, 0.0), 24.0);
+    }
+
+    #[test]
+    fn host_ram_share_full_offload_is_zero() {
+        assert_eq!(host_ram_share_gb(8.0, 99), 0.0);
+    }
+
+    #[test]
+    fn host_ram_share_zero_ngl_is_full_footprint() {
+        assert_eq!(host_ram_share_gb(8.0, 0), 8.0);
+    }
+
+    #[test]
+    fn host_ram_share_partial_ngl_is_proportional() {
+        // ngl=49 of 99 layers offloaded → ~50.5% stays in RAM.
+        let share = host_ram_share_gb(9.9, 49);
+        let expected = 9.9 * (1.0 - 49.0 / 99.0);
+        assert!((share - expected).abs() < 1e-4, "got {share}");
+        // Sanity: strictly between 0 and the full footprint.
+        assert!(share > 0.0 && share < 9.9);
+    }
+
+    #[test]
+    fn host_ram_share_never_negative() {
+        assert_eq!(host_ram_share_gb(-5.0, 0), 0.0);
+        assert_eq!(host_ram_share_gb(-5.0, 50), 0.0);
     }
 
     // --- quant_tier tests (GPU path: vram > 0) ---

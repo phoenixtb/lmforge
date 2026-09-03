@@ -350,6 +350,10 @@ impl SharedServerResidency {
                     status: engine_status,
                     idle_secs,
                     vram_est_gb: vram_gb,
+                    // oMLX (the only SharedServer engine) doesn't do
+                    // partial-offload planning — it's always fully on the
+                    // Metal GPU. See ModelSlot::ngl doc.
+                    ngl: 99,
                     spec_mode: crate::engine::speculative::SpecMode::Off,
                     spec_stats: None,
                 },
@@ -490,6 +494,7 @@ impl Residency for SharedServerResidency {
                         status: EngineStatus::Starting,
                         idle_secs: 0,
                         vram_est_gb: size_bytes as f32 / BYTES_PER_GIB,
+                        ngl: 99,
                         spec_mode: crate::engine::speculative::SpecMode::Off,
                         spec_stats: None,
                     }
@@ -616,6 +621,7 @@ mod tests {
                 status: EngineStatus::Ready,
                 idle_secs: 0,
                 vram_est_gb: 1.2,
+                ngl: 99,
                 spec_mode: crate::engine::speculative::SpecMode::Off,
                 spec_stats: None,
             },
@@ -635,6 +641,7 @@ mod tests {
                 status: EngineStatus::Ready,
                 idle_secs: 0,
                 vram_est_gb: 2.0,
+                ngl: 99,
                 spec_mode: crate::engine::speculative::SpecMode::Off,
                 spec_stats: None,
             },

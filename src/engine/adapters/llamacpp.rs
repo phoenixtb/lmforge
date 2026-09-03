@@ -8,7 +8,7 @@ use crate::engine::speculative::{
     ModelSpecInputs, SpecMode, SpecResolved, SpeculativeConfig, VramBudget, detect_moe_by_name,
     resolve as resolve_spec,
 };
-use crate::hardware::probe::{GpuVendor, HardwareProfile};
+use crate::hardware::probe::GpuVendor;
 use crate::model::downloader::DownloadProgress;
 
 #[derive(Clone)]
@@ -51,7 +51,9 @@ impl EngineAdapter for LlamacppAdapter {
     ) -> crate::engine::adapter::LoadPlan {
         use crate::engine::adapter::LoadPlan;
 
-        let profile = crate::hardware::probe::detect_platform().unwrap_or_default();
+        // Single cached hardware identity (P1a) — replaces a live
+        // `detect_platform()` re-probe on every plan_load call.
+        let profile = crate::hardware::state::identity(data_dir);
 
         let gguf_path = find_gguf_file(model_dir);
         let mmproj_path = find_mmproj_file(model_dir);
@@ -133,11 +135,15 @@ impl EngineAdapter for LlamacppAdapter {
         // layout (and ultimately PATH) when no variant is installed —
         // keeps pre-v0.2.0 setups working through the upgrade.
         //
-        // We probe the profile ONCE here and reuse it below for the
-        // VRAM-aware runtime planner. Double-probing was wasteful
-        // (`nvidia-smi` shells out twice) and could give inconsistent
-        // results if the GPU state changed mid-spawn.
-        let profile = resolve_profile_with_vram();
+        // Single cached hardware identity (P1a) — `identity()` probes at most
+        // once per process and is shared across every call site in the
+        // engine layer, so this no longer double-shells-out to `nvidia-smi`
+        // per spawn nor risks observing a different answer than `plan_load`
+        // did moments earlier. `profile.vram_gb` here is the box's *total*
+        // VRAM capacity (identity), not a live free-VRAM reading — this
+        // function's only consumers are variant selection and `--cache-ram`
+        // sizing, both of which want identity, not live availability.
+        let profile = crate::hardware::state::identity(data_dir);
         let variant_state = crate::engine::installer::scan_variant_state(data_dir, &profile);
         let active_variant = crate::engine::variant::select(&profile, &variant_state);
         let variant_dir = crate::engine::installer::variant_install_dir(data_dir, active_variant);
@@ -208,23 +214,43 @@ impl EngineAdapter for LlamacppAdapter {
         // on hit instead of re-computed. Closes the "agentic prefix-cache" gap
         // that previously favoured vLLM/SGLang — see ADR-001.
         //
-        // Default budget: min(25% of system RAM, 4096 MiB). Aggressive enough to
-        // help on dev boxes (16 GB RAM → 4 GiB cap), conservative enough to leave
-        // headroom for the OS and the model itself. Chat role only — embed and
-        // rerank workloads have negligible prefix-reuse benefit and the cache
-        // would just trade RAM for nothing.
-        if matches!(role, ModelRole::Chat) {
-            let cache_ram_mib = resolve_cache_ram_mib(profile.total_ram_gb);
-            if cache_ram_mib > 0 {
+        // Chat: memory-tiered budget (`resolve_cache_ram_mib` — min(25% of
+        // system RAM, tier cap)). Aggressive enough to help on dev boxes (16 GB
+        // RAM → 2 GiB cap), conservative enough to leave headroom for the OS
+        // and the model itself.
+        //
+        // Embed / Rerank: explicitly forced to 0 (`--cache-ram 0`). Upstream
+        // llama.cpp b9351+ flips this cache ON by default at 8192 MiB
+        // (ggml-org/llama.cpp PR #16391), and its idle-slot save path has no
+        // task-type guard — an embed/rerank server never *serves* a cached
+        // prefix (every request is a fresh, write-only prompt with no
+        // completion to reuse) but still fills the cache on every request
+        // (~56 MiB/prompt observed), and the unbounded fill has no ceiling
+        // besides the 8 GiB default. Incident: RTX 5060 Ti / 15 GB RAM box —
+        // the embed llama-server's host RSS ballooned to ~7 GB and got
+        // OOM-killed while GPU planning (ngl=99, CUDA) was fine. `--cache-ram
+        // 0` disables the cache AND auto-disables idle-slot saving with it.
+        // Do NOT use `--no-cache-idle-slots` instead — that flag may not exist
+        // in the bundled b9351 build, and an unknown flag fails the spawn.
+        let cache_ram_args = role_cache_ram_args(role, profile.total_ram_gb);
+        match role {
+            ModelRole::Chat if !cache_ram_args.is_empty() => {
                 info!(
-                    cache_ram_mib,
+                    cache_ram_mib = %cache_ram_args[1],
                     total_ram_gb = profile.total_ram_gb,
                     "llama.cpp host-memory prefix cache enabled"
                 );
-                args.push("--cache-ram".to_string());
-                args.push(cache_ram_mib.to_string());
             }
+            ModelRole::Embed | ModelRole::Rerank => {
+                info!(
+                    role = ?role,
+                    "llama.cpp host-memory prefix cache explicitly disabled \
+                     (upstream default is ON since PR #16391 — OOM-incident guard)"
+                );
+            }
+            _ => {}
         }
+        args.extend(cache_ram_args);
 
         match role {
             ModelRole::Chat => {}
@@ -749,13 +775,31 @@ fn plan_runtime(
     }
 }
 
-/// Build a `HardwareProfile` with VRAM populated. Falls back to a "no GPU"
-/// profile when probing fails so the planner picks the CPU branch instead of
-/// crashing the engine spawn.
-fn resolve_profile_with_vram() -> HardwareProfile {
-    let mut profile = crate::hardware::probe::detect_platform().unwrap_or_default();
-    profile.vram_gb = crate::hardware::vram::estimate_vram(&profile);
-    profile
+/// Resolve the full `--cache-ram <value>` argument pair for a given
+/// [`ModelRole`]. Pure and unit-tested so the P0 OOM-incident fix (embed and
+/// rerank always get `--cache-ram 0`, never inheriting upstream's 8192 MiB
+/// default) doesn't silently regress — see the call site in `start()` for the
+/// full incident writeup.
+///
+/// Returns an empty `Vec` for `Chat` when the memory-tiered budget resolves to
+/// `0` (no RAM info, or the operator set `LMFORGE_LLAMACPP_CACHE_RAM_MIB=0`) —
+/// matching the pre-existing "omit the flag entirely" behaviour rather than
+/// passing an explicit `0` for chat, which is a distinct, deliberate choice
+/// only for Embed/Rerank.
+pub(crate) fn role_cache_ram_args(role: ModelRole, total_ram_gb: f32) -> Vec<String> {
+    match role {
+        ModelRole::Embed | ModelRole::Rerank => {
+            vec!["--cache-ram".to_string(), "0".to_string()]
+        }
+        ModelRole::Chat => {
+            let cache_ram_mib = resolve_cache_ram_mib(total_ram_gb);
+            if cache_ram_mib > 0 {
+                vec!["--cache-ram".to_string(), cache_ram_mib.to_string()]
+            } else {
+                Vec::new()
+            }
+        }
+    }
 }
 
 /// Compute the `--cache-ram` budget in MiB.
@@ -1507,6 +1551,70 @@ mod tests {
         unsafe { std::env::set_var("LMFORGE_LLAMACPP_PARALLEL", "999") }
         assert_eq!(resolve_cpu_parallel(), 16, "clamped down to 16");
         unsafe { std::env::remove_var("LMFORGE_LLAMACPP_PARALLEL") }
+    }
+
+    // ── role_cache_ram_args (P0: embed/rerank prompt-cache OOM fix) ─────────
+
+    #[test]
+    fn role_cache_ram_args_embed_forces_zero() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_cache_ram_override();
+        assert_eq!(
+            role_cache_ram_args(ModelRole::Embed, 16.0),
+            vec!["--cache-ram".to_string(), "0".to_string()]
+        );
+    }
+
+    #[test]
+    fn role_cache_ram_args_rerank_forces_zero() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_cache_ram_override();
+        assert_eq!(
+            role_cache_ram_args(ModelRole::Rerank, 32.0),
+            vec!["--cache-ram".to_string(), "0".to_string()]
+        );
+    }
+
+    #[test]
+    fn role_cache_ram_args_embed_forces_zero_even_on_huge_ram_box() {
+        // Regression guard: a workstation-class box must NOT let embed/rerank
+        // inherit the chat tier's biggest budget (4096 MiB) — the whole point
+        // is these roles never get a nonzero cache.
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_cache_ram_override();
+        assert_eq!(
+            role_cache_ram_args(ModelRole::Embed, 128.0),
+            vec!["--cache-ram".to_string(), "0".to_string()]
+        );
+    }
+
+    #[test]
+    fn role_cache_ram_args_chat_uses_nonzero_tiered_budget() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_cache_ram_override();
+        // 16 GB → tier cap 2048 MiB (see resolve_cache_ram_mib doc table).
+        let args = role_cache_ram_args(ModelRole::Chat, 16.0);
+        assert_eq!(args, vec!["--cache-ram".to_string(), "2048".to_string()]);
+    }
+
+    #[test]
+    fn role_cache_ram_args_chat_empty_when_budget_is_zero() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_cache_ram_override();
+        // No RAM info → resolve_cache_ram_mib returns 0 → chat omits the flag
+        // entirely (distinct from embed/rerank's explicit "0").
+        assert!(role_cache_ram_args(ModelRole::Chat, 0.0).is_empty());
+    }
+
+    #[test]
+    fn role_cache_ram_args_chat_respects_env_override() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("LMFORGE_LLAMACPP_CACHE_RAM_MIB", "777") }
+        assert_eq!(
+            role_cache_ram_args(ModelRole::Chat, 16.0),
+            vec!["--cache-ram".to_string(), "777".to_string()]
+        );
+        clear_cache_ram_override();
     }
 
     #[test]
