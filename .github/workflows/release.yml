@@ -357,7 +357,11 @@ jobs:
         include:
           - os: ubuntu-latest
             asset: lmforge-linux-x86_64
-          - os: macos-14
+          # macos-15+: the jundot/omlx Homebrew formula requires Sequoia
+          # ("does not run on macOS versions older than Sequoia" — broke the
+          # v0.1.8 gate on macos-14). Build jobs stay on macos-14 for broader
+          # min-OS binary compatibility; only the E2E gate needs omlx installed.
+          - os: macos-15
             asset: lmforge-macos-arm64
           - os: windows-latest
             asset: lmforge-windows-x86_64.exe
