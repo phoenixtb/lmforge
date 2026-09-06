@@ -176,6 +176,13 @@ impl AppState {
 
     /// Ensure a model is loaded for a *preload* (no request will immediately
     /// follow, e.g. `/lf/model/switch`). Does not touch the in-flight count.
+    //
+    // result_large_err (new in the 2026-09 stable clippy): the Err variant is a
+    // full axum `Response` — the standard axum "return the error response
+    // directly" pattern used by every handler in this crate. Boxing it would
+    // ripple through all `?` call sites for zero practical benefit: these are
+    // cold paths (model load / preload), not per-token hot paths.
+    #[allow(clippy::result_large_err)]
     pub async fn ensure_model(
         &self,
         model_id: &str,
@@ -189,6 +196,7 @@ impl AppState {
     /// Ensure a model is loaded to *serve a request*. Returns an [`InflightGuard`]
     /// that holds the model busy (uneviccible) until dropped — attach it to the
     /// response with [`attach_inflight_guard`] so it survives streaming bodies.
+    #[allow(clippy::result_large_err)] // see ensure_model — axum Response Err pattern
     pub async fn ensure_model_request(
         &self,
         model_id: &str,
@@ -201,6 +209,7 @@ impl AppState {
         })
     }
 
+    #[allow(clippy::result_large_err)] // see ensure_model — axum Response Err pattern
     async fn ensure_model_inner(
         &self,
         model_id: &str,
