@@ -154,32 +154,16 @@ for tarball in "${tarballs[@]}"; do
 done
 
 # ── 5. Cleanup ────────────────────────────────────────────────────────────────
-# Reclaims the big build debris (only reached when build/publish/smoke all
-# succeeded — failures exit above, leaving everything in place for debugging):
-#   .build/llama.cpp-*        source + CUDA build trees (~10 GB per variant)
-#   dist/llamacpp/<staging>/  unpacked tarball staging dirs (~1 GB each)
-#   dist/llamacpp/*.tar.gz    tarballs from OTHER tags (current tag's are kept)
-# Deliberately kept: the lmforge-ccache-* Docker volumes and the CUDA images —
-# they turn the next cold ~1 h build into minutes. The build container runs as
-# root, so these files are root-owned on Linux hosts; deleting through a
-# container avoids needing sudo.
+# Delegated to cleanup.sh (also runnable standalone). Only reached when
+# build/publish/smoke all succeeded — failures exit above, leaving everything
+# in place for debugging. Keeps this run's tarballs, ccache volumes, and the
+# CUDA images; removes build trees, staging dirs, and stale-tag tarballs.
 if ((NO_CLEANUP)); then
   echo ""
   echo "── Cleanup skipped (--no-cleanup) ──"
 else
   echo ""
-  echo "── Cleanup (build trees, staging dirs, stale-tag tarballs) ──"
-  docker run --rm -v "$ROOT:/work" -e KEEP_TAG="$TAG" "${images[0]}" bash -c '
-    rm -rf /work/.build
-    for p in /work/dist/llamacpp/*; do
-      [ -e "$p" ] || continue
-      case "$(basename "$p")" in
-        lmforge-llamacpp-"$KEEP_TAG"-*.tar.gz|lmforge-llamacpp-"$KEEP_TAG"-*.tar.gz.sha256) ;;
-        *) echo "  rm $(basename "$p")"; rm -rf "$p" ;;
-      esac
-    done
-  '
-  echo "  kept: dist/llamacpp/*${TAG}*.tar.gz(+.sha256), ccache volumes, Docker images"
+  "$ROOT/scripts/llamacpp-cuda/cleanup.sh" --keep-tag "$TAG"
 fi
 
 # ── 6. Commit + push the manifest ─────────────────────────────────────────────
