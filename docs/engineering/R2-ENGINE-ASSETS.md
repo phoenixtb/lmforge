@@ -106,7 +106,9 @@ R2 egress through Cloudflare CDN is **free**; cost risk is mostly **read operati
 ## 3. Maintainer workflow (local primary)
 
 One command (recommended) — pulls Docker images, builds, uploads to R2,
-patches + smoke-tests + commits the manifest. The llama.cpp tag defaults to
+patches + smoke-tests + commits the manifest, then cleans up build debris
+(`.build/` trees, staging dirs, stale-tag tarballs; ccache volumes and Docker
+images are kept for warm rebuilds). The llama.cpp tag defaults to
 the registry pin in `data/engines.toml` so tarballs can't drift from what the
 binary expects; `--tag` overrides for experimental builds:
 

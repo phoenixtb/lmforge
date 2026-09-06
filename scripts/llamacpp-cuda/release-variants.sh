@@ -14,7 +14,11 @@
 #   3. build-local.sh   — compile + tarball into dist/llamacpp/.
 #   4. publish-r2.sh    — upload to R2 + patch variants-manifest.json.
 #   5. Smoke-test each public CDN URL (HTTP 200).
-#   6. git commit the manifest + push (gated by a confirm unless --yes).
+#   6. Clean up build debris (.build/ source+build trees, dist/ staging dirs,
+#      stale-tag tarballs) — ccache volumes and Docker images are kept on
+#      purpose so the next rebuild is warm. --no-cleanup preserves everything
+#      for debugging. Skipped automatically if any earlier step fails.
+#   7. git commit the manifest + push (gated by a confirm unless --yes).
 #
 # Prerequisites: docker, aws CLI, jq, curl, and a filled-in
 # scripts/llamacpp-cuda/config.env (R2 keys + CDN base — see
@@ -26,6 +30,7 @@
 #   scripts/llamacpp-cuda/release-variants.sh --tag b9999      # override pin (experimental build)
 #   scripts/llamacpp-cuda/release-variants.sh --yes            # no confirm prompts (CI/cron)
 #   scripts/llamacpp-cuda/release-variants.sh --no-push        # commit locally, don't push
+#   scripts/llamacpp-cuda/release-variants.sh --no-cleanup     # keep build trees for debugging
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -33,14 +38,16 @@ VARIANT="all"
 TAG=""
 ASSUME_YES=0
 NO_PUSH=0
+NO_CLEANUP=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --variant) VARIANT="$2"; shift 2 ;;
-    --tag)     TAG="$2"; shift 2 ;;
-    --yes)     ASSUME_YES=1; shift ;;
-    --no-push) NO_PUSH=1; shift ;;
-    -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
+    --variant)    VARIANT="$2"; shift 2 ;;
+    --tag)        TAG="$2"; shift 2 ;;
+    --yes)        ASSUME_YES=1; shift ;;
+    --no-push)    NO_PUSH=1; shift ;;
+    --no-cleanup) NO_CLEANUP=1; shift ;;
+    -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
     *) echo "Unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -146,7 +153,36 @@ for tarball in "${tarballs[@]}"; do
   fi
 done
 
-# ── 5. Commit + push the manifest ─────────────────────────────────────────────
+# ── 5. Cleanup ────────────────────────────────────────────────────────────────
+# Reclaims the big build debris (only reached when build/publish/smoke all
+# succeeded — failures exit above, leaving everything in place for debugging):
+#   .build/llama.cpp-*        source + CUDA build trees (~10 GB per variant)
+#   dist/llamacpp/<staging>/  unpacked tarball staging dirs (~1 GB each)
+#   dist/llamacpp/*.tar.gz    tarballs from OTHER tags (current tag's are kept)
+# Deliberately kept: the lmforge-ccache-* Docker volumes and the CUDA images —
+# they turn the next cold ~1 h build into minutes. The build container runs as
+# root, so these files are root-owned on Linux hosts; deleting through a
+# container avoids needing sudo.
+if ((NO_CLEANUP)); then
+  echo ""
+  echo "── Cleanup skipped (--no-cleanup) ──"
+else
+  echo ""
+  echo "── Cleanup (build trees, staging dirs, stale-tag tarballs) ──"
+  docker run --rm -v "$ROOT:/work" -e KEEP_TAG="$TAG" "${images[0]}" bash -c '
+    rm -rf /work/.build
+    for p in /work/dist/llamacpp/*; do
+      [ -e "$p" ] || continue
+      case "$(basename "$p")" in
+        lmforge-llamacpp-"$KEEP_TAG"-*.tar.gz|lmforge-llamacpp-"$KEEP_TAG"-*.tar.gz.sha256) ;;
+        *) echo "  rm $(basename "$p")"; rm -rf "$p" ;;
+      esac
+    done
+  '
+  echo "  kept: dist/llamacpp/*${TAG}*.tar.gz(+.sha256), ccache volumes, Docker images"
+fi
+
+# ── 6. Commit + push the manifest ─────────────────────────────────────────────
 MANIFEST_REL="data/engines/llamacpp/variants-manifest.json"
 cd "$ROOT"
 if git diff --quiet -- "$MANIFEST_REL"; then
