@@ -110,9 +110,9 @@ name            = "llama.cpp"
 # b9351 → b9861: upstream moved Windows CUDA prebuilts from the 13.1 to the
 # 13.3 toolkit and picked up months of Blackwell (sm_120) runtime fixes —
 # candidate fix for the intermittent garbage-output-per-engine-launch seen on
-# RTX 5060 Ti (win-cuda-13.1 build, driver 610.x). NOTE: the Linux CUDA R2
-# archives (variants-manifest.json) are still b9351 — rebuild them to match
-# before a release ships this pin.
+# RTX 5060 Ti (win-cuda-13.1 build, driver 610.x). The Linux CUDA R2 archives
+# (variants-manifest.json) were rebuilt to b9861 on 2026-09-07 — keep them in
+# sync via scripts/llamacpp-cuda/release-variants.sh whenever this pin moves.
 version         = "b9861"
 tier            = "default"
 # macOS intentionally omitted — Apple Silicon uses omlx (MLX) as default.
