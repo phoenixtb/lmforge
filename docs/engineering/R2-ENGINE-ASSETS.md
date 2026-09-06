@@ -105,13 +105,25 @@ R2 egress through Cloudflare CDN is **free**; cost risk is mostly **read operati
 
 ## 3. Maintainer workflow (local primary)
 
+One command (recommended) — pulls Docker images, builds, uploads to R2,
+patches + smoke-tests + commits the manifest. The llama.cpp tag defaults to
+the registry pin in `data/engines.toml` so tarballs can't drift from what the
+binary expects; `--tag` overrides for experimental builds:
+
 ```bash
 # One-time
 cp scripts/llamacpp-cuda/config.example.env scripts/llamacpp-cuda/config.env
 # Edit: R2 keys, LMFORGE_ENGINE_CDN_BASE
 
+scripts/llamacpp-cuda/release-variants.sh              # all variants, pinned tag
+scripts/llamacpp-cuda/release-variants.sh --variant cuda12 --no-push
+```
+
+Manual step-by-step (what the mother script sequences):
+
+```bash
 # Build (sequential; ~1.5–2.5 h cold on 6-core / 16 GB)
-scripts/llamacpp-cuda/build-local.sh --variant all --tag b9351
+scripts/llamacpp-cuda/build-local.sh --variant all --tag b9861
 
 # Upload + patch manifest
 scripts/llamacpp-cuda/publish-r2.sh dist/llamacpp/*.tar.gz
@@ -121,7 +133,7 @@ cargo build --release
 
 # Smoke-test CDN
 curl -fsSL -o /dev/null -w '%{http_code}\n' \
-  "https://engines.yourdomain.com/llamacpp/b9351/lmforge-llamacpp-b9351-cuda12-linux-x64.tar.gz"
+  "https://engines.yourdomain.com/llamacpp/b9861/lmforge-llamacpp-b9861-cuda12-linux-x64.tar.gz"
 
 # Cut product release
 git add data/engines/llamacpp/variants-manifest.json
