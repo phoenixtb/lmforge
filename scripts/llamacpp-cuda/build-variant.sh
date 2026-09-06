@@ -87,9 +87,18 @@ mkdir -p "$CCACHE_DIR"
 source /opt/rh/gcc-toolset-12/enable
 ccache -z || true
 
+# LLAMA_BUILD_UI / LLAMA_USE_PREBUILT_UI = OFF: llama-server links a stub
+# llama-ui with zero assets — LMForge only uses the headless API. With them ON
+# (b9861+ default), the build downloads prebuilt web-UI assets from HF keyed
+# by build number; our --depth 1 clone makes that number 1 → bucket "b1"
+# missing → "latest" fallback → asset-manifest mismatch (missing loading.html)
+# → hard build failure. Harmless no-ops on tags that predate tools/ui.
+
 cmake -S "$LLAMA_DIR" -B "$LLAMA_DIR/build" -G Ninja \
   -DGGML_CUDA=ON \
   -DGGML_NATIVE=OFF \
+  -DLLAMA_BUILD_UI=OFF \
+  -DLLAMA_USE_PREBUILT_UI=OFF \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DLLAMA_CURL=ON \
