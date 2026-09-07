@@ -24,7 +24,7 @@ LMForge is a persistent daemon that manages model loading, VRAM allocation, and 
 
 LMForge is a **local AI infrastructure layer**. It sits between your hardware and the tools that consume AI (code editors, agents, custom scripts, REST clients), managing the messy reality of running LLMs locally:
 
-- Which engine to use for your hardware (Apple MLX, SGLang, llama.cpp)?
+- Which engine to use for your hardware (Apple MLX, llama.cpp, opt-in vLLM/EXL3/SGLang)?
 - How much VRAM is available, and which models fit right now?
 - What happens when you want a chat model *and* an embedding model loaded at once?
 - How do you keep everything running when apps open and close?
@@ -58,10 +58,10 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 - **Multi-model orchestration** — chat, embeddings, vision, and rerank models can be resident together; per-model `keep_alive`, VRAM admission, and LRU eviction
 - **Hardware-aware engine selection** — automatically picks the best engine / build:
   - 🍎 **Apple Silicon** → [oMLX](https://github.com/jundot/omlx) — OpenAI-compatible server on Metal via MLX
-  - 🖥️ **NVIDIA GPU (Linux)** → [SGLang](https://github.com/sgl-project/sglang) (8 GB+ VRAM) or [llama.cpp](https://github.com/ggerganov/llama.cpp) CUDA (`cuda12` / opt-in `cuda13`)
-  - 🪟 **NVIDIA GPU (Windows)** → llama.cpp CUDA prebuilts — SGLang is Linux-only upstream; use WSL2 if you need it
+  - 🖥️ **NVIDIA GPU (Linux / Windows)** → [llama.cpp](https://github.com/ggerganov/llama.cpp) CUDA (`cuda12` / opt-in `cuda13`) — default on every NVIDIA box, incl. consumer Blackwell (sm_120)
   - 🎮 **AMD / Intel GPU** → llama.cpp Vulkan
   - 💻 **CPU / any hardware** → llama.cpp — universal fallback
+  - ⚡ **Opt-in specialized engines** (`lmforge engine install <id>`, never auto-selected) → [vLLM](https://github.com/vllm-project/vllm) and [ExLlamaV3](https://github.com/turboderp-org/exllamav3) on NVIDIA sm_75+; [SGLang](https://github.com/sgl-project/sglang) is kept `experimental` (`--engine sglang`, sm_90–sm_103 only) — upstream `sgl-kernel` ships no consumer-Blackwell cubins, see [ADR-001](docs/architecture/ADR-001-engine-tiers.md)
 - **Engine tiers** — `default` / `opt-in` / `experimental`; `lmforge doctor` shows installed variants and which is active
 - **OpenAI-compatible API** — `/v1/chat/completions`, `/v1/embeddings`, `/v1/models`, `/v1/rerank`
 - **Ollama-compatible API** — `/api/chat`, `/api/generate`, `/api/tags` for tools that expect Ollama
@@ -82,15 +82,15 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 | Platform | Architecture | Engine | Core | Desktop UI |
 |---|---|---|---|---|
 | macOS 13+ | Apple Silicon (arm64) | oMLX (Metal/MLX) | ✅ | ✅ DMG |
-| Ubuntu / Debian | x86_64 | SGLang (NVIDIA, 8 GB+) / llama.cpp | ✅ | ✅ .deb (AppImage fallback) |
-| Fedora / RHEL / SUSE | x86_64 | SGLang (NVIDIA, 8 GB+) / llama.cpp | ✅ | ✅ .rpm (AppImage fallback) |
+| Ubuntu / Debian | x86_64 | llama.cpp CUDA (opt-in: vLLM, EXL3) | ✅ | ✅ .deb (AppImage fallback) |
+| Fedora / RHEL / SUSE | x86_64 | llama.cpp CUDA (opt-in: vLLM, EXL3) | ✅ | ✅ .rpm (AppImage fallback) |
 | Ubuntu 22.04 / 24.04 / 26.04 | arm64 | llama.cpp | ✅ | 🔜 Planned |
-| Windows 10/11 | x86_64 | llama.cpp (CPU + NVIDIA CUDA) | ✅ | ✅ NSIS installer |
-| Windows 10/11 + WSL2 | x86_64 | SGLang (NVIDIA via CUDA-on-WSL) | ✅ (inside WSL) | run via Linux build |
+| Windows 10/11 | x86_64 | llama.cpp (CPU + NVIDIA CUDA; opt-in: EXL3) | ✅ | ✅ NSIS installer |
+| Windows 10/11 + WSL2 | x86_64 | llama.cpp CUDA (opt-in: vLLM, EXL3) | ✅ (inside WSL) | run via Linux build |
 
 > **macOS Intel (x86_64)** binaries are available but not currently published via the CI release pipeline. Build from source with `cargo build --release --target x86_64-apple-darwin`.
 
-> **SGLang is Linux-only upstream.** On Windows the engine selector picks `llama.cpp` even on NVIDIA hardware. To run SGLang on a Windows host, install WSL2 + Ubuntu, install the NVIDIA Windows driver (CUDA-on-WSL is included automatically — do **not** install a Linux NVIDIA driver inside WSL), then install the Linux LMForge build *inside* WSL. The Windows-side LMForge can keep running llama.cpp; the two are independent.
+> **SGLang is `experimental`, not auto-selected on any platform** (see [ADR-001](docs/architecture/ADR-001-engine-tiers.md)) — upstream `sgl-kernel` ships `sm_90`/`sm_100` cubins only, so it hangs at first token on consumer Blackwell (RTX 50-series). `llama.cpp` is the default engine on every NVIDIA box instead, Linux or Windows. If your GPU falls in the supported `sm_90`–`sm_103` window (Hopper/datacenter Blackwell) and you still want SGLang, opt in explicitly: `lmforge run --engine sglang <model>` (Linux only upstream; native Windows use WSL2 + Ubuntu with the NVIDIA Windows driver, CUDA-on-WSL is included automatically — do **not** install a Linux NVIDIA driver inside WSL).
 
 > **Windows 10 users** must install the Edge WebView2 Runtime before launching the desktop UI (preinstalled on Windows 11). Get it from <https://developer.microsoft.com/microsoft-edge/webview2/>.
 
@@ -283,16 +283,17 @@ curl -s http://127.0.0.1:11430/v1/models | jq '[.data[] | {id, capabilities}]'
 
 ```bash
 curl -s http://127.0.0.1:11430/lf/status | jq '.engine'
-# Expected on Linux + NVIDIA ≥ 8 GB VRAM: { "id": "sglang", "version": "..." }
-# Expected on Apple Silicon:              { "id": "omlx", "version": "..." }
-# Anything else (incl. Windows + NVIDIA): { "id": "llamacpp", "version": "..." }
+# Expected on Apple Silicon:        { "id": "omlx", "version": "..." }
+# Expected on everything else:      { "id": "llamacpp", "version": "..." }
 ```
 
-If you see `llamacpp` on a Linux machine with ≥ 8 GB NVIDIA VRAM, **restart the daemon — the engine is re-selected on every `start`**, so this is enough; SGLang will auto-install on first launch:
+`llamacpp` is the default `default`-tier engine on every non-Apple platform, including NVIDIA GPUs — `sglang`, `vllm`, and `exl3` are `opt-in`/`experimental` and are never auto-selected (see [ADR-001](docs/architecture/ADR-001-engine-tiers.md)). To use one of them:
 
 ```bash
-lmforge stop
-lmforge start   # logs will show "Engine not installed, running installer..." for SGLang
+lmforge engine install vllm     # or exl3 — opt-in, sm_75+ NVIDIA
+lmforge run --engine vllm <model>
+
+lmforge run --engine sglang <model>   # experimental — sm_90..sm_103 only, CLI warns first
 ```
 
 ---
@@ -471,14 +472,16 @@ curl -sS http://127.0.0.1:11430/v1/embeddings \
   observes it, then it's persisted to `models.json`.
 - Sending a non-embedding model returns **400** with a clear suggestion.
 
-### Reranking — Linux + NVIDIA caveat
+### Reranking — SGLang caveat (opt-in only)
 
-`/v1/rerank` works fine on macOS (oMLX) and on llama.cpp builds. **On Linux
-+ NVIDIA + SGLang it returns 501** because SGLang v0.5.10's cross-encoder
-support is experimental and disabled in `engines.toml`. Workarounds: (a)
-pull a GGUF reranker and run a second LMForge instance on a different port
-pinned to llama.cpp via `engines.toml`, or (b) use an LLM-as-reranker via
-`/v1/chat/completions`. Multi-engine routing is on the roadmap.
+`/v1/rerank` works fine on macOS (oMLX) and on llama.cpp — the default engine
+on every NVIDIA box, Linux or Windows. **If you explicitly opted into the
+`experimental` SGLang engine** (`lmforge run --engine sglang`), `/v1/rerank`
+returns 501 because SGLang v0.5.10's cross-encoder support is experimental
+and disabled in `engines.toml`. Workarounds: (a) pull a GGUF reranker and run
+a second LMForge instance on a different port pinned to llama.cpp via
+`engines.toml`, or (b) use an LLM-as-reranker via `/v1/chat/completions`.
+Multi-engine routing is on the roadmap.
 
 ### Concurrency, queueing, retries
 
@@ -743,14 +746,15 @@ lmforge catalog --search qwen      # search by name/family
 
 ### Vision-Language Models (VLMs)
 
-| Shortcut | macOS (MLX) | Linux/Windows (GGUF + mmproj) | Linux (safetensors / SGLang) |
+| Shortcut | macOS (MLX) | Linux/Windows (GGUF + mmproj) | Linux (safetensors / opt-in SGLang) |
 |---|---|---|---|
 | `qwen2.5-vl:3b:4bit` | `mlx-community/Qwen2.5-VL-3B-Instruct-4bit` | `bartowski/Qwen2.5-VL-3B-Instruct-GGUF` | — |
 | `qwen2.5-vl:7b:4bit` | `mlx-community/Qwen2.5-VL-7B-Instruct-4bit` | `bartowski/Qwen2.5-VL-7B-Instruct-GGUF` | — |
 | `qwen2.5-vl:7b`      | — | — | `Qwen/Qwen2.5-VL-7B-Instruct` |
 
 GGUF VLM entries automatically pull the multimodal projector (`mmproj-*.gguf`)
-alongside the main weights.
+alongside the main weights. The safetensors column requires `--engine sglang`
+(`experimental` tier, never auto-selected — see [ADR-001](docs/architecture/ADR-001-engine-tiers.md)).
 
 ### Re-ranking Models (llama.cpp only)
 
@@ -762,7 +766,7 @@ alongside the main weights.
 | `qwen3-reranker:0.6b:q4` | `Qwen/Qwen3-Reranker-0.6B-GGUF` |
 | `qwen3-reranker:4b:q4` | `Qwen/Qwen3-Reranker-4B-GGUF` |
 
-> **Re-ranking** requires llama.cpp with `--reranking`. The `/v1/rerank` endpoint returns 501 on oMLX and SGLang. See "Re-ranking on Linux + NVIDIA" under [Configuration](#configuration) for workarounds.
+> **Re-ranking** requires llama.cpp with `--reranking`. The `/v1/rerank` endpoint returns 501 on oMLX and on the opt-in SGLang engine. See "Reranking — SGLang caveat" under [Configuration](#configuration) for workarounds.
 
 You can also pull any HuggingFace repo directly by its full path:
 
@@ -830,7 +834,7 @@ embed_batch_size  = 32            # max inputs per engine call for /v1/embedding
 | `LMFORGE_MAX_BODY_MB` | `32` | HTTP request body cap in MB (overrides `max_request_body_mb`). Floored at 1 MB. |
 | `LMFORGE_ENGINE_LOG_MAX_MB` | `50` | Rotate per-model engine logs above this size. |
 | `LMFORGE_ENGINE_LOG_KEEP` | `3` | How many rotated copies to retain per stream. |
-| `LMFORGE_SGLANG_MEM_FRACTION` | `0.5` | SGLang `--mem-fraction-static` (raise to `0.85` for single-slot deployments). |
+| `LMFORGE_SGLANG_MEM_FRACTION` | `0.5` | Opt-in SGLang engine's `--mem-fraction-static` (raise to `0.85` for single-slot deployments). No effect unless you `--engine sglang`. |
 | `LMFORGE_LLAMACPP_NGL` | auto | Force `-ngl <N>` for `llama-server` (0..=99). Default is computed from free VRAM and model size. Set to `0` to disable GPU offload entirely; set to `99` to force full offload. |
 | `LMFORGE_LLAMACPP_CTX` | auto | Force `--ctx-size <N>` for VLM (mmproj) loads. Default scales 1024 → 8192 with post-load free VRAM. Values below 512 are ignored. |
 | `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN` | unset | Used by the downloader for gated repos. |
@@ -860,7 +864,8 @@ return a 400 with `code:image_fetch_failed`; oversized payloads return 413.
 The repo ships a CPU/llama.cpp `Dockerfile` (multi-stage; debian-slim runtime
 with `llama-server` baked in **plus the SvelteKit dashboard built into the
 image and served at `/ui`**). It does **not** include oMLX (Apple-only) or
-SGLang (CUDA-only) — see below for status on a CUDA variant.
+the opt-in/experimental CUDA engines (vLLM, EXL3, SGLang) — see below for
+status on a CUDA variant.
 
 #### Build & run
 
@@ -988,11 +993,12 @@ For anything beyond a single-host home setup:
 - **Disk.** Catalog VLMs and embedding pairs hit 10–30 GB on the volume.
   Size the volume accordingly.
 
-#### CUDA / SGLang variant
+#### CUDA variant (llama.cpp / opt-in engines)
 
 Not yet shipped. Tracking item — for now NVIDIA users should run LMForge
-natively on the host (the SGLang adapter starts SGLang as a subprocess and
-needs CUDA libraries on the host).
+natively on the host. This applies to the default llama.cpp CUDA build as
+well as the opt-in engines (vLLM, EXL3) and the experimental SGLang adapter,
+all of which start as subprocesses that need CUDA libraries on the host.
 
 #### Healthcheck
 
@@ -1030,17 +1036,19 @@ Curated VLM shortcuts:
 |-------------------------|---------------|------------------------------|
 | `qwen2.5-vl:3b:4bit`    | oMLX / llama.cpp | Qwen 2.5-VL 3B (Q4_K_M + mmproj-f16) |
 | `qwen2.5-vl:7b:4bit`    | oMLX / llama.cpp | Qwen 2.5-VL 7B (Q4_K_M + mmproj-f16) |
-| `qwen2.5-vl:7b`         | SGLang (safetensors) | Qwen 2.5-VL 7B FP16 |
+| `qwen2.5-vl:7b`         | SGLang (safetensors, opt-in `--engine sglang`) | Qwen 2.5-VL 7B FP16 |
 
 GGUF VLMs ship with a multimodal projector sidecar (`mmproj-*.gguf`); LMForge
 downloads it alongside the main weights and passes `--mmproj` to llama-server
 automatically. SGLang VLMs use `--chat-template` derived from `model_type`.
 
-### Re-ranking on Linux + NVIDIA (SGLang gap)
+### Re-ranking on the opt-in SGLang engine (gap)
 
 SGLang v0.5.10's cross-encoder reranker support is experimental and
-intentionally disabled in `engines.toml`. On Linux + NVIDIA hosts, `/v1/rerank`
-returns 501 because the daemon currently routes all models through one engine.
+intentionally disabled in `engines.toml`. SGLang is `experimental`-tier and
+never auto-selected (`llama.cpp` is the default on Linux + NVIDIA); if you
+explicitly opted in with `--engine sglang`, `/v1/rerank` returns 501 for that
+model because the daemon currently routes all models through one engine.
 **Workarounds**: (a) use an LLM-as-reranker via `/v1/chat/completions`, or
 (b) run a second LMForge instance on a different port pinned to llama.cpp via
 `engines.toml` user override. Multi-engine routing (one engine per model) is

@@ -34,10 +34,10 @@ LMForge is fully cross-platform and picks the best inference engine for your har
 | **Windows 10/11** | NVIDIA GPU | llama.cpp with CUDA (right build for your driver) |
 | **Windows 10/11** | AMD / Intel GPU, or CPU-only | llama.cpp with Vulkan / CPU |
 | **macOS** | Apple Silicon (M1–M4) | oMLX — OpenAI-compatible server on Apple Metal/MLX |
-| **Linux** | NVIDIA (strong GPU) | SGLang (high concurrency) or llama.cpp CUDA (cuda12/cuda13 variants) |
+| **Linux** | NVIDIA (any GPU) | llama.cpp CUDA (cuda12/cuda13 variants) — works out of the box on consumer Blackwell (RTX 50-series) too |
 | **Linux** | AMD / Intel GPU, or CPU | llama.cpp (Vulkan or CPU) |
 
-Advanced engines (vLLM, TabbyAPI/ExLlamaV3, and similar) are available as **opt-in / experimental** installs for power users. You never have to think about this on day one — LMForge detects your GPU, VRAM, and drivers and chooses a **default** engine for you. Run `lmforge doctor` anytime to see what is installed and active.
+Advanced engines (vLLM, TabbyAPI/ExLlamaV3, SGLang, and similar) are available as **opt-in / experimental** installs for power users chasing higher concurrency on datacenter-class GPUs — never installed automatically. You never have to think about this on day one — LMForge detects your GPU, VRAM, and drivers and chooses a **default** engine for you. Run `lmforge doctor` anytime to see what is installed and active.
 
 ---
 
