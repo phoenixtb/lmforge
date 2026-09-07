@@ -251,6 +251,17 @@ try {
     }
     try { Copy-Item (Join-Path $env:USERPROFILE ".lmforge\models.json") (Join-Path $ResultsDir "models.json") } catch {}
 
+    # SKIP_PULL=1: operator promised chat+embed are already installed. Fail
+    # here with a one-line remediation instead of a mid-run HTTP 503 at TC-E01.
+    if ($SkipPull) {
+        $missing = @($script:EmbedModel, $script:ChatModel) | Where-Object { -not (Test-E2eModelInstalled $_) }
+        if ($missing.Count -gt 0) {
+            $pulls = ($missing | ForEach-Object { "lmforge pull $_" }) -join " && "
+            Fail "SKIP_PULL=1 but required model(s) not installed: $($missing -join ', '). Pull first with: $pulls  (or re-run without SKIP_PULL=1)"
+        }
+        Ok "Required models present (SKIP_PULL=1): embed=$($script:EmbedModel) chat=$($script:ChatModel)"
+    }
+
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     try { $r = Invoke-E2eEmbed -Text $E2E_EMBED_COLD }
     catch { Fail "TC-E01: embed cold-load failed — $(Get-E2eEmbedDiag -Model $script:EmbedModel -Text $E2E_EMBED_COLD)" }

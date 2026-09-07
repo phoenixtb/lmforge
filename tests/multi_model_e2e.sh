@@ -24,7 +24,8 @@
 #    LF_HOST       LMForge API host     (default: http://127.0.0.1:11430)
 #    LF_BIN        Path to lmforge bin  (default: ./target/debug/lmforge, else PATH)
 #    N_REQUESTS    Requests per burst   (default: 10)
-#    SKIP_PULL     Set to 1 to skip pull step (models must already be present)
+#    SKIP_PULL     Set to 1 to skip pull step (required chat+embed must already
+#                  be installed; script preflights after the daemon is healthy)
 #    SKIP_START    Set to 1 to skip daemon start (daemon must already be running)
 #    SKIP_BUILD    Set to 1 to skip `cargo build` (use installed LF_BIN / PATH)
 #    SKIP_STALE_CHECK  Set to 1 to allow daemon SHA != LF_BIN SHA (API-only
@@ -433,7 +434,7 @@ if [[ "$SKIP_PULL" -ne 1 ]]; then
     pull_optional "$RERANK_MODEL" RERANK_PULLED_BY_TEST DO_RERANK
     pull_optional "$MTP_MODEL" MTP_PULLED_BY_TEST DO_MTP
 else
-    info "Step 1 — Skipping pull (SKIP_PULL=1)"
+    info "Step 1 — Skipping pull (SKIP_PULL=1); required models preflighted after daemon is healthy"
 fi
 sep
 
@@ -488,6 +489,20 @@ curl -sf "${LF_HOST}/lf/engines" -o "$RESULTS_DIR/engines.json" 2>/dev/null || t
 curl -sf "${LF_HOST}/lf/status" -o "$RESULTS_DIR/status.json" 2>/dev/null || true
 cp "$HOME/.lmforge/models.json" "$RESULTS_DIR/models.json" 2>/dev/null || true
 sep
+
+# SKIP_PULL=1: operator promised chat+embed are already installed. Fail here
+# with a one-line remediation instead of a mid-run HTTP 503 at TC-E01.
+# Optional VLM/rerank/MTP stay SKIP-if-missing (existing suite behavior).
+if [[ "$SKIP_PULL" -eq 1 ]]; then
+    missing=()
+    e2e_model_installed "$EMBED_MODEL" || missing+=("$EMBED_MODEL")
+    e2e_model_installed "$CHAT_MODEL"  || missing+=("$CHAT_MODEL")
+    if ((${#missing[@]})); then
+        pulls=$(printf 'lmforge pull %s; ' "${missing[@]}")
+        fail "SKIP_PULL=1 but required model(s) not installed: ${missing[*]}. Pull first with: ${pulls%; }  (or re-run without SKIP_PULL=1)"
+    fi
+    ok "Required models present (SKIP_PULL=1): embed=$EMBED_MODEL chat=$CHAT_MODEL"
+fi
 
 # ─── Helpers: thin wrappers over scripts/lib/e2e-api.sh ───────────────────────
 lf_embed() { e2e_api_embed "$EMBED_MODEL" "$1"; }

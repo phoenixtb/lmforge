@@ -115,6 +115,15 @@ function Test-E2eEngineSupportsRerank {
     return ($eng.supports_reranking -eq $true)
 }
 
+function Test-E2eModelInstalled {
+    param([string]$Model, [string]$HostUrl = $script:LfHost)
+    try {
+        $m = (Invoke-RestMethod "$HostUrl/lf/model/list" -TimeoutSec 10).models |
+            Where-Object { $_.id -eq $Model } | Select-Object -First 1
+        return [bool]$m
+    } catch { return $false }
+}
+
 function Test-E2eModelThinkingCapable {
     param([string]$Model = $script:ChatModel, [string]$HostUrl = $script:LfHost)
     try {

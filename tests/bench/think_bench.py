@@ -162,7 +162,9 @@ PROMPTS = [
         "id": "primary_colors",
         "category": "instruct-control",
         "text": "List exactly three primary colors, one per line.",
-        "grader": r"(?is)red.*(blue|yellow).*(blue|yellow)",
+        # RYB (art/pigment) and RGB (additive) are both valid; require red + two
+        # of {green, blue, yellow} so junk two-color dumps still fail.
+        "grader": r"(?is)red.*(green|blue|yellow).*(green|blue|yellow)",
         "repeats": 1,
     },
 ]

@@ -144,6 +144,10 @@ to bypass the daemon↔binary SHA gate:
 SKIP_BUILD=1 SKIP_START=1 SKIP_PULL=1 SKIP_STALE_CHECK=1 bash tests/multi_model_e2e.sh
 ```
 
+`SKIP_PULL=1` requires chat+embed already installed; the script preflights after
+the daemon is healthy and aborts with a `lmforge pull …` remediation if not.
+Optional VLM/rerank/MTP stay SKIP-if-missing.
+
 ```powershell
 $env:SKIP_BUILD=1; $env:SKIP_START=1; $env:SKIP_PULL=1; $env:SKIP_STALE_CHECK=1
 .\tests\multi_model_e2e.ps1
