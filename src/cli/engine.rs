@@ -889,16 +889,20 @@ mod tests {
             crate::engine::variant::LlamaVariant::Cpu,
         );
         std::fs::create_dir_all(&variant_dir).unwrap();
-        let bin_name = if cfg!(windows) {
-            "llama-server.exe"
-        } else {
-            "llama-server"
-        };
+        // The variant path resolves the binary name from the PROFILE
+        // (`installer::variant_binary_name` — profile.os == Linux →
+        // "llama-server", no .exe), NOT from the host via cfg!(windows).
+        // Using a cfg-based name here made this test fail on the Windows CI
+        // runner: it wrote llama-server.exe while variant_installed looked
+        // for llama-server (Linux profile).
+        let bin_name = "llama-server";
         std::fs::write(variant_dir.join(bin_name), b"#!/bin/sh\n").unwrap();
 
-        // The flat legacy path must NOT exist — proves the variant fallback,
-        // not the pre-existing flat check, is what makes this pass.
-        assert!(!tmp.join("engines").join(bin_name).is_file());
+        // The flat legacy path must NOT exist (either OS spelling) — proves
+        // the variant fallback, not the pre-existing flat check, is what
+        // makes this pass.
+        assert!(!tmp.join("engines").join("llama-server").is_file());
+        assert!(!tmp.join("engines").join("llama-server.exe").is_file());
 
         assert!(
             install_state(llama, &tmp, Some(&profile)),
