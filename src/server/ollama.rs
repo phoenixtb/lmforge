@@ -404,6 +404,43 @@ fn translate_ollama_to_openai(ollama: &serde_json::Value) -> serde_json::Value {
         openai["think"] = think.clone();
     }
 
+    // Batch 2 §2.1 — `tools` passthrough. Ollama clients (Open WebUI,
+    // Continue) send `tools` already in OpenAI function-calling shape; the
+    // translator previously dropped the field entirely (only
+    // model/messages/stream/think/options were copied), silently breaking
+    // function calling for every Ollama-API client. llama.cpp's
+    // `/v1/chat/completions` accepts it verbatim.
+    if let Some(tools) = ollama.get("tools") {
+        openai["tools"] = tools.clone();
+    }
+
+    // Batch 2 §2.1 — `format` → `response_format`. Ollama's structured-output
+    // knob: the string `"json"` is legacy whole-response JSON mode; a JSON
+    // Schema object is Ollama's typed structured-output mode (same feature
+    // OpenAI calls `json_schema`). Map both to the OpenAI shape the engine
+    // already accepts on the OpenAI path (`chat_completions` forwards
+    // `response_format` through untouched — verified in `openai.rs`).
+    // Anything else (missing/empty/non-string-non-object) is left
+    // untranslated rather than guessed at.
+    if let Some(format) = ollama.get("format") {
+        match format {
+            serde_json::Value::String(s) if s == "json" => {
+                openai["response_format"] = serde_json::json!({ "type": "json_object" });
+            }
+            serde_json::Value::Object(_) => {
+                openai["response_format"] = serde_json::json!({
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "response",
+                        "schema": format,
+                        "strict": true
+                    }
+                });
+            }
+            _ => {}
+        }
+    }
+
     // Options translation
     if let Some(options) = ollama.get("options").and_then(|o| o.as_object()) {
         if let Some(temp) = options.get("temperature") {
@@ -459,6 +496,15 @@ fn translate_openai_stream_to_ollama_ndjson(openai: Body) -> Body {
         let mut line_buf = String::new();
         let mut model_name = String::new();
         let mut got_terminal = false;
+        // Batch 2 §2.1 — tool_calls accumulation (response path). OpenAI
+        // streams `delta.tool_calls[i]` incrementally (name on the first
+        // chunk, `arguments` appended char-by-char across subsequent
+        // chunks, keyed by `index`). Ollama has no incremental tool-call
+        // wire format — it surfaces the whole call once assembled — so we
+        // buffer here and attach the finished array to the terminal chunk,
+        // mirroring `proxy.rs`'s Call-2 tool_call_map accumulator.
+        let mut tool_call_map: std::collections::BTreeMap<u64, (String, String)> =
+            std::collections::BTreeMap::new();
 
         while let Some(chunk) = byte_stream.next().await {
             let bytes = match chunk {
@@ -474,7 +520,9 @@ fn translate_openai_stream_to_ollama_ndjson(openai: Body) -> Body {
                 let payload = payload.trim();
 
                 if payload == "[DONE]" {
-                    let final_chunk = ollama_done_chunk(&model_name, started.elapsed());
+                    let tool_calls = build_ollama_tool_calls(&tool_call_map);
+                    let final_chunk =
+                        ollama_done_chunk(&model_name, started.elapsed(), tool_calls);
                     got_terminal = true;
                     yield Ok::<Bytes, std::io::Error>(Bytes::from(final_chunk));
                     continue;
@@ -501,8 +549,31 @@ fn translate_openai_stream_to_ollama_ndjson(openai: Body) -> Body {
                     .unwrap_or("");
                 let finish = choice.get("finish_reason").and_then(|v| v.as_str());
 
+                // Batch 2 §2.1 — accumulate tool_calls deltas regardless of
+                // the empty-delta skip below (a tool-call-only delta has
+                // empty content/thinking and no finish_reason, so it would
+                // otherwise be dropped entirely — the bug this item fixes).
+                if let Some(tc_arr) = delta.and_then(|d| d.get("tool_calls")).and_then(|v| v.as_array()) {
+                    for tc in tc_arr {
+                        let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let entry = tool_call_map
+                            .entry(idx)
+                            .or_insert_with(|| (String::new(), String::new()));
+                        if let Some(func) = tc.get("function") {
+                            if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
+                                entry.0 = name.to_string();
+                            }
+                            if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
+                                entry.1.push_str(args);
+                            }
+                        }
+                    }
+                }
+
                 // Skip empty role-only deltas (Ollama clients ignore them
                 // anyway and they bloat the stream with `done:false` noise).
+                // A tool-call-only delta is empty by this measure too — it's
+                // already captured above — so it's safe to skip here.
                 if content.is_empty() && thinking.is_empty() && finish.is_none() {
                     continue;
                 }
@@ -511,7 +582,13 @@ fn translate_openai_stream_to_ollama_ndjson(openai: Body) -> Body {
                     // OpenAI sends a final delta with finish_reason set —
                     // translate it directly to Ollama's done frame so we
                     // don't double-emit when [DONE] also arrives.
-                    let chunk = ollama_done_chunk_with_reason(&model_name, started.elapsed(), reason);
+                    let tool_calls = build_ollama_tool_calls(&tool_call_map);
+                    let chunk = ollama_done_chunk_with_reason(
+                        &model_name,
+                        started.elapsed(),
+                        reason,
+                        tool_calls,
+                    );
                     got_terminal = true;
                     yield Ok::<Bytes, std::io::Error>(Bytes::from(chunk));
                     continue;
@@ -538,7 +615,8 @@ fn translate_openai_stream_to_ollama_ndjson(openai: Body) -> Body {
         // If the upstream cut off without [DONE] or a finish_reason, still
         // emit a terminal frame so clients unblock cleanly.
         if !got_terminal {
-            let final_chunk = ollama_done_chunk(&model_name, started.elapsed());
+            let tool_calls = build_ollama_tool_calls(&tool_call_map);
+            let final_chunk = ollama_done_chunk(&model_name, started.elapsed(), tool_calls);
             yield Ok(Bytes::from(final_chunk));
         }
     };
@@ -546,20 +624,58 @@ fn translate_openai_stream_to_ollama_ndjson(openai: Body) -> Body {
     Body::from_stream(s)
 }
 
-fn ollama_done_chunk(model: &str, elapsed: std::time::Duration) -> String {
-    ollama_done_chunk_with_reason(model, elapsed, "stop")
+/// Build the Ollama-shaped `tool_calls` array from the streaming
+/// accumulator (index → (name, arguments_buf)). Returns `None` when no
+/// tool call was ever started (the common, non-tool-calling case), so
+/// callers can omit the field entirely rather than emit `tool_calls: []`.
+///
+/// Mirrors the validation discipline of `proxy.rs`'s Call-2 accumulator
+/// (C2): entries with no name are dropped rather than emitted malformed.
+/// `arguments` is parsed into a JSON *object* here — see
+/// `translate_tool_call_to_ollama` for why (Ollama's native shape, unlike
+/// OpenAI's, never stringifies `function.arguments`).
+fn build_ollama_tool_calls(
+    tool_call_map: &std::collections::BTreeMap<u64, (String, String)>,
+) -> Option<serde_json::Value> {
+    let calls: Vec<serde_json::Value> = tool_call_map
+        .values()
+        .filter(|(name, _)| !name.is_empty())
+        .map(|(name, args_str)| {
+            let arguments: serde_json::Value =
+                serde_json::from_str(args_str).unwrap_or_else(|_| serde_json::json!({}));
+            serde_json::json!({ "function": { "name": name, "arguments": arguments } })
+        })
+        .collect();
+    if calls.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Array(calls))
+    }
+}
+
+fn ollama_done_chunk(
+    model: &str,
+    elapsed: std::time::Duration,
+    tool_calls: Option<serde_json::Value>,
+) -> String {
+    ollama_done_chunk_with_reason(model, elapsed, "stop", tool_calls)
 }
 
 fn ollama_done_chunk_with_reason(
     model: &str,
     elapsed: std::time::Duration,
     finish_reason: &str,
+    tool_calls: Option<serde_json::Value>,
 ) -> String {
     let total_ns = elapsed.as_nanos().min(u64::MAX as u128) as u64;
+    let mut message = serde_json::json!({ "role": "assistant", "content": "" });
+    if let Some(tc) = tool_calls {
+        message["tool_calls"] = tc;
+    }
     let chunk = serde_json::json!({
         "model": model,
         "created_at": chrono::Utc::now().to_rfc3339(),
-        "message": { "role": "assistant", "content": "" },
+        "message": message,
         "done": true,
         "done_reason": finish_reason,
         "total_duration": total_ns,
@@ -593,7 +709,42 @@ fn translate_openai_to_ollama_chat(openai_text: &str) -> String {
         resp["message"]["thinking"] = serde_json::Value::String(reasoning.to_string());
     }
 
+    // Batch 2 §2.1 — tool_calls back-translation. llama.cpp b9861 supports
+    // OpenAI-shape tool calling natively and the proxy forwards it
+    // (`proxy.rs` C2), but this translator previously only read
+    // `message.content`/`reasoning_content` — a tool-calling Ollama client
+    // (Open WebUI, Continue) got an empty answer with no indication a tool
+    // was invoked. Translate each entry to Ollama's shape (see
+    // `translate_tool_call_to_ollama`).
+    if let Some(tool_calls) = openai["choices"][0]["message"]["tool_calls"].as_array() {
+        let translated: Vec<serde_json::Value> = tool_calls
+            .iter()
+            .filter_map(translate_tool_call_to_ollama)
+            .collect();
+        if !translated.is_empty() {
+            resp["message"]["tool_calls"] = serde_json::Value::Array(translated);
+        }
+    }
+
     serde_json::to_string(&resp).unwrap_or_else(|_| openai_text.to_string())
+}
+
+/// Translate one OpenAI `tool_calls[i]` entry to Ollama's native shape.
+///
+/// OpenAI: `{"id":"...", "type":"function", "function":{"name":"...",
+/// "arguments":"{\"a\":1}"}}` — `arguments` is a JSON-encoded *string*.
+///
+/// Ollama (per its documented `/api/chat` tool-calling response —
+/// `docs/api.md` §"Chat request (with tools)"): `{"function":{"name":"...",
+/// "arguments":{"a":1}}}` — no `id`/`type`, and `arguments` is a JSON
+/// *object*, not a string. Returns `None` (dropping the entry) when the
+/// function name is missing or `arguments` doesn't parse as JSON — a
+/// malformed entry is worse than a missing one.
+fn translate_tool_call_to_ollama(tc: &serde_json::Value) -> Option<serde_json::Value> {
+    let name = tc.get("function")?.get("name")?.as_str()?;
+    let args_str = tc.get("function")?.get("arguments")?.as_str()?;
+    let arguments: serde_json::Value = serde_json::from_str(args_str).ok()?;
+    Some(serde_json::json!({ "function": { "name": name, "arguments": arguments } }))
 }
 
 #[cfg(test)]
@@ -715,5 +866,183 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert!(messages[0]["content"].is_array());
         assert_eq!(messages[1]["content"], "ok");
+    }
+
+    // ── Batch 2 §2.1: tools / format passthrough ────────────────────────────
+
+    #[test]
+    fn test_translate_tools_passthrough() {
+        let req = serde_json::json!({
+            "model": "qwen3.5:4b",
+            "messages": [{"role": "user", "content": "weather in Paris?"}],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the weather for a location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": { "location": { "type": "string" } },
+                        "required": ["location"]
+                    }
+                }
+            }]
+        });
+        let out = translate_ollama_to_openai(&req);
+        assert_eq!(
+            out["tools"], req["tools"],
+            "tools must pass through verbatim"
+        );
+    }
+
+    #[test]
+    fn test_translate_no_tools_field_when_absent() {
+        let req = serde_json::json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        let out = translate_ollama_to_openai(&req);
+        assert!(out.get("tools").is_none());
+    }
+
+    #[test]
+    fn test_translate_format_json_string_maps_to_json_object() {
+        let req = serde_json::json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "format": "json"
+        });
+        let out = translate_ollama_to_openai(&req);
+        assert_eq!(
+            out["response_format"],
+            serde_json::json!({"type": "json_object"})
+        );
+    }
+
+    #[test]
+    fn test_translate_format_schema_object_maps_to_json_schema() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "age": { "type": "integer" } },
+            "required": ["age"]
+        });
+        let req = serde_json::json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "format": schema.clone()
+        });
+        let out = translate_ollama_to_openai(&req);
+        assert_eq!(out["response_format"]["type"], "json_schema");
+        assert_eq!(out["response_format"]["json_schema"]["schema"], schema);
+    }
+
+    #[test]
+    fn test_translate_format_absent_omits_response_format() {
+        let req = serde_json::json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        let out = translate_ollama_to_openai(&req);
+        assert!(out.get("response_format").is_none());
+    }
+
+    // ── Batch 2 §2.1: tool_calls back-translation (non-stream response) ─────
+
+    #[test]
+    fn test_translate_tool_calls_back_to_ollama_shape() {
+        let openai_text = serde_json::json!({
+            "model": "qwen3.5:4b",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": "{\"location\":\"Paris\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        })
+        .to_string();
+
+        let ollama_resp = translate_openai_to_ollama_chat(&openai_text);
+        let v: serde_json::Value = serde_json::from_str(&ollama_resp).unwrap();
+
+        let tool_calls = v["message"]["tool_calls"].as_array().unwrap();
+        assert_eq!(tool_calls.len(), 1);
+        // Ollama shape: no id/type, arguments is an OBJECT not a string.
+        assert!(tool_calls[0].get("id").is_none());
+        assert!(tool_calls[0].get("type").is_none());
+        assert_eq!(tool_calls[0]["function"]["name"], "get_weather");
+        assert_eq!(tool_calls[0]["function"]["arguments"]["location"], "Paris");
+        assert!(tool_calls[0]["function"]["arguments"].is_object());
+    }
+
+    #[test]
+    fn test_translate_no_tool_calls_field_when_absent() {
+        let openai_text = serde_json::json!({
+            "model": "m",
+            "choices": [{
+                "message": { "role": "assistant", "content": "hello" },
+                "finish_reason": "stop"
+            }]
+        })
+        .to_string();
+        let ollama_resp = translate_openai_to_ollama_chat(&openai_text);
+        let v: serde_json::Value = serde_json::from_str(&ollama_resp).unwrap();
+        assert!(v["message"].get("tool_calls").is_none());
+    }
+
+    #[test]
+    fn test_translate_tool_call_to_ollama_drops_malformed_arguments() {
+        // arguments isn't valid JSON — must be dropped, not passed through broken.
+        let tc = serde_json::json!({
+            "id": "x", "type": "function",
+            "function": { "name": "f", "arguments": "not json" }
+        });
+        assert!(translate_tool_call_to_ollama(&tc).is_none());
+    }
+
+    // ── Batch 2 §2.1: tool_calls back-translation (streaming NDJSON) ────────
+
+    #[tokio::test]
+    async fn translate_stream_accumulates_and_emits_tool_calls_on_terminal_chunk() {
+        let sse = "data: {\"id\":\"x\",\"model\":\"m1\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"\"}}]}}]}\n\n\
+                   data: {\"id\":\"x\",\"model\":\"m1\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"location\\\":\"}}]}}]}\n\n\
+                   data: {\"id\":\"x\",\"model\":\"m1\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"Paris\\\"}\"}}]}}]}\n\n\
+                   data: {\"id\":\"x\",\"model\":\"m1\",\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n\
+                   data: [DONE]\n\n";
+        let body = Body::from(sse.to_string());
+        let translated = translate_openai_stream_to_ollama_ndjson(body);
+        let bytes = axum::body::to_bytes(translated, 64 * 1024).await.unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        let lines: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+
+        let last: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
+        assert_eq!(last["done"], true);
+        let tool_calls = last["message"]["tool_calls"].as_array().unwrap();
+        assert_eq!(tool_calls[0]["function"]["name"], "get_weather");
+        assert_eq!(tool_calls[0]["function"]["arguments"]["location"], "Paris");
+    }
+
+    #[test]
+    fn test_build_ollama_tool_calls_none_when_empty() {
+        let map = std::collections::BTreeMap::new();
+        assert!(build_ollama_tool_calls(&map).is_none());
+    }
+
+    #[test]
+    fn test_build_ollama_tool_calls_drops_unnamed_entries() {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(0u64, (String::new(), "{}".to_string()));
+        assert!(
+            build_ollama_tool_calls(&map).is_none(),
+            "entry with empty name must be dropped"
+        );
     }
 }

@@ -27,6 +27,10 @@ pub async fn proxy_request(
     let url = format!("http://127.0.0.1:{}{}", engine_port, path);
     debug!(url = %url, body_len = body.len(), "Proxying request to engine");
 
+    // Batch 2 §2.3 — wall-clock start for tok/s surfacing below. Cheap: one
+    // Instant::now(), no extra I/O.
+    let started = std::time::Instant::now();
+
     let resp = client
         .post(&url)
         .header("Content-Type", "application/json")
@@ -47,7 +51,7 @@ pub async fn proxy_request(
         warn!(status, "Engine returned error");
     }
 
-    Ok((status, normalise_chat_response(text)))
+    Ok((status, normalise_chat_response(text, started.elapsed())))
 }
 
 /// Normalise a raw engine non-streaming chat completion response to be
@@ -62,8 +66,19 @@ pub async fn proxy_request(
 /// - **C3**: Add `logprobs: null` to each choice if the engine omits it.
 /// - **C5**: Add `param: null, code: null` to `error` if present but incomplete.
 ///
+/// Batch 2 §2.3 — also stamps `usage.tokens_per_second` (extension key,
+/// `completion_tokens / wall_clock`) when the engine reported
+/// `completion_tokens`, and logs the same figure via tracing. Non-streaming
+/// has no meaningful TTFT (the client gets nothing until the full response
+/// lands), so only tok/s is added here — see `proxy_stream` for the
+/// streaming-path TTFT measurement. `usage` is a bare `serde_json::Value`
+/// object throughout this codebase (no typed struct anywhere deserializes
+/// chat responses — grepped for `deny_unknown_fields` and a typed `Usage`
+/// struct, found neither), so an unrecognised extension key round-trips
+/// fine through every client we forward to.
+///
 /// Passes unknown / non-parseable responses through unchanged.
-pub fn normalise_chat_response(text: String) -> String {
+pub fn normalise_chat_response(text: String, elapsed: std::time::Duration) -> String {
     let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&text) else {
         return text; // Not JSON — pass through as-is
     };
@@ -112,6 +127,35 @@ pub fn normalise_chat_response(text: String) -> String {
         }
     }
 
+    // Batch 2 §2.3 — tok/s, "where cheap": we already have `usage` parsed
+    // and `elapsed` from the caller, so stamping `tokens_per_second` onto it
+    // costs nothing extra. Only added when the engine reported
+    // `completion_tokens` > 0; a request that produced zero tokens (e.g. an
+    // immediate error-as-200, or a pure tool-call round with tiny output)
+    // has no meaningful rate.
+    let secs = elapsed.as_secs_f64();
+    if let Some(completion_tokens) = val
+        .get("usage")
+        .and_then(|u| u.get("completion_tokens"))
+        .and_then(|v| v.as_u64())
+        && completion_tokens > 0
+        && secs > 0.0
+    {
+        let tokens_per_second = completion_tokens as f64 / secs;
+        if let Some(usage) = val.get_mut("usage").and_then(|u| u.as_object_mut()) {
+            usage.insert(
+                "tokens_per_second".to_string(),
+                serde_json::json!((tokens_per_second * 100.0).round() / 100.0),
+            );
+        }
+        info!(
+            completion_tokens,
+            elapsed_ms = elapsed.as_millis(),
+            tokens_per_second,
+            "chat completion done (Batch2 §2.3 tok/s)"
+        );
+    }
+
     serde_json::to_string(&val).unwrap_or(text)
 }
 
@@ -147,6 +191,19 @@ pub async fn proxy_stream(
     let url = format!("http://127.0.0.1:{}{}", engine_port, path);
     debug!(url = %url, "Proxying streaming request to engine");
 
+    // Batch 2 §2.3 — TTFT/tok-s "where cheap": this is the plain SSE
+    // passthrough used by the majority of non-thinking chat traffic on both
+    // the OpenAI and Ollama paths, so it's the highest-value single spot to
+    // instrument. `started` anchors TTFT (time to first byte from the
+    // engine) and total wall time; the model name is pulled from the
+    // request body we already have in hand (no extra parsing cost — one
+    // cheap lookup, not per-chunk).
+    let started = std::time::Instant::now();
+    let model_name = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(str::to_string))
+        .unwrap_or_default();
+
     let resp = client
         .post(&url)
         .header("Content-Type", "application/json")
@@ -169,9 +226,61 @@ pub async fn proxy_stream(
     // hanging the caller indefinitely.
     let mut upstream = resp.bytes_stream();
     let out = stream! {
+        // Batch 2 §2.3 — best-effort completion-token proxy: count SSE
+        // `data:` events carrying a non-empty `delta.content` (llama.cpp
+        // emits one such event per generated token in the common case).
+        // This is deliberately NOT a full per-chunk JSON re-parse of
+        // everything forwarded — line-buffer + one `serde_json::from_str`
+        // per complete SSE line, same cost class as the other SSE-parsing
+        // helpers already in this file (e.g. `stream_call1_accumulate`).
+        // Bytes are yielded unchanged either way — this never touches the
+        // passthrough payload, only observes it.
+        let mut ttft: Option<std::time::Duration> = None;
+        let mut line_buf = String::new();
+        let mut approx_completion_tokens: u64 = 0;
+        let mut real_completion_tokens: Option<u64> = None;
+
         loop {
             match tokio::time::timeout(STREAM_IDLE_TIMEOUT, upstream.next()).await {
-                Ok(Some(Ok(bytes))) => yield Ok::<Bytes, std::io::Error>(bytes),
+                Ok(Some(Ok(bytes))) => {
+                    if ttft.is_none() {
+                        ttft = Some(started.elapsed());
+                    }
+                    line_buf.push_str(&String::from_utf8_lossy(&bytes));
+                    while let Some(nl) = line_buf.find('\n') {
+                        let raw = line_buf[..nl].trim_end_matches('\r').to_string();
+                        line_buf.drain(..=nl);
+                        let Some(payload) = raw.strip_prefix("data: ") else { continue };
+                        let payload = payload.trim();
+                        if payload.is_empty() || payload == "[DONE]" {
+                            continue;
+                        }
+                        let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
+                            continue;
+                        };
+                        // Prefer the engine's own count when it sent one
+                        // (`stream_options.include_usage` on the final chunk) —
+                        // exact beats approximate.
+                        if let Some(n) = v
+                            .get("usage")
+                            .and_then(|u| u.get("completion_tokens"))
+                            .and_then(|n| n.as_u64())
+                        {
+                            real_completion_tokens = Some(n);
+                        } else if v
+                            .get("choices")
+                            .and_then(|c| c.as_array())
+                            .and_then(|a| a.first())
+                            .and_then(|c| c.get("delta"))
+                            .and_then(|d| d.get("content"))
+                            .and_then(|c| c.as_str())
+                            .is_some_and(|s| !s.is_empty())
+                        {
+                            approx_completion_tokens += 1;
+                        }
+                    }
+                    yield Ok::<Bytes, std::io::Error>(bytes);
+                }
                 Ok(Some(Err(e))) => {
                     error!(error = %e, "Error reading stream from engine");
                     yield Err(std::io::Error::other(e));
@@ -187,6 +296,24 @@ pub async fn proxy_stream(
                 }
             }
         }
+
+        let total = started.elapsed();
+        let completion_tokens = real_completion_tokens.unwrap_or(approx_completion_tokens);
+        let secs = total.as_secs_f64();
+        let tokens_per_second = if completion_tokens > 0 && secs > 0.0 {
+            Some(completion_tokens as f64 / secs)
+        } else {
+            None
+        };
+        info!(
+            model = %model_name,
+            ttft_ms = ttft.map(|d| d.as_millis()),
+            total_ms = total.as_millis(),
+            completion_tokens,
+            completion_tokens_exact = real_completion_tokens.is_some(),
+            tokens_per_second,
+            "chat stream complete (Batch2 §2.3 TTFT/tok-s)"
+        );
     };
 
     Ok(Body::from_stream(out))
@@ -232,6 +359,10 @@ pub async fn proxy_request_assembling_stream(
     let url = format!("http://127.0.0.1:{}{}", engine_port, path);
     debug!(url = %url, "Assembling stream for non-streaming think request");
 
+    // Batch 2 §2.3 — TTFT/tok-s: this function already assembles a `usage`
+    // object below, so stamping both figures onto it is nearly free.
+    let started = std::time::Instant::now();
+
     let resp = client
         .post(&url)
         .header("Content-Type", "application/json")
@@ -258,6 +389,7 @@ pub async fn proxy_request_assembling_stream(
     // Accumulate SSE chunks
     let mut stream = resp.bytes_stream();
     let mut buffer = String::new();
+    let mut ttft: Option<std::time::Duration> = None;
 
     // Fields assembled from the stream
     let mut completion_id = String::new();
@@ -290,6 +422,9 @@ pub async fn proxy_request_assembling_stream(
                 ),
             )
         })?;
+        if ttft.is_none() {
+            ttft = Some(started.elapsed());
+        }
         buffer.push_str(&String::from_utf8_lossy(&bytes));
 
         // Process complete lines
@@ -480,6 +615,48 @@ pub async fn proxy_request_assembling_stream(
         message["tool_calls"] = tool_calls_val;
     }
 
+    // Batch 2 §2.3 — TTFT/tok-s extension keys on the usage object we're
+    // already building. `ttft_ms`/`tokens_per_second` are non-conflicting
+    // additions to the OpenAI `usage` shape; every consumer in this
+    // codebase treats `usage` as a bare `serde_json::Value` (no typed
+    // struct, no `deny_unknown_fields`), and OpenAI-client SDKs tolerate
+    // unknown JSON fields, so this can't break response parsing.
+    let total_elapsed = started.elapsed();
+    let tokens_per_second = if completion_tokens > 0 {
+        let secs = total_elapsed.as_secs_f64();
+        if secs > 0.0 {
+            Some((completion_tokens as f64 / secs * 100.0).round() / 100.0)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let mut usage = serde_json::json!({
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens
+    });
+    if let Some(usage_obj) = usage.as_object_mut() {
+        if let Some(t) = ttft {
+            usage_obj.insert(
+                "ttft_ms".to_string(),
+                serde_json::json!(t.as_millis() as u64),
+            );
+        }
+        if let Some(tps) = tokens_per_second {
+            usage_obj.insert("tokens_per_second".to_string(), serde_json::json!(tps));
+        }
+    }
+    info!(
+        model = %model_name,
+        ttft_ms = ttft.map(|t| t.as_millis()),
+        total_ms = total_elapsed.as_millis(),
+        completion_tokens,
+        tokens_per_second,
+        "assembled-stream chat completion done (Batch2 §2.3 TTFT/tok-s)"
+    );
+
     // Assemble non-streaming response (C3: logprobs field included)
     let assembled = serde_json::json!({
         "id": completion_id,
@@ -492,11 +669,7 @@ pub async fn proxy_request_assembling_stream(
             "logprobs": serde_json::Value::Null,
             "finish_reason": finish_reason.unwrap_or_else(|| "stop".to_string())
         }],
-        "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens
-        }
+        "usage": usage
     });
 
     Ok((200, serde_json::to_string(&assembled).unwrap_or_default()))
@@ -1903,6 +2076,48 @@ fn rewrite_sse_line(line: &str, rewriter: &mut ThinkSplitter) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Batch 2 §2.3: normalise_chat_response tok/s stamping ────────────────
+
+    #[test]
+    fn test_normalise_chat_response_adds_tokens_per_second() {
+        let raw = serde_json::json!({
+            "object": "chat.completion",
+            "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
+        })
+        .to_string();
+        let out = normalise_chat_response(raw, std::time::Duration::from_millis(500));
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        // 20 completion_tokens / 0.5s = 40 tok/s
+        assert_eq!(v["usage"]["tokens_per_second"], 40.0);
+        // Original fields must survive untouched.
+        assert_eq!(v["usage"]["completion_tokens"], 20);
+    }
+
+    #[test]
+    fn test_normalise_chat_response_omits_tokens_per_second_when_no_completion_tokens() {
+        let raw = serde_json::json!({
+            "object": "chat.completion",
+            "choices": [{"message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 0, "total_tokens": 10}
+        })
+        .to_string();
+        let out = normalise_chat_response(raw, std::time::Duration::from_millis(500));
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(v["usage"].get("tokens_per_second").is_none());
+    }
+
+    #[test]
+    fn test_normalise_chat_response_non_chat_completion_unaffected() {
+        // Early-return path (embeddings-shaped, no `object: chat.completion`)
+        // must still pass through unchanged — the tok/s logic never runs.
+        let raw = serde_json::json!({"object": "list", "data": []}).to_string();
+        let out = normalise_chat_response(raw.clone(), std::time::Duration::from_secs(1));
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["object"], "list");
+        assert!(v.get("usage").is_none());
+    }
 
     // ── Fix #1: native-reasoning echo dedup ──────────────────────────────────
 

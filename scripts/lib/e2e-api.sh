@@ -187,6 +187,123 @@ e2e_api_chat_stream() {
             '{model:$m,messages:[{role:"user",content:$t}],stream:true,max_tokens:$n,temperature:0}')"
 }
 
+# ── Batch 2 §2.2: tool calling / response_format ─────────────────────────────
+
+# Single-function `tools` array for the round-trip probe (TC-E16). Kept as a
+# fixed fixture (not a param) — the point is proving the plumbing works, not
+# exercising arbitrary schemas.
+e2e_tools_weather_json() {
+    jq -nc '[{
+        type: "function",
+        function: {
+            name: "get_weather",
+            description: "Get the current weather for a city",
+            parameters: {
+                type: "object",
+                properties: { location: { type: "string", description: "City name, e.g. Paris" } },
+                required: ["location"]
+            }
+        }
+    }]'
+}
+
+# `tool_choice` forces the call rather than hoping the prompt "strongly
+# triggers" it — the plan's instruction is to prove the *path* works, and a
+# forced choice is the deterministic way to do that (a model that ignores
+# `tool_choice` entirely would be an engine defect, exactly what this test
+# should catch). qwen3.5 models get `enable_thinking:false` (mirrors
+# `e2e_api_chat`) so a `<think>` block can't precede/replace the tool call.
+e2e_api_chat_tools() {
+    local model="${1:-$CHAT_MODEL}" text="${2:-What is the weather in Paris? Use the get_weather tool.}" max_tokens="${3:-128}"
+    local extra="{}"
+    [[ "$model" == qwen3* ]] && extra='{"chat_template_kwargs":{"enable_thinking":false}}'
+    curl -sf --max-time "${E2E_CHAT_TIMEOUT:-180}" -X POST "${LF_HOST}/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d "$(jq -nc --arg m "$model" --arg t "$text" --argjson n "$max_tokens" \
+            --argjson tools "$(e2e_tools_weather_json)" --argjson extra "$extra" \
+            '{model:$m,messages:[{role:"user",content:$t}],stream:false,max_tokens:$n,temperature:0,
+              tools:$tools,tool_choice:{type:"function",function:{name:"get_weather"}}} * $extra')"
+}
+
+e2e_api_chat_tools_stream() {
+    local model="${1:-$CHAT_MODEL}" text="${2:-What is the weather in Paris? Use the get_weather tool.}" max_tokens="${3:-128}"
+    local extra="{}"
+    [[ "$model" == qwen3* ]] && extra='{"chat_template_kwargs":{"enable_thinking":false}}'
+    curl -sN --max-time "${E2E_CHAT_TIMEOUT:-180}" -X POST "${LF_HOST}/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d "$(jq -nc --arg m "$model" --arg t "$text" --argjson n "$max_tokens" \
+            --argjson tools "$(e2e_tools_weather_json)" --argjson extra "$extra" \
+            '{model:$m,messages:[{role:"user",content:$t}],stream:true,max_tokens:$n,temperature:0,
+              tools:$tools,tool_choice:{type:"function",function:{name:"get_weather"}}} * $extra')"
+}
+
+# Accumulate `delta.tool_calls[0]` across a raw SSE text blob the same way
+# `proxy.rs`'s Call-2 tool_call_map does: name arrives once, `arguments` is
+# concatenated across chunks. Single-tool-call scope only (index 0) — matches
+# the plan's "single simple function" test fixture. Prints "name<TAB>args".
+e2e_extract_streamed_tool_call() {
+    local sse="$1" line payload name="" args="" n a
+    while IFS= read -r line; do
+        payload="${line#data: }"
+        [[ -z "$payload" || "$payload" == "[DONE]" ]] && continue
+        n=$(printf '%s' "$payload" | jq -r '.choices[0].delta.tool_calls[0].function.name // empty' 2>/dev/null)
+        a=$(printf '%s' "$payload" | jq -r '.choices[0].delta.tool_calls[0].function.arguments // empty' 2>/dev/null)
+        [[ -n "$n" ]] && name="$n"
+        [[ -n "$a" ]] && args+="$a"
+    done <<< "$(printf '%s\n' "$sse" | grep '^data: ' || true)"
+    printf '%s\t%s' "$name" "$args"
+}
+
+e2e_assert_tool_call_response() {
+    local resp="$1" label="${2:-tools}" expected_name="${3:-get_weather}"
+    local name args
+    name=$(echo "$resp" | jq -r '.choices[0].message.tool_calls[0].function.name // ""' 2>/dev/null) \
+        || { E2E_ASSERT_MSG="${label}: invalid JSON — ${resp:0:200}"; return 1; }
+    if [[ "$name" != "$expected_name" ]]; then
+        E2E_ASSERT_MSG="${label}: expected tool '${expected_name}', got '${name:-<none>}' — ${resp:0:200}"
+        return 1
+    fi
+    args=$(echo "$resp" | jq -r '.choices[0].message.tool_calls[0].function.arguments // ""' 2>/dev/null)
+    if ! echo "$args" | jq -e . >/dev/null 2>&1; then
+        E2E_ASSERT_MSG="${label}: tool arguments not valid JSON: ${args}"
+        return 1
+    fi
+    return 0
+}
+
+# `response_format: json_schema` round-trip probe (TC-E17). Small, strict
+# schema with two required keys so the assertion can check both presence
+# and structure, not just "is it JSON".
+e2e_api_chat_json_schema() {
+    local model="${1:-$CHAT_MODEL}"
+    local text="${2:-Generate a JSON object describing a fictional person, with their name and age.}"
+    local max_tokens="${3:-128}"
+    local schema='{"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"}},"required":["name","age"],"additionalProperties":false}'
+    local extra="{}"
+    [[ "$model" == qwen3* ]] && extra='{"chat_template_kwargs":{"enable_thinking":false}}'
+    curl -sf --max-time "${E2E_CHAT_TIMEOUT:-180}" -X POST "${LF_HOST}/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d "$(jq -nc --arg m "$model" --arg t "$text" --argjson n "$max_tokens" --argjson schema "$schema" --argjson extra "$extra" \
+            '{model:$m,messages:[{role:"user",content:$t}],stream:false,max_tokens:$n,temperature:0,
+              response_format:{type:"json_schema",json_schema:{name:"person",strict:true,schema:$schema}}} * $extra')"
+}
+
+e2e_assert_json_schema_response() {
+    local resp="$1" label="${2:-json_schema}"
+    local content
+    content=$(echo "$resp" | jq -r '.choices[0].message.content // ""' 2>/dev/null) \
+        || { E2E_ASSERT_MSG="${label}: invalid JSON — ${resp:0:200}"; return 1; }
+    if [[ -z "${content// }" ]]; then
+        E2E_ASSERT_MSG="${label}: empty content — ${resp:0:200}"
+        return 1
+    fi
+    if ! echo "$content" | jq -e 'has("name") and has("age")' >/dev/null 2>&1; then
+        E2E_ASSERT_MSG="${label}: content is not JSON matching the schema — ${content:0:200}"
+        return 1
+    fi
+    return 0
+}
+
 e2e_api_vlm_text() {
     local model="${1:-$VLM_MODEL}" text="${2:-$E2E_VLM_TEXT}" max_tokens="${3:-${E2E_VLM_TEXT_MAX_TOKENS:-128}}"
     e2e_api_chat "$model" "$text" "$max_tokens"

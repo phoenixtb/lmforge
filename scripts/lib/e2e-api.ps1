@@ -184,6 +184,155 @@ function Invoke-E2eChat {
         -Body ($body | ConvertTo-Json -Depth 8 -Compress) -ContentType "application/json" -TimeoutSec 180
 }
 
+# ── Batch 2 §2.2: tool calling / response_format ─────────────────────────────
+
+# Single-function `tools` fixture for the round-trip probe (TC-E16) — mirrors
+# `e2e_tools_weather_json` in the bash lib.
+function Get-E2eToolsWeather {
+    @(@{
+        type     = "function"
+        function = @{
+            name        = "get_weather"
+            description = "Get the current weather for a city"
+            parameters  = @{
+                type       = "object"
+                properties = @{ location = @{ type = "string"; description = "City name, e.g. Paris" } }
+                required   = @("location")
+            }
+        }
+    })
+}
+
+# `tool_choice` forces the call deterministically rather than hoping the
+# prompt "strongly triggers" it — see the bash lib's `e2e_api_chat_tools`
+# comment for the rationale. qwen3.5 models get `enable_thinking:false` so a
+# `<think>` block can't precede/replace the tool call.
+function Invoke-E2eChatTools {
+    param(
+        [string]$Text = "What is the weather in Paris? Use the get_weather tool.",
+        [string]$Model = $script:ChatModel,
+        [int]$MaxTokens = 128,
+        [string]$HostUrl = $script:LfHost
+    )
+    $body = @{
+        model       = $Model
+        messages    = @(@{ role = "user"; content = $Text })
+        stream      = $false
+        max_tokens  = $MaxTokens
+        temperature = 0
+        tools       = (Get-E2eToolsWeather)
+        tool_choice = @{ type = "function"; function = @{ name = "get_weather" } }
+    }
+    if ($Model -match 'qwen3') { $body.chat_template_kwargs = @{ enable_thinking = $false } }
+    Invoke-RestMethod -Uri "$HostUrl/v1/chat/completions" -Method Post `
+        -Body ($body | ConvertTo-Json -Depth 10 -Compress) -ContentType "application/json" -TimeoutSec 180
+}
+
+# Streaming variant. `Invoke-WebRequest` doesn't expose incremental SSE
+# delivery in a way that's worth the complexity here — the test only needs
+# the *complete* accumulated stream text (same as the bash lib's `curl -sN`
+# capture), so we just wait for the response to finish and read `.Content`.
+function Invoke-E2eChatToolsStream {
+    param(
+        [string]$Text = "What is the weather in Paris? Use the get_weather tool.",
+        [string]$Model = $script:ChatModel,
+        [int]$MaxTokens = 128,
+        [string]$HostUrl = $script:LfHost
+    )
+    $body = @{
+        model       = $Model
+        messages    = @(@{ role = "user"; content = $Text })
+        stream      = $true
+        max_tokens  = $MaxTokens
+        temperature = 0
+        tools       = (Get-E2eToolsWeather)
+        tool_choice = @{ type = "function"; function = @{ name = "get_weather" } }
+    }
+    if ($Model -match 'qwen3') { $body.chat_template_kwargs = @{ enable_thinking = $false } }
+    $resp = Invoke-WebRequest -Uri "$HostUrl/v1/chat/completions" -Method Post -UseBasicParsing `
+        -Body ($body | ConvertTo-Json -Depth 10 -Compress) -ContentType "application/json" -TimeoutSec 180
+    return [string]$resp.Content
+}
+
+# Accumulate `delta.tool_calls[0]` across the raw SSE text — mirrors
+# `e2e_extract_streamed_tool_call` in the bash lib (name once, arguments
+# concatenated). Single-tool-call scope only (index 0). Returns a
+# [pscustomobject] with Name/Arguments so the caller doesn't need PowerShell's
+# awkward multi-value-return idioms.
+function Get-E2eStreamedToolCall {
+    param([string]$Sse)
+    $name = ""
+    $argsAccum = ""
+    foreach ($line in ($Sse -split "`n")) {
+        $line = $line.TrimEnd("`r")
+        if (-not $line.StartsWith("data: ")) { continue }
+        $payload = $line.Substring(6)
+        if (-not $payload -or $payload -eq "[DONE]") { continue }
+        try {
+            $obj = $payload | ConvertFrom-Json -ErrorAction Stop
+            $tc = $obj.choices[0].delta.tool_calls[0]
+            if ($tc -and $tc.function.name) { $name = [string]$tc.function.name }
+            if ($tc -and $tc.function.arguments) { $argsAccum += [string]$tc.function.arguments }
+        } catch { continue }
+    }
+    [pscustomobject]@{ Name = $name; Arguments = $argsAccum }
+}
+
+function Assert-E2eToolCall {
+    param($Resp, [string]$Label = "tools", [string]$ExpectedName = "get_weather")
+    $name = [string]$Resp.choices[0].message.tool_calls[0].function.name
+    if ($name -ne $ExpectedName) {
+        throw "${Label}: expected tool '$ExpectedName', got '$name'"
+    }
+    $toolArgs = [string]$Resp.choices[0].message.tool_calls[0].function.arguments
+    try { $null = $toolArgs | ConvertFrom-Json -ErrorAction Stop } catch {
+        throw "${Label}: tool arguments not valid JSON: $toolArgs"
+    }
+}
+
+# `response_format: json_schema` round-trip probe (TC-E17). Mirrors
+# `e2e_api_chat_json_schema` in the bash lib.
+function Invoke-E2eChatJsonSchema {
+    param(
+        [string]$Text = "Generate a JSON object describing a fictional person, with their name and age.",
+        [string]$Model = $script:ChatModel,
+        [int]$MaxTokens = 128,
+        [string]$HostUrl = $script:LfHost
+    )
+    $schema = @{
+        type                 = "object"
+        properties           = @{ name = @{ type = "string" }; age = @{ type = "integer" } }
+        required             = @("name", "age")
+        additionalProperties = $false
+    }
+    $body = @{
+        model           = $Model
+        messages        = @(@{ role = "user"; content = $Text })
+        stream          = $false
+        max_tokens      = $MaxTokens
+        temperature     = 0
+        response_format = @{ type = "json_schema"; json_schema = @{ name = "person"; strict = $true; schema = $schema } }
+    }
+    if ($Model -match 'qwen3') { $body.chat_template_kwargs = @{ enable_thinking = $false } }
+    Invoke-RestMethod -Uri "$HostUrl/v1/chat/completions" -Method Post `
+        -Body ($body | ConvertTo-Json -Depth 10 -Compress) -ContentType "application/json" -TimeoutSec 180
+}
+
+function Assert-E2eJsonSchema {
+    param($Resp, [string]$Label = "json_schema")
+    $content = [string]$Resp.choices[0].message.content
+    if (-not $content.Trim()) { throw "${Label}: empty content" }
+    try {
+        $parsed = $content | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "${Label}: content is not valid JSON — $($content.Substring(0, [Math]::Min(200, $content.Length)))"
+    }
+    $props = $parsed.PSObject.Properties.Name
+    if (-not ($props -contains "name" -and $props -contains "age")) {
+        throw "${Label}: content JSON missing required keys name/age"
+    }
+}
+
 function Invoke-E2eVlmText {
     param(
         [string]$Model = $script:VlmModel,

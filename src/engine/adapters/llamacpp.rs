@@ -262,6 +262,23 @@ impl EngineAdapter for LlamacppAdapter {
             }
         }
 
+        // Batch 2 §2.4 — `--flash-attn on`. Measured decode was ~67% of the
+        // bandwidth ceiling without it (typical for llama.cpp without FA).
+        // CUDA-only (see `flash_attn_args`'s doc for why): `active_variant`
+        // was already resolved above for executable selection, so this is
+        // free — no re-probe.
+        args.extend(flash_attn_args(active_variant));
+
+        // Batch 2 §2.4 — KV-cache quantisation, opt-in only. `q8_0` K/V
+        // roughly halves the KV-cache VRAM footprint at a small (measured
+        // upstream as negligible for q8_0) quality cost — worth it on
+        // VRAM-tight boxes / long-context (16k+) workloads, but NOT a safe
+        // default (changes generation output vs f16 KV, and interacts with
+        // spec-dec acceptance rates we haven't characterised). Gate behind
+        // `LMFORGE_KV_QUANT=q8_0`, read fresh at every spawn (cheap, and lets
+        // an operator flip it without restarting the daemon).
+        args.extend(kv_quant_args());
+
         let is_vlm = mmproj_path.is_some();
         if let Some(mmproj_path) = mmproj_path {
             info!(
@@ -772,6 +789,49 @@ fn plan_runtime(
         ngl,
         ctx_size,
         free_vram_gb,
+    }
+}
+
+/// `--flash-attn on` argument pair (Batch 2 §2.4), gated to CUDA variants
+/// only. `on` is the b9861 explicit-enable form (the flag also accepts
+/// `off`/`auto` in that build).
+///
+/// CUDA-only by design: FA has only been measured/validated on cuda12/cuda13
+/// here (the ~67%-of-bandwidth-ceiling finding that motivated this item was
+/// a CUDA box). Vulkan/CPU builds may support the flag too, but we haven't
+/// verified correctness or perf there, so `select()`'s Vulkan/Cpu variants
+/// get an empty `Vec` — unchanged behaviour — until that's done.
+pub(crate) fn flash_attn_args(variant: crate::engine::variant::LlamaVariant) -> Vec<String> {
+    use crate::engine::variant::LlamaVariant;
+    match variant {
+        LlamaVariant::Cuda12 | LlamaVariant::Cuda13 => {
+            vec!["--flash-attn".to_string(), "on".to_string()]
+        }
+        LlamaVariant::Vulkan | LlamaVariant::Cpu => Vec::new(),
+    }
+}
+
+/// Environment variable that opts into KV-cache quantisation
+/// (Batch 2 §2.4). Set to exactly `q8_0` to pass
+/// `--cache-type-k q8_0 --cache-type-v q8_0` to llama-server. Any other
+/// value (including unset) leaves the default (f16) KV cache untouched.
+/// Read fresh at every spawn — no caching, no daemon restart needed to
+/// flip it.
+pub const LMFORGE_KV_QUANT_ENV: &str = "LMFORGE_KV_QUANT";
+
+/// Resolve the `--cache-type-k/--cache-type-v` argument list from
+/// [`LMFORGE_KV_QUANT_ENV`] (Batch 2 §2.4). Empty `Vec` — the default,
+/// unchanged behaviour — unless the operator explicitly opted in with
+/// `LMFORGE_KV_QUANT=q8_0`.
+fn kv_quant_args() -> Vec<String> {
+    match std::env::var(LMFORGE_KV_QUANT_ENV) {
+        Ok(v) if v == "q8_0" => vec![
+            "--cache-type-k".to_string(),
+            "q8_0".to_string(),
+            "--cache-type-v".to_string(),
+            "q8_0".to_string(),
+        ],
+        _ => Vec::new(),
     }
 }
 
@@ -1604,6 +1664,74 @@ mod tests {
         // No RAM info → resolve_cache_ram_mib returns 0 → chat omits the flag
         // entirely (distinct from embed/rerank's explicit "0").
         assert!(role_cache_ram_args(ModelRole::Chat, 0.0).is_empty());
+    }
+
+    // ── Batch 2 §2.4: flash-attn / KV-quant perf flags ──────────────────────
+
+    #[test]
+    fn flash_attn_args_present_for_cuda_variants() {
+        use crate::engine::variant::LlamaVariant;
+        for v in [LlamaVariant::Cuda12, LlamaVariant::Cuda13] {
+            let args = flash_attn_args(v);
+            assert_eq!(
+                args,
+                vec!["--flash-attn".to_string(), "on".to_string()],
+                "variant={v:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn flash_attn_args_absent_for_non_cuda_variants() {
+        use crate::engine::variant::LlamaVariant;
+        for v in [LlamaVariant::Vulkan, LlamaVariant::Cpu] {
+            assert!(
+                flash_attn_args(v).is_empty(),
+                "variant={v:?} must not get --flash-attn"
+            );
+        }
+    }
+
+    // KV-quant reads `LMFORGE_KV_QUANT` via `std::env::var`, so — like every
+    // other env-var test in this file — it must serialise on `ENV_LOCK`.
+    // Unlike the known-flaky `cli::start::tests::confirm_allows_experimental_with_env`
+    // (which sets/unsets with NO lock at all), every access here happens
+    // while holding `_g`, so cargo's parallel test runner can't interleave
+    // a read from another thread between our set and our assert.
+    #[test]
+    fn kv_quant_args_present_when_env_set_to_q8_0() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var(LMFORGE_KV_QUANT_ENV, "q8_0") };
+        let args = kv_quant_args();
+        unsafe { std::env::remove_var(LMFORGE_KV_QUANT_ENV) };
+        assert_eq!(
+            args,
+            vec![
+                "--cache-type-k".to_string(),
+                "q8_0".to_string(),
+                "--cache-type-v".to_string(),
+                "q8_0".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn kv_quant_args_empty_when_env_unset() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var(LMFORGE_KV_QUANT_ENV) };
+        assert!(kv_quant_args().is_empty());
+    }
+
+    #[test]
+    fn kv_quant_args_empty_for_unrecognised_value() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var(LMFORGE_KV_QUANT_ENV, "q4_0") };
+        let args = kv_quant_args();
+        unsafe { std::env::remove_var(LMFORGE_KV_QUANT_ENV) };
+        assert!(
+            args.is_empty(),
+            "only the exact value `q8_0` is supported today"
+        );
     }
 
     #[test]

@@ -1,6 +1,9 @@
 ﻿# =============================================================================
 # LMForge — Multi-Model E2E Integration Test (Windows)
 # All capability suites (embed/chat/VLM/rerank/MTP) on by default; SKIP on unavailable.
+# TC-E16..E18 (QUALITY-PLAN-2026-09 Batch 2, agent-API correctness) cover tool
+# calling round-trip (non-stream + stream), `response_format: json_schema`,
+# and N=4 concurrent chat requests.
 # =============================================================================
 param(
     [switch]$Full,
@@ -477,6 +480,99 @@ try {
             Record "TC-E15" "FAIL" "Thinking budget answer" $_.Exception.Message
             Warn "TC-E15: request failed - $($_.Exception.Message)"
         }
+    }
+
+    # ─── TC-E16..E18: agent-API correctness (QUALITY-PLAN-2026-09 Batch 2) ──
+
+    # TC-E16: tools round-trip, non-streaming + streaming. `tool_choice`
+    # forces the call so the test is deterministic.
+    try {
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $r = Invoke-E2eChatTools -Model $script:ChatModel
+        $sw.Stop()
+        Assert-E2eToolCall -Resp $r -Label "TC-E16 (non-stream)"
+        $tcArgs = [string]$r.choices[0].message.tool_calls[0].function.arguments
+        Record "TC-E16" "PASS" "Tools round-trip (non-stream)" "$($sw.ElapsedMilliseconds)ms args=$tcArgs"
+    } catch {
+        Record "TC-E16" "FAIL" "Tools round-trip (non-stream)" $_.Exception.Message
+        Warn "TC-E16 (non-stream): $($_.Exception.Message)"
+        try { $r | ConvertTo-Json -Depth 12 | Set-Content -Path (Join-Path $ResultsDir "tc-e16-nonstream.response.json") } catch {}
+    }
+
+    try {
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $sse = Invoke-E2eChatToolsStream -Model $script:ChatModel
+        $sw.Stop()
+        $tc = Get-E2eStreamedToolCall -Sse $sse
+        $argsOk = $false
+        try { $null = $tc.Arguments | ConvertFrom-Json -ErrorAction Stop; $argsOk = $true } catch {}
+        if ($tc.Name -eq "get_weather" -and $argsOk) {
+            Record "TC-E16S" "PASS" "Tools round-trip (stream)" "$($sw.ElapsedMilliseconds)ms args=$($tc.Arguments)"
+        } else {
+            Record "TC-E16S" "FAIL" "Tools round-trip (stream)" "name='$($tc.Name)' args='$($tc.Arguments)'"
+            Warn "TC-E16 (stream): missing/invalid accumulated tool_calls"
+            try { $sse | Set-Content -Path (Join-Path $ResultsDir "tc-e16-stream.response.txt") } catch {}
+        }
+    } catch {
+        Record "TC-E16S" "FAIL" "Tools round-trip (stream)" $_.Exception.Message
+        Warn "TC-E16 (stream): $($_.Exception.Message)"
+    }
+
+    # TC-E17: response_format json_schema — reply content must parse as JSON
+    # and satisfy the schema's required keys.
+    try {
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $r = Invoke-E2eChatJsonSchema -Model $script:ChatModel
+        $sw.Stop()
+        Assert-E2eJsonSchema -Resp $r -Label "TC-E17"
+        Record "TC-E17" "PASS" "response_format json_schema" "$($sw.ElapsedMilliseconds)ms"
+    } catch {
+        Record "TC-E17" "FAIL" "response_format json_schema" $_.Exception.Message
+        Warn "TC-E17: $($_.Exception.Message)"
+        try { $r | ConvertTo-Json -Depth 12 | Set-Content -Path (Join-Path $ResultsDir "tc-e17.response.json") } catch {}
+    }
+
+    # TC-E18: N=4 parallel chat requests — all must return HTTP 200 with
+    # non-empty content, none 503 (proves the daemon semaphore / engine
+    # `--parallel` slots actually serve concurrent chat).
+    $concurrentN = 4
+    $concurrentJobs = @()
+    $swConcurrent = [System.Diagnostics.Stopwatch]::StartNew()
+    for ($ci = 1; $ci -le $concurrentN; $ci++) {
+        $concurrentJobs += Start-Job -ScriptBlock {
+            param($HostUrl, $Model, $MaxTokens, $Idx, $Total)
+            $reqSw = [System.Diagnostics.Stopwatch]::StartNew()
+            $body = @{
+                model       = $Model
+                messages    = @(@{ role = "user"; content = "Concurrent request $Idx of $Total: name one benefit of local LLM inference." })
+                stream      = $false
+                max_tokens  = $MaxTokens
+                temperature = 0
+            } | ConvertTo-Json -Depth 6 -Compress
+            try {
+                $resp = Invoke-WebRequest -Uri "$HostUrl/v1/chat/completions" -Method Post -UseBasicParsing `
+                    -Body $body -ContentType "application/json" -TimeoutSec 180 -ErrorAction Stop
+                $code = [int]$resp.StatusCode
+                $content = ($resp.Content | ConvertFrom-Json).choices[0].message.content
+            } catch {
+                $code = 0
+                if ($_.Exception.Response) { try { $code = [int]$_.Exception.Response.StatusCode } catch {} }
+                $content = ""
+            }
+            $reqSw.Stop()
+            [pscustomobject]@{ Idx = $Idx; Code = $code; Ms = $reqSw.ElapsedMilliseconds; ContentLen = ([string]$content).Length }
+        } -ArgumentList $script:LfHost, $script:ChatModel, $E2E_CHAT_MAX_TOKENS, $ci, $concurrentN
+    }
+    $concurrentResults = $concurrentJobs | Wait-Job | Receive-Job
+    $concurrentJobs | Remove-Job -Force -ErrorAction SilentlyContinue
+    $swConcurrent.Stop()
+    $concurrentDetail = ($concurrentResults | Sort-Object Idx | ForEach-Object { "req$($_.Idx)=$($_.Code)/$($_.Ms)ms" }) -join " "
+    $concurrentAllOk = -not ($concurrentResults | Where-Object { $_.Code -ne 200 -or $_.ContentLen -le 0 })
+    if ($concurrentAllOk) {
+        Record "TC-E18" "PASS" "Concurrent chat (N=4)" "total=$($swConcurrent.ElapsedMilliseconds)ms $concurrentDetail"
+    } else {
+        Warn "TC-E18: one or more concurrent requests failed/empty/503 - $concurrentDetail"
+        Record "TC-E18" "FAIL" "Concurrent chat (N=4)" $concurrentDetail
     }
 
     # Second status snapshot, taken after all test traffic and while the

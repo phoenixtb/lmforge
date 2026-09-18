@@ -9,6 +9,9 @@
 #  cover the thinking pipeline (ADR-007): think=on reasoning+answer, think=off
 #  non-blank (Fix #3c), and the thinking_budget orchestrator (Fix #5b). The
 #  thinking cases auto-skip when the chat model isn't thinking-capable.
+#  TC-E16..E18 (QUALITY-PLAN-2026-09 Batch 2, agent-API correctness) cover
+#  tool calling round-trip (non-stream + stream), `response_format:
+#  json_schema`, and N=4 concurrent chat requests.
 #
 #  USAGE
 #  -----
@@ -959,6 +962,117 @@ else
         record_fail "TC-E15" "Thinking budget answer" "request failed"
         warn "TC-E15: request failed"
     fi
+fi
+
+# ─── TC-E16..E18: agent-API correctness (QUALITY-PLAN-2026-09 Batch 2) ───────
+sep
+
+# TC-E16: tools round-trip, both non-streaming and streaming. `tool_choice`
+# forces the call so the test is deterministic (proving the plumbing works,
+# not hoping the model decides to call a function).
+echo -e "\n${BOLD}TC-E16${NC}  Tool calling round-trip (${CHAT_MODEL})"
+timer_start "tools_nonstream"
+if resp=$(e2e_api_chat_tools "$CHAT_MODEL" 2>&1); then
+    tools_ns_ms=$(timer_end "tools_nonstream")
+    if e2e_assert_tool_call_response "$resp" "TC-E16 (non-stream)"; then
+        tc_args=$(echo "$resp" | jq -r '.choices[0].message.tool_calls[0].function.arguments')
+        printf "  ${GREEN}✓${NC} non-stream tool_calls ok (args=%s)  ${DIM}%sms${NC}\n" "$tc_args" "$tools_ns_ms"
+        record_pass "TC-E16" "Tools round-trip (non-stream)" "${tools_ns_ms}ms args=${tc_args}"
+    else
+        record_fail "TC-E16" "Tools round-trip (non-stream)" "$E2E_ASSERT_MSG"
+        warn "TC-E16 (non-stream): $E2E_ASSERT_MSG"
+        echo "$resp" > "$RESULTS_DIR/tc-e16-nonstream.response.json" 2>/dev/null || true
+    fi
+else
+    timer_end "tools_nonstream" >/dev/null
+    record_fail "TC-E16" "Tools round-trip (non-stream)" "request failed"
+    warn "TC-E16 (non-stream): request failed"
+fi
+
+timer_start "tools_stream"
+if sse=$(e2e_api_chat_tools_stream "$CHAT_MODEL" 2>&1); then
+    tools_s_ms=$(timer_end "tools_stream")
+    IFS=$'\t' read -r stream_name stream_args <<< "$(e2e_extract_streamed_tool_call "$sse")"
+    if [[ "$stream_name" == "get_weather" ]] && echo "$stream_args" | jq -e . >/dev/null 2>&1; then
+        printf "  ${GREEN}✓${NC} stream tool_calls ok (name=%s args=%s)  ${DIM}%sms${NC}\n" "$stream_name" "$stream_args" "$tools_s_ms"
+        record_pass "TC-E16S" "Tools round-trip (stream)" "${tools_s_ms}ms args=${stream_args}"
+    else
+        record_fail "TC-E16S" "Tools round-trip (stream)" "name='${stream_name}' args='${stream_args}'"
+        warn "TC-E16 (stream): missing/invalid accumulated tool_calls (name='${stream_name}' args='${stream_args}')"
+        echo "$sse" > "$RESULTS_DIR/tc-e16-stream.response.txt" 2>/dev/null || true
+    fi
+else
+    timer_end "tools_stream" >/dev/null
+    record_fail "TC-E16S" "Tools round-trip (stream)" "request failed"
+    warn "TC-E16 (stream): request failed"
+fi
+
+# TC-E17: response_format json_schema — reply content must parse as JSON and
+# satisfy the schema's required keys.
+echo -e "\n${BOLD}TC-E17${NC}  response_format json_schema (${CHAT_MODEL})"
+timer_start "json_schema"
+if resp=$(e2e_api_chat_json_schema "$CHAT_MODEL" 2>&1); then
+    schema_ms=$(timer_end "json_schema")
+    if e2e_assert_json_schema_response "$resp" "TC-E17"; then
+        content=$(echo "$resp" | jq -r '.choices[0].message.content')
+        printf "  ${GREEN}✓${NC} content matches schema (%s chars)  ${DIM}%sms${NC}\n" "${#content}" "$schema_ms"
+        record_pass "TC-E17" "response_format json_schema" "${schema_ms}ms"
+    else
+        record_fail "TC-E17" "response_format json_schema" "$E2E_ASSERT_MSG"
+        warn "TC-E17: $E2E_ASSERT_MSG"
+        echo "$resp" > "$RESULTS_DIR/tc-e17.response.json" 2>/dev/null || true
+    fi
+else
+    timer_end "json_schema" >/dev/null
+    record_fail "TC-E17" "response_format json_schema" "request failed"
+    warn "TC-E17: request failed"
+fi
+
+# TC-E18: N=4 parallel chat requests — all must return HTTP 200 with
+# non-empty content, none 503 (proves the daemon semaphore / engine
+# `--parallel` slots actually serve concurrent chat, not just concurrent
+# embed as the existing burst probes cover).
+echo -e "\n${BOLD}TC-E18${NC}  Concurrent chat, N=4 (${CHAT_MODEL})"
+CONCURRENT_N=4
+timer_start "concurrent_chat"
+concurrent_pids=()
+for ci in $(seq 1 "$CONCURRENT_N"); do
+    (
+        req_start=$(date +%s%N)
+        code=$(curl -s -o "$RESULTS_DIR/tc-e18.req${ci}.json" -w "%{http_code}" \
+            --max-time "${E2E_CHAT_TIMEOUT:-180}" -X POST "${LF_HOST}/v1/chat/completions" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -nc --arg m "$CHAT_MODEL" \
+                --arg t "Concurrent request ${ci} of ${CONCURRENT_N}: name one benefit of local LLM inference." \
+                --argjson n "${E2E_CHAT_MAX_TOKENS:-128}" \
+                '{model:$m,messages:[{role:"user",content:$t}],stream:false,max_tokens:$n,temperature:0}')")
+        req_end=$(date +%s%N)
+        echo "$code" > "$RESULTS_DIR/tc-e18.req${ci}.code"
+        echo $(( (req_end - req_start) / 1000000 )) > "$RESULTS_DIR/tc-e18.req${ci}.ms"
+    ) &
+    concurrent_pids+=("$!")
+done
+for pid in "${concurrent_pids[@]}"; do wait "$pid" || true; done
+concurrent_total_ms=$(timer_end "concurrent_chat")
+
+concurrent_all_ok=true
+concurrent_detail=""
+for ci in $(seq 1 "$CONCURRENT_N"); do
+    ccode=$(cat "$RESULTS_DIR/tc-e18.req${ci}.code" 2>/dev/null || echo "000")
+    cms=$(cat "$RESULTS_DIR/tc-e18.req${ci}.ms" 2>/dev/null || echo "0")
+    ccontent=$(jq -r '.choices[0].message.content // ""' "$RESULTS_DIR/tc-e18.req${ci}.json" 2>/dev/null)
+    concurrent_detail+="req${ci}=${ccode}/${cms}ms "
+    if [[ "$ccode" != "200" || -z "${ccontent// }" ]]; then
+        concurrent_all_ok=false
+    fi
+done
+if $concurrent_all_ok; then
+    printf "  ${GREEN}✓${NC} all %d concurrent requests OK  ${DIM}total=%sms %s${NC}\n" \
+        "$CONCURRENT_N" "$concurrent_total_ms" "$concurrent_detail"
+    record_pass "TC-E18" "Concurrent chat (N=4)" "total=${concurrent_total_ms}ms ${concurrent_detail}"
+else
+    warn "TC-E18: one or more concurrent requests failed/empty/503 — ${concurrent_detail}"
+    record_fail "TC-E18" "Concurrent chat (N=4)" "${concurrent_detail}"
 fi
 
 # Second status snapshot, taken after all test traffic. The early capture

@@ -124,7 +124,7 @@ Baseline for all file:line references: commit `466d8a0`.
 
 ### 2.1 Ollama translator drops `tools` and `format`
 
-- [ ] Status
+- [x] Status (pending commit)
 - **Problem:** `translate_ollama_to_openai` (`src/server/ollama.rs:381`) copies
   model/messages/stream/think/options only. Ollama clients (Open WebUI,
   Continue) sending `tools` / `format` (incl. JSON-schema) silently lose
@@ -136,7 +136,7 @@ Baseline for all file:line references: commit `466d8a0`.
 
 ### 2.2 OpenAI-path tool calling / `response_format`: zero test coverage
 
-- [ ] Status
+- [x] Status (pending commit)
 - **Problem:** proxy forwards the fields and accumulates `delta.tool_calls`
   (`proxy.rs:352-480`) but no test exercises them; llama.cpp b9861 supports
   both natively. Unproven ≠ working.
@@ -146,7 +146,7 @@ Baseline for all file:line references: commit `466d8a0`.
 
 ### 2.3 Concurrent-chat e2e + tok/s and TTFT surfacing
 
-- [ ] Status
+- [x] Status (pending commit)
 - **Problem:** e2e only proves concurrent *embed*; chat concurrency
   (engine `--parallel`, daemon semaphore 4) is unproven. TTFT/tok/s are not
   surfaced anywhere (hidden inside wall-time aggregates).
@@ -155,7 +155,7 @@ Baseline for all file:line references: commit `466d8a0`.
 
 ### 2.4 llama.cpp perf flags: `--flash-attn` (+ optional KV-cache quant)
 
-- [ ] Status
+- [x] Status (pending commit)
 - **Problem:** spawn args pass neither; measured decode ~67 % of bandwidth
   ceiling — typical *without* FA. Cheap win on 8B@16k workloads.
 - **Design:** add `--flash-attn on` for CUDA variant loads (guard: b9861
