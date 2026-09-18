@@ -4,7 +4,7 @@ pub mod splitter;
 pub use adapter::{ThinkingAdapter, adapter_for_engine};
 pub use splitter::ThinkSplitter;
 
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::model::index::ModelCapabilities;
 
@@ -177,7 +177,11 @@ fn apply_native_reasoning_budget_floor(
             serde_json::Value::from(NATIVE_REASONING_MIN_TOKENS),
         );
     }
-    warn!(
+    // QUALITY-PLAN-2026-09 §1.7: this is by-design behaviour, not an error —
+    // it fires on every think-on request with a small client `max_tokens`
+    // (24 hits in one bench run at WARN). Demoted to INFO so it doesn't read
+    // as noise/incident signal in logs.
+    info!(
         client_max_tokens = current_max_tokens,
         floored_max_tokens = NATIVE_REASONING_MIN_TOKENS,
         "native-reasoning model: raised max_tokens to floor to avoid truncated-to-blank reply"

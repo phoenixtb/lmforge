@@ -79,7 +79,7 @@ fn list(registry: &EngineRegistry, profile: &HardwareProfile) -> Result<()> {
     println!("{}", "─".repeat(78));
 
     for engine in registry.all() {
-        let installed = install_state(engine, &data_dir);
+        let installed = install_state(engine, &data_dir, Some(profile));
         let (compat, note) = compatibility(engine, profile);
         // llamacpp: prefer the ACTIVE installed variant's true build tag
         // (read from its VERSION file) over the engines.toml registry pin —
@@ -520,7 +520,7 @@ fn status(
         .get(id)
         .with_context(|| format!("Unknown engine id: {}", id))?;
 
-    let installed = install_state(engine, data_dir);
+    let installed = install_state(engine, data_dir, Some(profile));
     let (compat, note) = compatibility(engine, profile);
     let version_display = if engine.id == "llamacpp" {
         let installed_tag =
@@ -582,12 +582,22 @@ fn yes_no(b: bool) -> &'static str {
 
 /// True if THIS host has a usable install of `engine`. For pip engines that's
 /// "venv exists with the right python interpreter inside"; for binary engines
-/// it's "the staged binary exists at `<data_dir>/engines/<bin>`".
+/// it's "the staged binary exists at `<data_dir>/engines/<bin>`" OR, for
+/// llamacpp specifically, at the active variant's install path (see below).
+///
+/// `profile` is used only for the llamacpp variant-layout fallback; `None`
+/// degrades to the flat-layout check only (matches the pre-§1.5 behaviour —
+/// callers without a probed hardware profile yet, e.g. before `lmforge init`,
+/// still get a sane answer rather than a panic).
 ///
 /// Exposed `pub(crate)` so the HTTP `/lf/engines` endpoint surfaces the same
 /// verdict as the CLI — UI install/uninstall buttons must agree with what
 /// `lmforge engine status` says.
-pub(crate) fn install_state(engine: &EngineConfig, data_dir: &std::path::Path) -> bool {
+pub(crate) fn install_state(
+    engine: &EngineConfig,
+    data_dir: &std::path::Path,
+    profile: Option<&HardwareProfile>,
+) -> bool {
     match engine.install_method.as_str() {
         "pip" => {
             let venv_python = if cfg!(windows) {
@@ -608,7 +618,7 @@ pub(crate) fn install_state(engine: &EngineConfig, data_dir: &std::path::Path) -
             venv_python.is_file()
         }
         "binary" => {
-            if let Some(bin) = engine.binary.as_ref() {
+            let flat_installed = if let Some(bin) = engine.binary.as_ref() {
                 let resolved = if cfg!(windows) && !bin.ends_with(".exe") {
                     format!("{}.exe", bin)
                 } else {
@@ -617,7 +627,34 @@ pub(crate) fn install_state(engine: &EngineConfig, data_dir: &std::path::Path) -
                 data_dir.join("engines").join(resolved).is_file()
             } else {
                 false
+            };
+            if flat_installed {
+                return true;
             }
+            // QUALITY-PLAN-2026-09 §1.5: the flat `<data_dir>/engines/<bin>`
+            // path above is only where a *legacy* llamacpp install lands.
+            // CUDA/Vulkan/CPU variant builds (the ones the installer actually
+            // produces today, see `installer::install_variant`) live at
+            // `<data_dir>/engines/llamacpp/variants/<variant>/llama-server`.
+            // Without this fallback, a working, actively-running variant
+            // install reported `installed:false` (live box, 2026-09-07:
+            // `active:true, version:b9861, installed:false`) — the UI would
+            // offer an "Install" button on an engine that was already
+            // running. Reuse the same variant-resolution helpers the runtime
+            // spawn path and `active_installed_llamacpp_tag` use, so this
+            // stays in sync with whichever variant is actually active.
+            if engine.id == "llamacpp"
+                && let Some(profile) = profile
+            {
+                let state = crate::engine::installer::scan_variant_state(data_dir, profile);
+                let active_variant = crate::engine::variant::select(profile, &state);
+                return crate::engine::installer::variant_installed(
+                    data_dir,
+                    active_variant,
+                    profile,
+                );
+            }
+            false
         }
         "brew" => {
             // Brew installs to the global prefix; consider it installed iff
@@ -731,6 +768,22 @@ mod tests {
         }
     }
 
+    /// No GPU vendor at all — `variant::select` always resolves this to
+    /// `LlamaVariant::Cpu` (see `variant::fallback_variant`), independent of
+    /// driver/compute-cap probing. Used by the §1.5 variant-layout test so it
+    /// doesn't depend on any CUDA/Vulkan detection.
+    fn make_profile_linux_cpu_only() -> HardwareProfile {
+        HardwareProfile {
+            os: Os::Linux,
+            arch: Arch::X86_64,
+            gpu_vendor: GpuVendor::None,
+            total_ram_gb: 16.0,
+            cpu_cores: 8,
+            cpu_model: "Test".into(),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn list_renders_without_panic() {
         // Smoke: registry loads and the renderer doesn't crash on the
@@ -777,7 +830,7 @@ mod tests {
         let sglang = registry.get("sglang").unwrap();
         let tmp = std::env::temp_dir().join("lmforge_test_engine_cmd_no_artifacts");
         let _ = std::fs::remove_dir_all(&tmp);
-        assert!(!install_state(sglang, &tmp));
+        assert!(!install_state(sglang, &tmp, None));
     }
 
     #[test]
@@ -796,7 +849,7 @@ mod tests {
         };
         std::fs::create_dir_all(&venv_bin).unwrap();
         std::fs::write(venv_bin.join(python), b"#!/bin/sh\n").unwrap();
-        assert!(install_state(sglang, &tmp));
+        assert!(install_state(sglang, &tmp, None));
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 
@@ -815,7 +868,47 @@ mod tests {
             "llama-server"
         };
         std::fs::write(engines.join(bin_name), b"#!/bin/sh\n").unwrap();
-        assert!(install_state(llama, &tmp));
+        assert!(install_state(llama, &tmp, None));
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    /// QUALITY-PLAN-2026-09 §1.5 — variant-layout install must be detected
+    /// even though the flat `<data_dir>/engines/llama-server` path is empty.
+    #[test]
+    fn install_state_detects_variant_layout_llamacpp() {
+        let registry = EngineRegistry::load(None).unwrap();
+        let llama = registry.get("llamacpp").unwrap();
+        let tmp = std::env::temp_dir().join("lmforge_test_engine_cmd_variant");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        // Fake a CPU-variant install (no CUDA/Vulkan probe dependency) — a
+        // headless/CPU-only profile always selects `LlamaVariant::Cpu`.
+        let profile = make_profile_linux_cpu_only();
+        let variant_dir = crate::engine::installer::variant_install_dir(
+            &tmp,
+            crate::engine::variant::LlamaVariant::Cpu,
+        );
+        std::fs::create_dir_all(&variant_dir).unwrap();
+        let bin_name = if cfg!(windows) {
+            "llama-server.exe"
+        } else {
+            "llama-server"
+        };
+        std::fs::write(variant_dir.join(bin_name), b"#!/bin/sh\n").unwrap();
+
+        // The flat legacy path must NOT exist — proves the variant fallback,
+        // not the pre-existing flat check, is what makes this pass.
+        assert!(!tmp.join("engines").join(bin_name).is_file());
+
+        assert!(
+            install_state(llama, &tmp, Some(&profile)),
+            "variant-layout install must be detected as installed"
+        );
+        assert!(
+            !install_state(llama, &tmp, None),
+            "without a hardware profile, the variant fallback can't run — matches pre-§1.5 behaviour"
+        );
+
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 

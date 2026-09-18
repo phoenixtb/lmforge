@@ -70,6 +70,18 @@ pub struct MetricsDigest {
     pub recorder_unavailable: bool,
 }
 
+/// Cheap `requests_total` read for `/lf/status` (QUALITY-PLAN-2026-09 §1.2) —
+/// re-parses the same Prometheus text `/lf/metrics` already renders rather
+/// than maintaining a second counter. `/lf/status` is polled every ~2s by
+/// the Tauri side, so this trades a small text-parse for staying single-
+/// source-of-truth; not worth a dedicated atomic when the data already
+/// exists.
+pub(crate) fn requests_total() -> u64 {
+    metrics::render_text()
+        .map(|text| parse_digest(&text).requests_total)
+        .unwrap_or(0)
+}
+
 /// `GET /lf/metrics` handler.
 pub async fn metrics_digest() -> impl IntoResponse {
     let digest = match metrics::render_text() {
@@ -137,6 +149,34 @@ fn parse_digest(text: &str) -> MetricsDigest {
                 }
                 if status > 0 {
                     *entry.by_status.entry(status).or_default() += v;
+                }
+            }
+            // QUALITY-PLAN-2026-09 §1.4: `metrics::init()` never configures
+            // Prometheus histogram buckets, so `metrics-exporter-prometheus`
+            // 0.18's `DistributionBuilder` defaults every `histogram!()` call
+            // site to a **summary** distribution (see
+            // `distribution.rs::get_distribution` — "Default to summary").
+            // The wire format is `lmforge_request_duration_seconds{...,
+            // quantile="0.5"} <seconds>` — there are no `_bucket{le=...}`
+            // lines at all. Switching the exporter to histograms would change
+            // `/metrics` output shape for external Prometheus scrapers, so
+            // per the plan we keep `/metrics` stable and parse the quantile
+            // lines the exporter actually emits instead. (The `_bucket` arm
+            // below is dead with the current default but left in place as a
+            // no-op fallback if the exporter is ever reconfigured to emit
+            // real histograms.)
+            "lmforge_request_duration_seconds" => {
+                let endpoint = parsed.label("endpoint").unwrap_or_default().to_string();
+                let Some(quantile) = parsed.label("quantile") else {
+                    continue;
+                };
+                let ms = parsed.value * 1000.0;
+                let entry = out.endpoints.entry(endpoint).or_default();
+                match quantile {
+                    "0.5" => entry.p50_ms = Some(ms),
+                    "0.95" => entry.p95_ms = Some(ms),
+                    "0.99" => entry.p99_ms = Some(ms),
+                    _ => {}
                 }
             }
             "lmforge_request_duration_seconds_bucket" => {
@@ -412,6 +452,31 @@ lmforge_image_inputs_total{result=\"data_url\"} 1
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(json.contains("\"recorder_unavailable\":true"));
+    }
+
+    #[test]
+    fn digest_handles_summary_quantiles() {
+        // Real exporter shape (§1.4): `metrics-exporter-prometheus` 0.18
+        // defaults every histogram!() call site to a Prometheus *summary*
+        // (no bucket config in `metrics::init()`), so /metrics emits
+        // `quantile="..."` lines, never `_bucket{le=...}`.
+        let text = "\
+lmforge_request_duration_seconds{endpoint=\"/v1/chat/completions\",quantile=\"0\"} 0.01
+lmforge_request_duration_seconds{endpoint=\"/v1/chat/completions\",quantile=\"0.5\"} 0.2
+lmforge_request_duration_seconds{endpoint=\"/v1/chat/completions\",quantile=\"0.9\"} 0.35
+lmforge_request_duration_seconds{endpoint=\"/v1/chat/completions\",quantile=\"0.95\"} 0.4
+lmforge_request_duration_seconds{endpoint=\"/v1/chat/completions\",quantile=\"0.99\"} 0.42
+lmforge_request_duration_seconds{endpoint=\"/v1/chat/completions\",quantile=\"0.999\"} 0.43
+lmforge_request_duration_seconds{endpoint=\"/v1/chat/completions\",quantile=\"1\"} 0.44
+lmforge_request_duration_seconds_sum{endpoint=\"/v1/chat/completions\"} 2.5
+lmforge_request_duration_seconds_count{endpoint=\"/v1/chat/completions\"} 10
+lmforge_requests_total{endpoint=\"/v1/chat/completions\",status=\"200\"} 10
+";
+        let d = parse_digest(text);
+        let chat = d.endpoints.get("/v1/chat/completions").unwrap();
+        assert_eq!(chat.p50_ms, Some(200.0));
+        assert_eq!(chat.p95_ms, Some(400.0));
+        assert_eq!(chat.p99_ms, Some(420.0));
     }
 
     #[test]

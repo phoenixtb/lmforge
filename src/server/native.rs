@@ -95,6 +95,27 @@ pub async fn status(State(state): State<AppState>) -> impl IntoResponse {
     let active_pull = state.active_pull.read().await.clone();
     let migration = state.migration_status.read().await.clone();
 
+    // QUALITY-PLAN-2026-09 §1.2: `EngineState.metrics` used to be
+    // `EngineMetrics::default()` forever — nothing ever wrote to it, so
+    // `/lf/status` reported all zeros even on a daemon that had served
+    // hundreds of requests. Populate it at read time from the real sources
+    // instead of a dead struct field (keeps the JSON shape identical, so
+    // this is not a breaking API change):
+    //   - `requests_total` / `uptime_secs` have real, cheap sources below.
+    //   - `ttft_avg_ms` has no producer anywhere in the codebase yet — TTFT
+    //     isn't surfaced at all today (tracked separately, see
+    //     docs/engineering/QUALITY-PLAN-2026-09.md §2.3). Left at 0 rather
+    //     than fabricate a number.
+    //   - `restart_count` has no source either — there is no crash/respawn
+    //     ledger in `process_pool.rs` to read from. Left at 0; add one there
+    //     if/when a ledger exists.
+    let metrics = crate::engine::manager::EngineMetrics {
+        requests_total: crate::server::metrics_api::requests_total(),
+        ttft_avg_ms: 0.0,
+        uptime_secs: crate::server::metrics::uptime_secs(),
+        restart_count: 0,
+    };
+
     let resp = serde_json::json!({
         "overall_status": engine_state.overall_status,
         // Build provenance of the *serving* daemon. Tests assert this matches
@@ -109,7 +130,7 @@ pub async fn status(State(state): State<AppState>) -> impl IntoResponse {
             "version": engine_state.engine_version,
         },
         "running_models": running_models,
-        "metrics": engine_state.metrics,
+        "metrics": metrics,
         // Surface the last load failure per model. Empty when every recent load
         // succeeded. The UI / CLI can show this directly instead of grepping logs.
         "last_errors": engine_state.last_errors,
@@ -196,7 +217,8 @@ pub async fn engines(State(state): State<AppState>) -> impl IntoResponse {
 
     let mut rows: Vec<serde_json::Value> = Vec::with_capacity(registry.all().len());
     for engine in registry.all() {
-        let installed = crate::cli::engine::install_state(engine, &state.data_dir);
+        let installed =
+            crate::cli::engine::install_state(engine, &state.data_dir, profile_opt.as_ref());
         let (compatible, note) = match profile_opt.as_ref() {
             Some(p) => {
                 let (ok, why) = crate::cli::engine::compatibility(engine, p);

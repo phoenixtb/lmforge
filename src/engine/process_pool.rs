@@ -184,6 +184,20 @@ impl ProcessPoolResidency {
         self.notify().await;
     }
 
+    /// Sync the `lmforge_active_models` gauge to the current slot count.
+    ///
+    /// Must be called after *every* mutation of `active_slots` (insert or
+    /// remove) — see QUALITY-PLAN-2026-09 §1.3. Before this helper existed,
+    /// the load path and the two manual-unload paths (`unload_model`,
+    /// `unload_all`) updated the gauge but the TTL sweep and crash-reap
+    /// paths in `heartbeat_tick` did not, so the gauge silently drifted from
+    /// reality after an idle model was auto-evicted or an engine crashed.
+    /// Observed live: gauge=2 with `running_models: []` and no llama-server
+    /// process left running.
+    fn sync_active_models_gauge(&self) {
+        crate::server::metrics::set_active_models(self.active_slots.len() as u64);
+    }
+
     async fn stop_slot(&self, active: &mut ActiveSlot) -> Result<()> {
         let _ = self.adapter.stop(&mut active.engine).await;
         let pid_file = self
@@ -896,7 +910,7 @@ impl ProcessPoolResidency {
             true,
             load_started.elapsed().as_secs_f64(),
         );
-        crate::server::metrics::set_active_models(self.active_slots.len() as u64);
+        self.sync_active_models_gauge();
 
         let inflight = self
             .active_slots
@@ -931,7 +945,7 @@ impl Residency for ProcessPoolResidency {
         if let Some(mut slot) = self.active_slots.remove(model_id) {
             let _ = self.stop_slot(&mut slot).await;
             self.state.write().await.running_models.remove(model_id);
-            crate::server::metrics::set_active_models(self.active_slots.len() as u64);
+            self.sync_active_models_gauge();
             self.notify().await;
         }
     }
@@ -942,7 +956,7 @@ impl Residency for ProcessPoolResidency {
             let _ = self.stop_slot(&mut slot).await;
         }
         self.state.write().await.running_models.clear();
-        crate::server::metrics::set_active_models(0);
+        self.sync_active_models_gauge();
         self.notify().await;
     }
 
@@ -968,6 +982,10 @@ impl Residency for ProcessPoolResidency {
                     .join(format!("{}_{}.pid", self.config.id, slot.port));
                 let _ = std::fs::remove_file(pid_file);
                 self.state.write().await.running_models.remove(&id);
+                // §1.3: crash reap evicts a slot outside the normal
+                // load/unload paths — without this the gauge kept reporting
+                // a dead model as "active" (see helper doc comment above).
+                self.sync_active_models_gauge();
             }
         }
 
@@ -995,6 +1013,9 @@ impl Residency for ProcessPoolResidency {
                 let _ = self.stop_slot(&mut slot).await;
                 let mut state = self.state.write().await;
                 state.running_models.remove(&id);
+                // §1.3: the TTL sweep is the other silent eviction path — see
+                // helper doc comment above.
+                self.sync_active_models_gauge();
             }
         }
 
@@ -1078,5 +1099,170 @@ fn kill_port_holder_via_lsof(port: u16) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::adapter::ActiveEngine;
+    use crate::engine::adapters::omlx::OmlxAdapter;
+    use crate::engine::registry::EngineConfig;
+
+    /// A process that has already exited by the time the caller checks it —
+    /// stands in for a crashed/finished engine without needing a real one.
+    ///
+    /// Must `.await` on the *same* tokio runtime the test runs on — driving a
+    /// `tokio::process::Child`'s IO/reactor registration from a foreign
+    /// executor (e.g. `futures::executor::block_on`) deadlocks.
+    async fn spawn_exited_child() -> tokio::process::Child {
+        #[cfg(unix)]
+        let mut cmd = tokio::process::Command::new("true");
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = tokio::process::Command::new("cmd");
+            c.args(["/C", "exit 0"]);
+            c
+        };
+        let mut child = cmd.spawn().expect("failed to spawn helper process");
+        // Wait for exit so `try_wait()` deterministically observes it as
+        // finished instead of racing the OS reaper.
+        let _ = child.wait().await;
+        child
+    }
+
+    fn test_slot(
+        child: tokio::process::Child,
+        keep_alive_secs: u64,
+        last_accessed: u64,
+    ) -> ActiveSlot {
+        ActiveSlot {
+            engine: ActiveEngine {
+                process: child,
+                model_id: "test-model".to_string(),
+                spec_observer: None,
+                spec_mode: crate::engine::speculative::SpecMode::default(),
+            },
+            port: 55123,
+            last_accessed,
+            keep_alive_secs,
+            size_bytes: 0,
+            status: EngineStatus::Ready,
+            role: ModelRole::Chat,
+            inflight: Arc::new(AtomicU32::new(0)),
+        }
+    }
+
+    /// Build a pool with a non-"omlx" engine id (TTL sweep only exempts the
+    /// literal "omlx" engine id — see the sweep's comment above) so both
+    /// eviction paths under test actually run. Returns the backing `TempDir`
+    /// too so it isn't deleted out from under `data_dir`/`models_dir` before
+    /// the test finishes.
+    fn test_pool() -> (ProcessPoolResidency, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let (status_tx, _rx) = tokio::sync::broadcast::channel(4);
+        let pool = ProcessPoolResidency::new(
+            EngineConfig {
+                id: "llamacpp".to_string(),
+                ..Default::default()
+            },
+            EngineAdapterInstance::Omlx(OmlxAdapter::default()),
+            50000,
+            tmp.path().to_path_buf(),
+            tmp.path().join("models"),
+            "5m".to_string(),
+            4,
+            status_tx,
+        );
+        (pool, tmp)
+    }
+
+    /// Parse the `lmforge_active_models` gauge value out of a rendered
+    /// Prometheus text body.
+    fn parse_active_models_gauge(text: &str) -> u64 {
+        text.lines()
+            .find(|l| l.starts_with(crate::server::metrics::names::ACTIVE_MODELS))
+            .and_then(|l| l.rsplit(' ').next())
+            .and_then(|v| v.parse::<f64>().ok())
+            .map(|v| v as u64)
+            .unwrap_or(0)
+    }
+
+    /// QUALITY-PLAN-2026-09 §1.3 — TTL sweep must sync the gauge.
+    ///
+    /// Uses a **local** recorder (`metrics::set_default_local_recorder`)
+    /// scoped to this test's thread rather than `crate::server::metrics::init()`
+    /// + the global `PrometheusHandle`: the latter is a process-wide
+    /// `OnceLock` shared by every test in this binary (including
+    /// `server::metrics::tests::handler_returns_text_when_recorder_installed`),
+    /// and racing multiple first-time `init()` callers is a real, observed
+    /// flake — the underlying `metrics::set_global_recorder` can only
+    /// succeed once per process, so whichever test calls it second silently
+    /// gets no recorder. A local recorder is exactly what the `metrics` crate
+    /// docs recommend for this (single-threaded-runtime async test) case and
+    /// sidesteps the shared global state entirely.
+    #[tokio::test]
+    async fn heartbeat_tick_ttl_sweep_updates_active_models_gauge() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+
+        let (mut pool, _tmp) = test_pool();
+
+        // last_accessed far enough in the past that keep_alive_secs=1 has
+        // elapsed; the process itself is alive (not crash-reaped) so only
+        // the TTL path removes it.
+        let now = keepalive::now_secs();
+        let slot = test_slot(spawn_exited_child().await, 1, now.saturating_sub(3600));
+        pool.active_slots.insert("test-model".to_string(), slot);
+        pool.sync_active_models_gauge(); // seed the gauge at 1, like a real load would
+
+        assert_eq!(parse_active_models_gauge(&handle.render()), 1);
+
+        pool.heartbeat_tick().await;
+
+        assert_eq!(
+            pool.active_slots.len(),
+            0,
+            "TTL-expired slot should have been evicted"
+        );
+        assert_eq!(
+            parse_active_models_gauge(&handle.render()),
+            0,
+            "gauge must reflect the post-TTL-sweep slot count, not the stale pre-sweep value"
+        );
+    }
+
+    /// QUALITY-PLAN-2026-09 §1.3 — crash reap must sync the gauge.
+    /// See the local-recorder rationale on the TTL-sweep test above.
+    #[tokio::test]
+    async fn heartbeat_tick_crash_reap_updates_active_models_gauge() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+
+        let (mut pool, _tmp) = test_pool();
+
+        // keep_alive_secs=0 (disabled) + recent last_accessed so the TTL
+        // sweep never fires — isolates the crash-reap path.
+        let now = keepalive::now_secs();
+        let slot = test_slot(spawn_exited_child().await, 0, now);
+        pool.active_slots.insert("test-model".to_string(), slot);
+        pool.sync_active_models_gauge();
+
+        assert_eq!(parse_active_models_gauge(&handle.render()), 1);
+
+        pool.heartbeat_tick().await;
+
+        assert_eq!(
+            pool.active_slots.len(),
+            0,
+            "crashed slot (already-exited process) should have been reaped"
+        );
+        assert_eq!(
+            parse_active_models_gauge(&handle.render()),
+            0,
+            "gauge must reflect the post-crash-reap slot count"
+        );
     }
 }

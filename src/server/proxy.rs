@@ -659,6 +659,30 @@ fn build_plain_answer_body(
     body
 }
 
+/// Build a terminal SSE chunk — empty `delta` + non-null `finish_reason` — as
+/// raw `data: {...}\n\n` bytes ready to yield to the client.
+///
+/// Invariant (QUALITY-PLAN-2026-09 §1.1): the client must ALWAYS receive a
+/// terminal chunk with a non-null `finish_reason` before `[DONE]`. This is
+/// the codebase's own rule — the Call-1 natural-finish path below normalises
+/// a missing marker to `"stop"` for exactly this reason. Extracted as its own
+/// function so every place that needs to satisfy the invariant (Call-1
+/// natural finish, Call-2 transport-error/non-success/stream-end) shares one
+/// implementation, and so the invariant is unit-testable without a live
+/// engine.
+fn terminal_finish_chunk(completion_id: &str, model_name: &str, finish_reason: &str) -> Bytes {
+    let chunk = serde_json::json!({
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "model": model_name,
+        "choices": [{ "index": 0, "delta": {}, "finish_reason": finish_reason }]
+    });
+    Bytes::from(format!(
+        "data: {}\n\n",
+        serde_json::to_string(&chunk).unwrap_or_default()
+    ))
+}
+
 /// Decide whether Call-1 already produced the final answer (so Call-2 and the
 /// empty-guard are skipped).
 ///
@@ -1077,13 +1101,7 @@ pub async fn proxy_stream_with_thinking_budget(
             // Normalise a missing marker to "stop" so clients never see a null
             // finish_reason on the terminal chunk.
             let fr_out = finish_reason.clone().unwrap_or_else(|| "stop".to_string());
-            let final_chunk = serde_json::json!({
-                "id": completion_id,
-                "object": "chat.completion.chunk",
-                "model": model_name,
-                "choices": [{ "index": 0, "delta": {}, "finish_reason": fr_out }]
-            });
-            yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&final_chunk).unwrap_or_default())));
+            yield Ok(terminal_finish_chunk(&completion_id, &model_name, &fr_out));
             yield Ok(Bytes::from("data: [DONE]\n\n"));
             return;
         }
@@ -1112,13 +1130,7 @@ pub async fn proxy_stream_with_thinking_budget(
                 });
                 yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default())));
             }
-            let final_chunk = serde_json::json!({
-                "id": completion_id,
-                "object": "chat.completion.chunk",
-                "model": model_name,
-                "choices": [{ "index": 0, "delta": {}, "finish_reason": "length" }]
-            });
-            yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&final_chunk).unwrap_or_default())));
+            yield Ok(terminal_finish_chunk(&completion_id, &model_name, "length"));
             yield Ok(Bytes::from("data: [DONE]\n\n"));
             return;
         }
@@ -1158,19 +1170,45 @@ pub async fn proxy_stream_with_thinking_budget(
             serde_json::to_string(&prefill_status).unwrap_or_default()
         )));
 
-        let resp2 = match client
-            .post(format!("http://127.0.0.1:{}{}", engine_port_owned, path_owned))
+        let call2_body_bytes = serde_json::to_vec(&body2).unwrap_or_default();
+        let call2_url = format!("http://127.0.0.1:{}{}", engine_port_owned, path_owned);
+
+        let mut resp2_result = client
+            .post(&call2_url)
             .header("Content-Type", "application/json")
-            .body(serde_json::to_vec(&body2).unwrap_or_default())
+            .body(call2_body_bytes.clone())
             .send()
-            .await
-        {
+            .await;
+
+        // Single retry on transport error, short backoff. Observed live
+        // (think_bench 2026-09-07, qwen3.5:4b:6bit/seq_next, think=on r2):
+        // Call-2's reqwest send failed once — a transient same-port hop — and
+        // the very next request on the same slot 2 ms later succeeded. One
+        // retry recovers this without materially increasing user-visible
+        // latency (reasoning has already been streamed by this point).
+        if let Err(ref e) = resp2_result {
+            warn!(error = %e, "Call-2 request failed (attempt 1/2); retrying after 200ms backoff");
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            resp2_result = client
+                .post(&call2_url)
+                .header("Content-Type", "application/json")
+                .body(call2_body_bytes)
+                .send()
+                .await;
+        }
+
+        let resp2 = match resp2_result {
             Ok(r) => r,
             Err(e) => {
-                warn!(error = %e, "Call-2 engine request failed");
+                warn!(error = %e, "Call-2 engine request failed after retry");
                 let err = serde_json::json!({"error": {"message": format!("Call-2 failed: {}", e), "type": "server_error"}});
-                yield Ok(Bytes::from(format!("data: {}\n\ndata: [DONE]\n\n",
-                    serde_json::to_string(&err).unwrap_or_default())));
+                yield Ok::<Bytes, std::io::Error>(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&err).unwrap_or_default())));
+                // Invariant (§1.1): still emit a terminal chunk before [DONE].
+                // finish_reason="length" — reasoning was produced and the budget
+                // was consumed, so this is a truncated-but-real generation, not a
+                // clean stop (mirrors sub-case (b)'s marker above).
+                yield Ok(terminal_finish_chunk(&completion_id, &model_name, "length"));
+                yield Ok(Bytes::from("data: [DONE]\n\n"));
                 return;
             }
         };
@@ -1179,7 +1217,9 @@ pub async fn proxy_stream_with_thinking_budget(
             let status = resp2.status().as_u16();
             let err_text = resp2.text().await.unwrap_or_default();
             warn!(status, error = %err_text, "Call-2 returned error status");
-            yield Ok(Bytes::from(format!("data: {}\n\ndata: [DONE]\n\n", err_text)));
+            yield Ok(Bytes::from(format!("data: {}\n\n", err_text)));
+            yield Ok(terminal_finish_chunk(&completion_id, &model_name, "length"));
+            yield Ok(Bytes::from("data: [DONE]\n\n"));
             return;
         }
 
@@ -1203,6 +1243,12 @@ pub async fn proxy_stream_with_thinking_budget(
         // routed Call-2 through the splitter and discarded its reasoning.
         let mut call2_splitter = ThinkSplitter::default();
         let mut call2_dropped_reasoning: usize = 0;
+        // Tracks whether the engine itself sent a chunk carrying a non-null
+        // finish_reason (forwarded verbatim below). If the stream ends — via
+        // [DONE] or otherwise — without one ever arriving, the invariant
+        // (§1.1: always a terminal chunk before [DONE]) requires synthesising
+        // one, mirroring the Call-1 natural-finish normalisation above.
+        let mut call2_finish_reason: Option<String> = None;
 
         loop {
             let next = match tokio::time::timeout(STREAM_IDLE_TIMEOUT, call2_stream.next()).await {
@@ -1258,6 +1304,12 @@ pub async fn proxy_stream_with_thinking_budget(
                         let err = serde_json::json!({"error": {"message": "Model produced no output (reasoning and answer both empty)", "type": "server_error"}});
                         yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&err).unwrap_or_default())));
                     }
+                    // Invariant (§1.1): synthesise a terminal chunk if the engine
+                    // never sent one — the engine's own finish_reason (if any) was
+                    // already forwarded verbatim above.
+                    if call2_finish_reason.is_none() {
+                        yield Ok(terminal_finish_chunk(&completion_id_inner, &model_name_inner, "stop"));
+                    }
                     yield Ok::<Bytes, std::io::Error>(Bytes::from("data: [DONE]\n\n"));
                     return;
                 }
@@ -1275,6 +1327,12 @@ pub async fn proxy_stream_with_thinking_budget(
                         && let Some(choice) = choices.first_mut()
                     {
                         let has_finish = choice.get("finish_reason").is_some_and(|f| !f.is_null());
+                        if has_finish {
+                            call2_finish_reason = choice
+                                .get("finish_reason")
+                                .and_then(|f| f.as_str())
+                                .map(String::from);
+                        }
                         if let Some(delta) = choice.get_mut("delta").and_then(|d| d.as_object_mut()) {
                             if let Some(r) = delta.remove("reasoning_content")
                                 && let Some(s) = r.as_str()
@@ -1339,6 +1397,13 @@ pub async fn proxy_stream_with_thinking_budget(
         if is_fallback && !saw_content {
             let err = serde_json::json!({"error": {"message": "Model produced no output (reasoning and answer both empty)", "type": "server_error"}});
             yield Ok(Bytes::from(format!("data: {}\n\n", serde_json::to_string(&err).unwrap_or_default())));
+        }
+        // Invariant (§1.1): the stream ended without [DONE] (idle-timeout,
+        // dropped connection, read error — see the `break`s above). Same rule
+        // applies: never let the client fall through to a close with no
+        // terminal finish_reason.
+        if call2_finish_reason.is_none() {
+            yield Ok(terminal_finish_chunk(&completion_id_inner, &model_name_inner, "stop"));
         }
         yield Ok::<Bytes, std::io::Error>(Bytes::from("data: [DONE]\n\n"));
     };
@@ -1869,6 +1934,37 @@ mod tests {
     fn test_is_reasoning_echo_empty_reasoning() {
         assert!(!is_reasoning_echo("anything", ""));
         assert!(!is_reasoning_echo("", ""));
+    }
+
+    // ── terminal_finish_chunk (§1.1: always a terminal chunk before [DONE]) ──
+
+    #[test]
+    fn test_terminal_finish_chunk_has_nonnull_finish_reason() {
+        let bytes = terminal_finish_chunk("cmpl-1", "my-model", "length");
+        let s = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(s.starts_with("data: "));
+        assert!(s.ends_with("\n\n"));
+
+        let json_str = s.trim_start_matches("data: ").trim_end();
+        let val: serde_json::Value = serde_json::from_str(json_str).unwrap();
+        assert_eq!(val["id"], "cmpl-1");
+        assert_eq!(val["model"], "my-model");
+        assert_eq!(val["object"], "chat.completion.chunk");
+        assert_eq!(val["choices"][0]["delta"], serde_json::json!({}));
+        assert!(
+            !val["choices"][0]["finish_reason"].is_null(),
+            "finish_reason must never be null on the terminal chunk"
+        );
+        assert_eq!(val["choices"][0]["finish_reason"], "length");
+    }
+
+    #[test]
+    fn test_terminal_finish_chunk_stop_variant() {
+        let bytes = terminal_finish_chunk("id-2", "model-2", "stop");
+        let s = String::from_utf8(bytes.to_vec()).unwrap();
+        let json_str = s.trim_start_matches("data: ").trim_end();
+        let val: serde_json::Value = serde_json::from_str(json_str).unwrap();
+        assert_eq!(val["choices"][0]["finish_reason"], "stop");
     }
 
     // ── Call-1 finish routing (mid-stream abort → no silent blank) ───────────

@@ -994,3 +994,79 @@ async fn tc14_model_list_resolves_relative_index_against_custom_models_dir() {
 
     println!("✓ TC-14 passed — relative index resolves against custom models_dir");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC-15: /lf/status.metrics is populated from real sources after traffic
+//        (QUALITY-PLAN-2026-09 §1.2 — was a permanent `EngineMetrics::default()`
+//        stub; StatusBar.svelte reads these fields and used to show "—" forever).
+// ─────────────────────────────────────────────────────────────────────────────
+#[tokio::test]
+async fn tc15_status_metrics_populated_after_traffic() {
+    use axum::body::to_bytes;
+
+    // Idempotent — safe even if another test in this binary already called it.
+    // DAEMON_START is stamped on the *first* call, so give it a moment to tick
+    // past zero whole seconds before asserting uptime_secs > 0 below.
+    lmforge::server::metrics::init();
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let chat = chat_model();
+    write_model_index(tmp.path(), &[(chat.as_str(), "chat", true, false)]);
+
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "chatcmpl-tc15",
+            "object": "chat.completion",
+            "choices": [{"message": {"role": "assistant", "content": "pong"}, "index": 0, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5}
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let port_map = HashMap::from([(chat.clone(), mock_server.address().port())]);
+    let (router, _) = build_app_state(tmp.path().to_owned(), port_map, 128);
+
+    // At least one served request so requests_total has something to report.
+    let (status, body) = post(
+        &router,
+        "/v1/chat/completions",
+        json!({"model": chat, "messages": [{"role": "user", "content": "ping"}], "stream": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "chat request failed: {body}");
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/lf/status")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+
+    // Shape must be unchanged (breaking-API guard) — all four fields present.
+    let m = &v["metrics"];
+    for k in [
+        "requests_total",
+        "ttft_avg_ms",
+        "uptime_secs",
+        "restart_count",
+    ] {
+        assert!(m.get(k).is_some(), "metrics missing field {k}: {m}");
+    }
+
+    assert!(
+        m["requests_total"].as_u64().unwrap_or(0) >= 1,
+        "expected requests_total >= 1 after serving a request, got: {m}"
+    );
+    assert!(
+        m["uptime_secs"].as_u64().unwrap_or(0) >= 1,
+        "expected uptime_secs >= 1 after the daemon has been up >1s, got: {m}"
+    );
+
+    println!("✓ TC-15 passed — /lf/status.metrics reflects real traffic: {m}");
+}

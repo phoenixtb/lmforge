@@ -961,5 +961,14 @@ else
     fi
 fi
 
+# Second status snapshot, taken after all test traffic. The early capture
+# above (pre-traffic) is kept as-is — it's useful provenance of the daemon's
+# state before this run touched it — but it caused two false alarms during
+# the 2026-09-07 Ubuntu review: `metrics`/`last_errors` in status.json were
+# read as if they described *this* run's traffic when they actually still
+# described the previous workload. status.final.json is the one to read for
+# "what did this run actually do".
+curl -sf "${LF_HOST}/lf/status" -o "$RESULTS_DIR/status.final.json" 2>/dev/null || true
+
 # ─── Final report ─────────────────────────────────────────────────────────────
 print_report

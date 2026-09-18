@@ -16,7 +16,7 @@ Baseline for all file:line references: commit `466d8a0`.
 
 ### 1.1 Call-2 failure → silent blank answer, no terminal `finish_reason`  — HIGH
 
-- [ ] Status
+- [x] Status (pending commit)
 - **Problem:** In the two-call thinking workflow, if Call-2's HTTP request to
   llama-server fails at send time, the client gets
   `data: {"error":...}\n\ndata: [DONE]` — no terminal chunk, no
@@ -42,7 +42,7 @@ Baseline for all file:line references: commit `466d8a0`.
 
 ### 1.2 `/lf/status.metrics` is a never-populated stub — MED
 
-- [ ] Status
+- [x] Status (pending commit)
 - **Problem:** `EngineMetrics` (`requests_total`, `ttft_avg_ms`,
   `uptime_secs`, `restart_count`) is only ever `Default::default()` — never
   written. Live daemon after 13 h / 276 requests reports all zeros while
@@ -61,7 +61,7 @@ Baseline for all file:line references: commit `466d8a0`.
 
 ### 1.3 `lmforge_active_models` gauge stale after TTL sweep / crash reap — MED
 
-- [ ] Status
+- [x] Status (pending commit)
 - **Problem:** gauge updated only on load and manual unload
   (`process_pool.rs:899,934,945`); the keep-alive TTL sweep (~992) and
   crash reap (~963) evict slots without updating it. Observed live: gauge=2
@@ -73,7 +73,7 @@ Baseline for all file:line references: commit `466d8a0`.
 
 ### 1.4 `/lf/metrics` latency percentiles always null — MED
 
-- [ ] Status
+- [x] Status (pending commit)
 - **Problem:** the Prometheus exporter emits **summaries** (`quantile=` lines);
   the `/lf/metrics` digest parser expects **histogram buckets** — p50/p95/p99
   render as null/0 despite real traffic (chat sum 82.5 s / 212 reqs observed).
@@ -88,7 +88,7 @@ Baseline for all file:line references: commit `466d8a0`.
 
 ### 1.5 `/lf/engines` reports `installed:false` for the active variant-layout llamacpp — MED
 
-- [ ] Status
+- [x] Status (pending commit)
 - **Problem:** `install_state` looks for `data_dir/engines/llama-server`, but
   CUDA variants install to
   `~/.lmforge/engines/llamacpp/variants/<variant>/llama-server`. Live box:
@@ -103,7 +103,7 @@ Baseline for all file:line references: commit `466d8a0`.
 
 ### 1.6 e2e scripts capture `status.json` before traffic — LOW (test artifact)
 
-- [ ] Status
+- [x] Status (pending commit)
 - **Problem:** `tests/multi_model_e2e.sh:489` (and `.ps1`) snapshot
   `/lf/status` before any test request — captured metrics/last_errors describe
   the *previous* workload (caused two false alarms during the Sep-07 review).
@@ -112,7 +112,7 @@ Baseline for all file:line references: commit `466d8a0`.
 
 ### 1.7 `floored_max_tokens` logged at WARN — COSMETIC
 
-- [ ] Status
+- [x] Status (pending commit)
 - **Problem:** native-reasoning floor (`thinking/mod.rs:166-185`) fires WARN on
   every think-on request with small `max_tokens` (24 hits in one bench run).
   It's by-design behaviour → noise.

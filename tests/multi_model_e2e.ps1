@@ -479,6 +479,18 @@ try {
         }
     }
 
+    # Second status snapshot, taken after all test traffic and while the
+    # daemon is still up (the `finally` block below may stop it). The
+    # pre-traffic status.json captured earlier is kept as provenance of the
+    # daemon's state before this run touched it, but reading it as if it
+    # described *this* run's traffic caused false alarms during the
+    # 2026-09-07 Ubuntu review. status.final.json is the one to read for
+    # "what did this run actually do".
+    try {
+        Invoke-RestMethod -Uri "$($script:LfHost)/lf/status" -TimeoutSec 10 |
+            ConvertTo-Json -Depth 12 | Set-Content -Path (Join-Path $ResultsDir "status.final.json")
+    } catch {}
+
     Write-Host ""
     Write-Host "========== SUMMARY ==========" -ForegroundColor White
     $fail = 0
