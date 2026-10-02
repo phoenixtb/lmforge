@@ -82,6 +82,29 @@ pub(crate) fn requests_total() -> u64 {
         .unwrap_or(0)
 }
 
+/// Mean streamed time-to-first-token in ms since daemon start; 0.0 before the
+/// first streamed generation.
+pub(crate) fn ttft_avg_ms() -> f64 {
+    metrics::render_text()
+        .map(|text| ttft_avg_ms_from(&text))
+        .unwrap_or(0.0)
+}
+
+fn ttft_avg_ms_from(text: &str) -> f64 {
+    let value = |name: &str| {
+        text.lines()
+            .find_map(|l| l.strip_prefix(name)?.trim().parse::<f64>().ok())
+            .unwrap_or(0.0)
+    };
+    let sum = value("lmforge_ttft_seconds_sum ");
+    let count = value("lmforge_ttft_seconds_count ");
+    if count > 0.0 {
+        (sum / count * 1000.0 * 10.0).round() / 10.0
+    } else {
+        0.0
+    }
+}
+
 /// `GET /lf/metrics` handler.
 pub async fn metrics_digest() -> impl IntoResponse {
     let digest = match metrics::render_text() {
@@ -151,20 +174,10 @@ fn parse_digest(text: &str) -> MetricsDigest {
                     *entry.by_status.entry(status).or_default() += v;
                 }
             }
-            // QUALITY-PLAN-2026-09 §1.4: `metrics::init()` never configures
-            // Prometheus histogram buckets, so `metrics-exporter-prometheus`
-            // 0.18's `DistributionBuilder` defaults every `histogram!()` call
-            // site to a **summary** distribution (see
-            // `distribution.rs::get_distribution` — "Default to summary").
-            // The wire format is `lmforge_request_duration_seconds{...,
-            // quantile="0.5"} <seconds>` — there are no `_bucket{le=...}`
-            // lines at all. Switching the exporter to histograms would change
-            // `/metrics` output shape for external Prometheus scrapers, so
-            // per the plan we keep `/metrics` stable and parse the quantile
-            // lines the exporter actually emits instead. (The `_bucket` arm
-            // below is dead with the current default but left in place as a
-            // no-op fallback if the exporter is ever reconfigured to emit
-            // real histograms.)
+            // Summary quantile lines: only emitted if `metrics::builder()`'s
+            // bucket config was rejected and the exporter fell back to its
+            // default (rolling-window) summaries. Histogram buckets below are
+            // the normal path.
             "lmforge_request_duration_seconds" => {
                 let endpoint = parsed.label("endpoint").unwrap_or_default().to_string();
                 let Some(quantile) = parsed.label("quantile") else {
@@ -452,6 +465,45 @@ lmforge_image_inputs_total{result=\"data_url\"} 1
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(json.contains("\"recorder_unavailable\":true"));
+    }
+
+    #[test]
+    fn ttft_avg_from_histogram_sum_count() {
+        let text = "lmforge_ttft_seconds_bucket{le=\"0.5\"} 4\n\
+                    lmforge_ttft_seconds_sum 1.2\n\
+                    lmforge_ttft_seconds_count 4\n";
+        assert_eq!(ttft_avg_ms_from(text), 300.0);
+        assert_eq!(ttft_avg_ms_from(""), 0.0);
+    }
+
+    /// Real exporter config: latency must render as cumulative histogram
+    /// buckets so percentiles survive idle periods (the default summary's
+    /// rolling window read 0.0 on the live box after traffic stopped).
+    #[test]
+    fn configured_exporter_emits_buckets_and_nonzero_percentiles() {
+        let recorder = crate::server::metrics::builder().build_recorder();
+        let handle = recorder.handle();
+        ::metrics::with_local_recorder(&recorder, || {
+            for secs in [0.2, 0.3, 0.4, 1.5] {
+                ::metrics::histogram!(
+                    crate::server::metrics::names::REQUEST_DURATION_SECONDS,
+                    "endpoint" => "/v1/chat/completions"
+                )
+                .record(secs);
+            }
+            crate::server::metrics::observe_ttft(0.05);
+        });
+        let text = handle.render();
+        assert!(
+            text.contains("lmforge_request_duration_seconds_bucket"),
+            "expected histogram buckets, got:\n{text}"
+        );
+        assert!(!text.contains("lmforge_request_duration_seconds{"));
+        let d = parse_digest(&text);
+        let chat = d.endpoints.get("/v1/chat/completions").unwrap();
+        assert!(chat.p50_ms.unwrap() > 0.0);
+        assert!(chat.p99_ms.unwrap() >= chat.p50_ms.unwrap());
+        assert!(ttft_avg_ms_from(&text) > 0.0);
     }
 
     #[test]

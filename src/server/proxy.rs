@@ -13,6 +13,9 @@ pub fn build_proxy_client() -> Client {
     Client::builder()
         .timeout(std::time::Duration::from_secs(300)) // 5 min for long inference
         .pool_max_idle_per_host(10)
+        // llama-server (cpp-httplib) drops idle keep-alive sockets after 5 s;
+        // reusing one it already closed fails the send. Expire ours first.
+        .pool_idle_timeout(std::time::Duration::from_secs(3))
         .build()
         .expect("Failed to build proxy HTTP client")
 }
@@ -245,6 +248,7 @@ pub async fn proxy_stream(
                 Ok(Some(Ok(bytes))) => {
                     if ttft.is_none() {
                         ttft = Some(started.elapsed());
+                        crate::server::metrics::observe_ttft(started.elapsed().as_secs_f64());
                     }
                     line_buf.push_str(&String::from_utf8_lossy(&bytes));
                     while let Some(nl) = line_buf.find('\n') {
@@ -424,6 +428,7 @@ pub async fn proxy_request_assembling_stream(
         })?;
         if ttft.is_none() {
             ttft = Some(started.elapsed());
+            crate::server::metrics::observe_ttft(started.elapsed().as_secs_f64());
         }
         buffer.push_str(&String::from_utf8_lossy(&bytes));
 

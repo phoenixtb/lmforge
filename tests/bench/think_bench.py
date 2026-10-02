@@ -230,6 +230,17 @@ def _cmd_out(args: list[str]) -> str:
     return ""
 
 
+def _lmforge_version() -> str:
+    # Non-interactive shells (nohup over ssh, systemd) often lack the install
+    # dirs on PATH, so also try the installer's default locations.
+    home = Path.home()
+    for exe in ("lmforge", str(home / ".local/bin/lmforge"), str(home / ".lmforge/bin/lmforge")):
+        out = _cmd_out([exe, "--version"])
+        if out:
+            return out
+    return ""
+
+
 def build_provenance() -> dict:
     """Identify the exact build under test so a committed report is never
     ambiguous about which daemon produced it (the #1 thing that bit us when
@@ -237,7 +248,7 @@ def build_provenance() -> dict:
     here = str(Path(__file__).resolve().parent)
     return {
         # e.g. "lmforge 0.1.5" — the installed CLI/daemon on PATH
-        "lmforge_version": _cmd_out(["lmforge", "--version"]),
+        "lmforge_version": _lmforge_version(),
         # short SHA of the checkout the harness ran from (best-effort)
         "git_sha": _cmd_out(["git", "-C", here, "rev-parse", "--short", "HEAD"]),
         # whether that checkout has uncommitted changes

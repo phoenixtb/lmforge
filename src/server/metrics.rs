@@ -46,6 +46,41 @@ pub mod names {
     pub const ACTIVE_MODELS: &str = "lmforge_active_models";
     pub const IMAGE_INPUTS_TOTAL: &str = "lmforge_image_inputs_total";
     pub const AUTH_REJECTIONS_TOTAL: &str = "lmforge_auth_rejections_total";
+    pub const TTFT_SECONDS: &str = "lmforge_ttft_seconds";
+}
+
+/// Latency buckets (seconds) spanning embed calls (ms) to long generations.
+const LATENCY_BUCKETS: &[f64] = &[
+    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 300.0,
+];
+const LOAD_BUCKETS: &[f64] = &[0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 300.0];
+
+/// Histograms, not the exporter's default summary: its quantiles cover a
+/// rolling ~60 s window and read 0 once traffic goes idle, while `_sum` and
+/// `_count` keep accumulating.
+pub(crate) fn builder() -> PrometheusBuilder {
+    use metrics_exporter_prometheus::Matcher;
+    let configured = PrometheusBuilder::new()
+        .set_buckets_for_metric(
+            Matcher::Full(names::REQUEST_DURATION_SECONDS.into()),
+            LATENCY_BUCKETS,
+        )
+        .and_then(|b| {
+            b.set_buckets_for_metric(Matcher::Full(names::TTFT_SECONDS.into()), LATENCY_BUCKETS)
+        })
+        .and_then(|b| {
+            b.set_buckets_for_metric(
+                Matcher::Full(names::MODEL_LOAD_DURATION_SECONDS.into()),
+                LOAD_BUCKETS,
+            )
+        });
+    match configured {
+        Ok(b) => b,
+        Err(e) => {
+            warn!(error = %e, "Histogram bucket config rejected; falling back to summaries");
+            PrometheusBuilder::new()
+        }
+    }
 }
 
 /// Install the Prometheus recorder once. Subsequent calls are no-ops.
@@ -60,7 +95,7 @@ pub fn init() {
     if HANDLE.get().is_some() {
         return;
     }
-    match PrometheusBuilder::new().install_recorder() {
+    match builder().install_recorder() {
         Ok(handle) => {
             // Pre-register descriptions so they appear in /metrics output even
             // before the first counter increment.
@@ -79,6 +114,10 @@ pub fn init() {
             metrics::describe_histogram!(
                 names::MODEL_LOAD_DURATION_SECONDS,
                 "Cold-load wall-clock time in seconds, labelled by model."
+            );
+            metrics::describe_histogram!(
+                names::TTFT_SECONDS,
+                "Time to first streamed byte from the engine, in seconds."
             );
             metrics::describe_gauge!(
                 names::ACTIVE_MODELS,
@@ -135,6 +174,11 @@ pub fn observe_model_load(model: &str, success: bool, elapsed_secs: f64) {
         let lat_labels = [("model", model.to_string())];
         metrics::histogram!(names::MODEL_LOAD_DURATION_SECONDS, &lat_labels).record(elapsed_secs);
     }
+}
+
+/// Record time-to-first-token for one streamed generation.
+pub fn observe_ttft(secs: f64) {
+    metrics::histogram!(names::TTFT_SECONDS).record(secs);
 }
 
 /// Update the active-models gauge.

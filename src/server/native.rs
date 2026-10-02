@@ -101,17 +101,14 @@ pub async fn status(State(state): State<AppState>) -> impl IntoResponse {
     // hundreds of requests. Populate it at read time from the real sources
     // instead of a dead struct field (keeps the JSON shape identical, so
     // this is not a breaking API change):
-    //   - `requests_total` / `uptime_secs` have real, cheap sources below.
-    //   - `ttft_avg_ms` has no producer anywhere in the codebase yet — TTFT
-    //     isn't surfaced at all today (tracked separately, see
-    //     docs/engineering/QUALITY-PLAN-2026-09.md §2.3). Left at 0 rather
-    //     than fabricate a number.
+    //   - `requests_total` / `uptime_secs` / `ttft_avg_ms` have real, cheap
+    //     sources below (`ttft_avg_ms` covers streamed generations only).
     //   - `restart_count` has no source either — there is no crash/respawn
     //     ledger in `process_pool.rs` to read from. Left at 0; add one there
     //     if/when a ledger exists.
     let metrics = crate::engine::manager::EngineMetrics {
         requests_total: crate::server::metrics_api::requests_total(),
-        ttft_avg_ms: 0.0,
+        ttft_avg_ms: crate::server::metrics_api::ttft_avg_ms(),
         uptime_secs: crate::server::metrics::uptime_secs(),
         restart_count: 0,
     };
