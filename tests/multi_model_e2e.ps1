@@ -3,7 +3,8 @@
 # All capability suites (embed/chat/VLM/rerank/MTP) on by default; SKIP on unavailable.
 # TC-E16..E18 (QUALITY-PLAN-2026-09 Batch 2, agent-API correctness) cover tool
 # calling round-trip (non-stream + stream), `response_format: json_schema`,
-# and N=4 concurrent chat requests.
+# and N=4 concurrent chat requests. TC-E19 (§3.1) covers the stateless
+# `/v1/responses` adapter (non-stream, stream, previous_response_id 400).
 # =============================================================================
 param(
     [switch]$Full,
@@ -573,6 +574,47 @@ try {
     } else {
         Warn "TC-E18: one or more concurrent requests failed/empty/503 - $concurrentDetail"
         Record "TC-E18" "FAIL" "Concurrent chat (N=4)" $concurrentDetail
+    }
+
+    # TC-E19: /v1/responses (QUALITY-PLAN-2026-09 §3.1, stateless adapter).
+    # Non-stream must complete with text; stream must end in response.completed
+    # with non-empty concatenated deltas; previous_response_id must be rejected.
+    try {
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $r = Invoke-E2eResponses -Model $script:ChatModel
+        $sw.Stop()
+        Assert-E2eResponses -Resp $r -Label "TC-E19 (non-stream)"
+        Record "TC-E19" "PASS" "Responses (non-stream)" "$($sw.ElapsedMilliseconds)ms"
+    } catch {
+        Record "TC-E19" "FAIL" "Responses (non-stream)" $_.Exception.Message
+        Warn "TC-E19 (non-stream): $($_.Exception.Message)"
+        try { $r | ConvertTo-Json -Depth 12 | Set-Content -Path (Join-Path $ResultsDir "tc-e19-nonstream.response.json") } catch {}
+    }
+
+    try {
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $sse = Invoke-E2eResponsesStream -Model $script:ChatModel
+        $sw.Stop()
+        $info = Get-E2eResponsesStreamInfo -Sse $sse
+        if ($info.Completed -and $info.Text.Trim()) {
+            Record "TC-E19S" "PASS" "Responses (stream)" "$($sw.ElapsedMilliseconds)ms"
+        } else {
+            Record "TC-E19S" "FAIL" "Responses (stream)" "no response.completed or empty deltas"
+            Warn "TC-E19 (stream): no response.completed or empty deltas"
+            try { $sse | Set-Content -Path (Join-Path $ResultsDir "tc-e19-stream.response.txt") } catch {}
+        }
+    } catch {
+        Record "TC-E19S" "FAIL" "Responses (stream)" $_.Exception.Message
+        Warn "TC-E19 (stream): $($_.Exception.Message)"
+    }
+
+    $prevBody = @{ model = $script:ChatModel; input = "hi"; previous_response_id = "resp_none" } | ConvertTo-Json -Compress
+    $prevCode = Get-E2eHttpPostCode -Path "/v1/responses" -BodyJson $prevBody
+    if ($prevCode -eq 400) {
+        Record "TC-E19P" "PASS" "Responses previous_response_id -> 400" "HTTP 400"
+    } else {
+        Record "TC-E19P" "FAIL" "Responses previous_response_id -> 400" "HTTP $prevCode (want 400)"
+        Warn "TC-E19 (previous_response_id): expected HTTP 400, got $prevCode"
     }
 
     # Second status snapshot, taken after all test traffic and while the

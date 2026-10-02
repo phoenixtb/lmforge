@@ -11,7 +11,8 @@
 #  thinking cases auto-skip when the chat model isn't thinking-capable.
 #  TC-E16..E18 (QUALITY-PLAN-2026-09 Batch 2, agent-API correctness) cover
 #  tool calling round-trip (non-stream + stream), `response_format:
-#  json_schema`, and N=4 concurrent chat requests.
+#  json_schema`, and N=4 concurrent chat requests. TC-E19 (§3.1) covers the
+#  stateless `/v1/responses` adapter (non-stream, stream, previous_response_id 400).
 #
 #  USAGE
 #  -----
@@ -1073,6 +1074,56 @@ if $concurrent_all_ok; then
 else
     warn "TC-E18: one or more concurrent requests failed/empty/503 — ${concurrent_detail}"
     record_fail "TC-E18" "Concurrent chat (N=4)" "${concurrent_detail}"
+fi
+
+# TC-E19: /v1/responses (QUALITY-PLAN-2026-09 §3.1, stateless adapter).
+# Non-stream must complete with text; stream must end in response.completed
+# with non-empty concatenated deltas; previous_response_id must be rejected.
+echo -e "\n${BOLD}TC-E19${NC}  /v1/responses adapter (${CHAT_MODEL})"
+timer_start "responses_nonstream"
+if resp=$(e2e_api_responses "$CHAT_MODEL" 2>&1); then
+    resp_ms=$(timer_end "responses_nonstream")
+    if e2e_assert_responses_response "$resp" "TC-E19 (non-stream)"; then
+        resp_text=$(echo "$resp" | jq -r '[.output[]? | select(.type=="message") | .content[]? | .text] | join("")')
+        printf "  ${GREEN}✓${NC} non-stream completed (%s chars)  ${DIM}%sms${NC}\n" "${#resp_text}" "$resp_ms"
+        record_pass "TC-E19" "Responses (non-stream)" "${resp_ms}ms"
+    else
+        record_fail "TC-E19" "Responses (non-stream)" "$E2E_ASSERT_MSG"
+        warn "TC-E19 (non-stream): $E2E_ASSERT_MSG"
+        echo "$resp" > "$RESULTS_DIR/tc-e19-nonstream.response.json" 2>/dev/null || true
+    fi
+else
+    timer_end "responses_nonstream" >/dev/null
+    record_fail "TC-E19" "Responses (non-stream)" "request failed"
+    warn "TC-E19 (non-stream): request failed"
+fi
+
+timer_start "responses_stream"
+if sse=$(e2e_api_responses_stream "$CHAT_MODEL" 2>&1); then
+    resp_s_ms=$(timer_end "responses_stream")
+    resp_s_text=$(e2e_extract_responses_stream_text "$sse")
+    if grep -q '^event: response.completed$' <<< "$sse" && [[ -n "${resp_s_text// }" ]]; then
+        printf "  ${GREEN}✓${NC} stream response.completed (%s chars)  ${DIM}%sms${NC}\n" "${#resp_s_text}" "$resp_s_ms"
+        record_pass "TC-E19S" "Responses (stream)" "${resp_s_ms}ms"
+    else
+        record_fail "TC-E19S" "Responses (stream)" "no response.completed or empty deltas"
+        warn "TC-E19 (stream): no response.completed or empty deltas"
+        echo "$sse" > "$RESULTS_DIR/tc-e19-stream.response.txt" 2>/dev/null || true
+    fi
+else
+    timer_end "responses_stream" >/dev/null
+    record_fail "TC-E19S" "Responses (stream)" "request failed"
+    warn "TC-E19 (stream): request failed"
+fi
+
+resp_prev_code=$(e2e_http_post_code "/v1/responses" \
+    "$(jq -nc --arg m "$CHAT_MODEL" '{model:$m,input:"hi",previous_response_id:"resp_none"}')")
+if [[ "$resp_prev_code" == "400" ]]; then
+    printf "  ${GREEN}✓${NC} previous_response_id rejected (HTTP 400)\n"
+    record_pass "TC-E19P" "Responses previous_response_id -> 400" "HTTP 400"
+else
+    record_fail "TC-E19P" "Responses previous_response_id -> 400" "HTTP ${resp_prev_code} (want 400)"
+    warn "TC-E19 (previous_response_id): expected HTTP 400, got ${resp_prev_code}"
 fi
 
 # Second status snapshot, taken after all test traffic. The early capture

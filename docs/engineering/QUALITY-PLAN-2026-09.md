@@ -168,7 +168,7 @@ Baseline for all file:line references: commit `466d8a0`.
 
 ### 3.1 `/v1/responses` (non-stateful adapter)
 
-- [ ] Status
+- [x] Status (pending commit)
 - **Problem:** Ollama (v0.13.3+), LM Studio, llama-server all ship it; agent
   SDKs are migrating from chat-completions.
 - **Design:** thin translation layer over the existing chat path: `input` →

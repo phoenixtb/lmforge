@@ -63,7 +63,7 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
   - 💻 **CPU / any hardware** → llama.cpp — universal fallback
   - ⚡ **Opt-in specialized engines** (`lmforge engine install <id>`, never auto-selected) → [vLLM](https://github.com/vllm-project/vllm) and [ExLlamaV3](https://github.com/turboderp-org/exllamav3) on NVIDIA sm_75+; [SGLang](https://github.com/sgl-project/sglang) is kept `experimental` (`--engine sglang`, sm_90–sm_103 only) — upstream `sgl-kernel` ships no consumer-Blackwell cubins, see [ADR-001](docs/architecture/ADR-001-engine-tiers.md)
 - **Engine tiers** — `default` / `opt-in` / `experimental`; `lmforge doctor` shows installed variants and which is active
-- **OpenAI-compatible API** — `/v1/chat/completions`, `/v1/embeddings`, `/v1/models`, `/v1/rerank`
+- **OpenAI-compatible API** — `/v1/chat/completions`, `/v1/responses` (stateless), `/v1/embeddings`, `/v1/models`, `/v1/rerank`
 - **Ollama-compatible API** — `/api/chat`, `/api/generate`, `/api/tags` for tools that expect Ollama
 - **Thinking / reasoning** — two-call `thinking_budget` workflow, live reasoning deltas, chat vs thinking sampling profiles; dedicated `:thinking` / `:reasoning` catalog models stay locked on (`native_reasoning`)
 - **MTP speculative decoding** — GGUF models with MTP heads get llama.cpp draft-MTP when VRAM headroom allows (catalog `:mtp` shortcuts)
@@ -356,6 +356,7 @@ export OPENAI_API_KEY=none    # no key required
 |---|---|---|
 | `/v1/models` | GET | List available models |
 | `/v1/chat/completions` | POST | Chat completion (streaming + non-streaming) |
+| `/v1/responses` | POST | Responses API adapter over the chat path (streaming + non-streaming, function tools, `text.format`). Stateless: `previous_response_id`, `conversation`, `background` and non-function tools return 400 |
 | `/v1/completions` | POST | Text completion |
 | `/v1/embeddings` | POST | Generate embeddings (batched, auto-chunked) |
 | `/v1/rerank` | POST | Rerank documents |

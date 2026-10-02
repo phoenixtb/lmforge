@@ -333,6 +333,91 @@ function Assert-E2eJsonSchema {
     }
 }
 
+# ── Batch 3 §3.1: /v1/responses ──────────────────────────────────────────────
+
+# `reasoning.effort = "none"` maps to think:false (mirrors the qwen3
+# `enable_thinking:false` the chat helpers send) so reasoning can't eat the
+# token budget before any answer text is produced. Mirrors the bash lib's
+# `e2e_responses_payload`.
+function Get-E2eResponsesBody {
+    param([string]$Text, [string]$Model, [int]$MaxTokens, [bool]$Stream)
+    @{
+        model             = $Model
+        input             = $Text
+        stream            = $Stream
+        max_output_tokens = $MaxTokens
+        temperature       = 0
+        reasoning         = @{ effort = "none" }
+    } | ConvertTo-Json -Depth 6 -Compress
+}
+
+function Invoke-E2eResponses {
+    param(
+        [string]$Text = "Say hello in one short sentence.",
+        [string]$Model = $script:ChatModel,
+        [int]$MaxTokens = $E2E_CHAT_MAX_TOKENS,
+        [string]$HostUrl = $script:LfHost
+    )
+    Invoke-RestMethod -Uri "$HostUrl/v1/responses" -Method Post `
+        -Body (Get-E2eResponsesBody -Text $Text -Model $Model -MaxTokens $MaxTokens -Stream $false) `
+        -ContentType "application/json" -TimeoutSec 180
+}
+
+# Streaming variant: returns the complete raw SSE text (same approach as
+# `Invoke-E2eChatToolsStream`).
+function Invoke-E2eResponsesStream {
+    param(
+        [string]$Text = "Say hello in one short sentence.",
+        [string]$Model = $script:ChatModel,
+        [int]$MaxTokens = $E2E_CHAT_MAX_TOKENS,
+        [string]$HostUrl = $script:LfHost
+    )
+    $resp = Invoke-WebRequest -Uri "$HostUrl/v1/responses" -Method Post -UseBasicParsing `
+        -Body (Get-E2eResponsesBody -Text $Text -Model $Model -MaxTokens $MaxTokens -Stream $true) `
+        -ContentType "application/json" -TimeoutSec 180
+    return [string]$resp.Content
+}
+
+# Concatenated message output_text parts of a non-stream Response object.
+function Get-E2eResponsesText {
+    param($Resp)
+    $sb = ""
+    foreach ($item in @($Resp.output)) {
+        if ($item.type -eq "message") {
+            foreach ($part in @($item.content)) {
+                if ($part.type -eq "output_text") { $sb += [string]$part.text }
+            }
+        }
+    }
+    return $sb
+}
+
+function Assert-E2eResponses {
+    param($Resp, [string]$Label = "responses")
+    if ([string]$Resp.status -ne "completed") {
+        throw "${Label}: status='$($Resp.status)' (want completed)"
+    }
+    if (-not (Get-E2eResponsesText -Resp $Resp).Trim()) { throw "${Label}: empty output_text" }
+}
+
+# Parse the raw SSE blob: returns Completed (response.completed event seen) and
+# Text (concatenated response.output_text.delta payloads).
+function Get-E2eResponsesStreamInfo {
+    param([string]$Sse)
+    $completed = $false
+    $text = ""
+    foreach ($line in ($Sse -split "`n")) {
+        $line = $line.TrimEnd("`r")
+        if ($line -eq "event: response.completed") { $completed = $true; continue }
+        if (-not $line.StartsWith("data: ")) { continue }
+        try {
+            $obj = $line.Substring(6) | ConvertFrom-Json -ErrorAction Stop
+            if ($obj.type -eq "response.output_text.delta") { $text += [string]$obj.delta }
+        } catch { continue }
+    }
+    [pscustomobject]@{ Completed = $completed; Text = $text }
+}
+
 function Invoke-E2eVlmText {
     param(
         [string]$Model = $script:VlmModel,

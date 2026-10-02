@@ -493,7 +493,9 @@ fn translate_openai_stream_to_ollama_ndjson(openai: Body) -> Body {
     let mut byte_stream = openai.into_data_stream();
 
     let s = stream! {
-        let mut line_buf = String::new();
+        // Bytes, not String: a multi-byte UTF-8 char split across chunks must
+        // be reassembled before decoding or it turns into U+FFFD.
+        let mut line_buf: Vec<u8> = Vec::new();
         let mut model_name = String::new();
         let mut got_terminal = false;
         // Batch 2 §2.1 — tool_calls accumulation (response path). OpenAI
@@ -511,11 +513,13 @@ fn translate_openai_stream_to_ollama_ndjson(openai: Body) -> Body {
                 Ok(b) => b,
                 Err(_) => break,
             };
-            line_buf.push_str(&String::from_utf8_lossy(&bytes));
+            line_buf.extend_from_slice(&bytes);
 
-            while let Some(nl) = line_buf.find('\n') {
-                let raw = line_buf[..nl].trim_end_matches('\r').to_string();
-                line_buf.drain(..=nl);
+            while let Some(nl) = line_buf.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = line_buf.drain(..=nl).collect();
+                let raw = String::from_utf8_lossy(&line[..nl])
+                    .trim_end_matches('\r')
+                    .to_string();
                 let Some(payload) = raw.strip_prefix("data: ") else { continue; };
                 let payload = payload.trim();
 
@@ -825,6 +829,23 @@ mod tests {
         let last: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
         assert_eq!(last["done"], true);
         assert!(last["total_duration"].as_u64().is_some());
+    }
+
+    #[tokio::test]
+    async fn translate_stream_reassembles_utf8_split_across_chunks() {
+        let sse = "data: {\"id\":\"x\",\"model\":\"m1\",\"choices\":[{\"delta\":{\"content\":\"নমস্কার 你好\"}}]}\n\n\
+                   data: [DONE]\n\n"
+            .as_bytes()
+            .to_vec();
+        // One byte per chunk guarantees every multi-byte char is split.
+        let chunks: Vec<Result<Bytes, std::io::Error>> =
+            sse.iter().map(|b| Ok(Bytes::from(vec![*b]))).collect();
+        let body = Body::from_stream(futures::stream::iter(chunks));
+        let translated = translate_openai_stream_to_ollama_ndjson(body);
+        let bytes = axum::body::to_bytes(translated, 64 * 1024).await.unwrap();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        let first: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(first["message"]["content"], "নমস্কার 你好");
     }
 
     #[tokio::test]

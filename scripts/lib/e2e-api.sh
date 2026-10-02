@@ -304,6 +304,57 @@ e2e_assert_json_schema_response() {
     return 0
 }
 
+# ── Batch 3 §3.1: /v1/responses ──────────────────────────────────────────────
+
+# `reasoning.effort:"none"` maps to think:false (mirrors the qwen3
+# `enable_thinking:false` the chat helpers send) so reasoning can't eat the
+# token budget before any answer text is produced.
+e2e_responses_payload() {
+    local model="$1" text="$2" max_tokens="$3" stream="$4"
+    jq -nc --arg m "$model" --arg t "$text" --argjson n "$max_tokens" --argjson s "$stream" \
+        '{model:$m,input:$t,stream:$s,max_output_tokens:$n,temperature:0,reasoning:{effort:"none"}}'
+}
+
+e2e_api_responses() {
+    local model="${1:-$CHAT_MODEL}" text="${2:-Say hello in one short sentence.}" max_tokens="${3:-${E2E_CHAT_MAX_TOKENS:-128}}"
+    curl -sf --max-time "${E2E_CHAT_TIMEOUT:-180}" -X POST "${LF_HOST}/v1/responses" \
+        -H "Content-Type: application/json" \
+        -d "$(e2e_responses_payload "$model" "$text" "$max_tokens" false)"
+}
+
+e2e_api_responses_stream() {
+    local model="${1:-$CHAT_MODEL}" text="${2:-Say hello in one short sentence.}" max_tokens="${3:-${E2E_CHAT_MAX_TOKENS:-128}}"
+    curl -sN --max-time "${E2E_CHAT_TIMEOUT:-180}" -X POST "${LF_HOST}/v1/responses" \
+        -H "Content-Type: application/json" \
+        -d "$(e2e_responses_payload "$model" "$text" "$max_tokens" true)"
+}
+
+# Non-stream: status must be "completed" and the concatenated message
+# output_text parts non-empty (the SDKs' `output_text` property).
+e2e_assert_responses_response() {
+    local resp="$1" label="${2:-responses}" status text
+    status=$(echo "$resp" | jq -r '.status // ""' 2>/dev/null) \
+        || { E2E_ASSERT_MSG="${label}: invalid JSON — ${resp:0:200}"; return 1; }
+    if [[ "$status" != "completed" ]]; then
+        E2E_ASSERT_MSG="${label}: status='${status}' (want completed) — ${resp:0:200}"
+        return 1
+    fi
+    text=$(echo "$resp" | jq -r '[.output[]? | select(.type=="message") | .content[]? | select(.type=="output_text") | .text] | join("")' 2>/dev/null)
+    if [[ -z "${text// }" ]]; then
+        E2E_ASSERT_MSG="${label}: empty output_text — ${resp:0:200}"
+        return 1
+    fi
+    return 0
+}
+
+# Prints the concatenated `response.output_text.delta` payloads from a raw SSE
+# blob (each `data:` line is a full JSON event; no [DONE] sentinel).
+e2e_extract_responses_stream_text() {
+    local sse="$1"
+    printf '%s\n' "$sse" | grep '^data: ' | sed 's/^data: //' \
+        | jq -rj 'select(.type=="response.output_text.delta") | .delta' 2>/dev/null || true
+}
+
 e2e_api_vlm_text() {
     local model="${1:-$VLM_MODEL}" text="${2:-$E2E_VLM_TEXT}" max_tokens="${3:-${E2E_VLM_TEXT_MAX_TOKENS:-128}}"
     e2e_api_chat "$model" "$text" "$max_tokens"

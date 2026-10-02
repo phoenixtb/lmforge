@@ -11,6 +11,7 @@ pub mod ollama;
 pub mod openai;
 pub mod proxy;
 pub mod rerank;
+pub mod responses;
 pub mod sysinfo;
 pub mod thinking;
 
@@ -286,6 +287,7 @@ pub fn build_router(
         .route("/metrics", get(metrics::metrics_handler))
         // OpenAI-compatible endpoints
         .route("/v1/chat/completions", post(openai::chat_completions))
+        .route("/v1/responses", post(responses::responses))
         .route("/v1/completions", post(openai::completions))
         .route("/v1/embeddings", post(openai::embeddings))
         .route("/v1/rerank", post(rerank::rerank))
