@@ -340,7 +340,7 @@ impl ProcessPoolResidency {
                 "Port is held — attempting orphan engine cleanup via PID file then lsof"
             );
             kill_orphan_engine(&engine_pid_file);
-            kill_port_holder_via_lsof(port);
+            self.kill_owned_port_holders(port);
             let mut freed = false;
             for _ in 0..10 {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -421,6 +421,14 @@ impl ProcessPoolResidency {
         }
     }
 
+    /// Kill listeners on `port` that this instance spawned (argv mentions our
+    /// data or models dir). Another instance's engine or an unrelated app is
+    /// left alone — `allocate_port` then moves on to the next port.
+    fn kill_owned_port_holders(&self, port: u16) {
+        let roots = crate::util::port_owner::owned_roots(&[&self.data_dir, &self.models_dir]);
+        crate::util::port_owner::kill_owned_listeners(port, &roots, &[]);
+    }
+
     /// Get next available port — checks both active_slots AND whether the OS port is actually free.
     fn allocate_port(&self) -> u16 {
         let used_ports: std::collections::HashSet<u16> =
@@ -443,7 +451,7 @@ impl ProcessPoolResidency {
                 .join("engines")
                 .join(format!("{}_{}.pid", self.config.id, port));
             kill_orphan_engine(&pid_file);
-            kill_port_holder_via_lsof(port);
+            self.kill_owned_port_holders(port);
             if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
                 info!(port, "Port freed after orphan cleanup");
                 break;
@@ -1068,37 +1076,6 @@ fn kill_orphan_engine(pid_file: &std::path::Path) {
                 .output();
         }
         let _ = std::fs::remove_file(pid_file);
-    }
-}
-
-/// Use `lsof -ti :PORT` to find any process holding a port and send SIGKILL.
-fn kill_port_holder_via_lsof(port: u16) {
-    let output = std::process::Command::new("lsof")
-        .args(["-ti", &format!(":{}", port)])
-        .output();
-
-    if let Ok(out) = output {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        for line in stdout.lines() {
-            if let Ok(pid) = line.trim().parse::<u32>() {
-                warn!(
-                    pid,
-                    port, "Sending SIGKILL to un-tracked port holder (via lsof)"
-                );
-                #[cfg(unix)]
-                {
-                    use nix::sys::signal::{Signal, kill};
-                    use nix::unistd::Pid;
-                    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
-                }
-                #[cfg(windows)]
-                {
-                    let _ = crate::util::subprocess::hidden("taskkill")
-                        .args(["/F", "/PID", &pid.to_string()])
-                        .output();
-                }
-            }
-        }
     }
 }
 
