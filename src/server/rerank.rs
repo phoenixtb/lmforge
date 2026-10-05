@@ -89,12 +89,27 @@ pub async fn rerank(State(state): State<AppState>, body: Bytes) -> impl IntoResp
             "'query' field is required",
         );
     };
+    if query.trim().is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            None,
+            "'query' must not be empty",
+        );
+    }
 
     let documents: Vec<String> = match req.get("documents").and_then(|v| v.as_array()) {
-        Some(docs) if !docs.is_empty() => docs
-            .iter()
-            .map(|d| d.as_str().unwrap_or("").to_string())
-            .collect(),
+        Some(docs) if !docs.is_empty() => match document_texts(docs) {
+            Ok(texts) => texts,
+            Err(msg) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request_error",
+                    None,
+                    &msg,
+                );
+            }
+        },
         Some(_) => {
             return error_response(
                 StatusCode::BAD_REQUEST,
@@ -330,6 +345,30 @@ pub async fn rerank(State(state): State<AppState>, body: Bytes) -> impl IntoResp
         .unwrap()
         .into_response();
     super::attach_inflight_guard(response, guard)
+}
+
+/// Document texts from the request: each item is a string or an object with
+/// a string `text` field (Jina / Cohere-v1 / oMLX shape). Anything else is
+/// rejected by index — never silently scored as an empty document.
+fn document_texts(docs: &[Value]) -> Result<Vec<String>, String> {
+    docs.iter()
+        .enumerate()
+        .map(|(i, d)| match d {
+            Value::String(s) => Ok(s.clone()),
+            Value::Object(o) => o
+                .get("text")
+                .and_then(|t| t.as_str())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    format!(
+                        "documents[{i}] must be a string or an object with a string 'text' field"
+                    )
+                }),
+            _ => Err(format!(
+                "documents[{i}] must be a string or an object with a string 'text' field"
+            )),
+        })
+        .collect()
 }
 
 fn error_response(
@@ -687,6 +726,20 @@ mod tests {
                 assert!((0.0..=1.0).contains(&s), "{kind:?}: {s}");
             }
         }
+    }
+
+    #[test]
+    fn documents_may_be_strings_or_text_objects() {
+        let docs = vec![json!("plain"), json!({"text": "wrapped", "id": 7})];
+        assert_eq!(document_texts(&docs).unwrap(), vec!["plain", "wrapped"]);
+    }
+
+    #[test]
+    fn malformed_documents_are_rejected_by_index_not_scored_as_empty() {
+        let err = document_texts(&[json!("ok"), json!(42)]).unwrap_err();
+        assert!(err.contains("documents[1]"), "{err}");
+        let err = document_texts(&[json!({"body": "x"})]).unwrap_err();
+        assert!(err.contains("documents[0]"), "{err}");
     }
 
     #[test]

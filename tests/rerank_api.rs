@@ -568,3 +568,58 @@ async fn other_engine_errors_pass_through() {
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 }
+
+// ── Request shape ────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn text_object_documents_are_scored_by_their_text() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(write_model_index(tmp.path(), "mlx", "omlx")).unwrap();
+    let engine = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/rerank"))
+        .respond_with(rerank_reply(&[0.9, 0.1]))
+        .mount(&engine)
+        .await;
+    let router = build_router(tmp.path().to_owned(), "omlx", engine.address().port());
+
+    let (status, body) = post_rerank(
+        &router,
+        json!({"model": MODEL, "query": "q", "return_documents": true,
+               "documents": [{"text": "first"}, "second"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let sent = &received_rerank_bodies(&engine).await[0];
+    assert_eq!(sent["documents"], json!(["first", "second"]));
+    assert_eq!(body["results"][0]["document"]["text"], "first");
+}
+
+#[tokio::test]
+async fn malformed_documents_and_empty_queries_are_400s() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(write_model_index(tmp.path(), "mlx", "omlx")).unwrap();
+    let engine = MockServer::start().await;
+    let router = build_router(tmp.path().to_owned(), "omlx", engine.address().port());
+
+    let (status, body) = post_rerank(
+        &router,
+        json!({"model": MODEL, "query": "q", "documents": ["a", 5]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("documents[1]")
+    );
+
+    let (status, _) = post_rerank(
+        &router,
+        json!({"model": MODEL, "query": "  ", "documents": ["a"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(engine.received_requests().await.unwrap().is_empty());
+}
