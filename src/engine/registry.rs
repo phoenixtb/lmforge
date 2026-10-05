@@ -922,7 +922,7 @@ mod tests {
         assert_eq!(selected.version, "0.7.0");
         // Version gate: floor at the build that fixed the Qwen3-VL stream crash.
         assert_eq!(selected.min_version.as_deref(), Some("0.4.4"));
-        assert_eq!(selected.last_known_good_version.as_deref(), Some("0.4.4"));
+        assert_eq!(selected.last_known_good_version.as_deref(), Some("0.7.0"));
     }
 
     #[test]

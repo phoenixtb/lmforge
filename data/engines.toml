@@ -30,9 +30,10 @@ name            = "oMLX"
 # `/lf/status`, the rerank 501 message, and the default last-known-good hint).
 # It does NOT pin what Homebrew installs — brew always installs the current
 # formula — so it must track the build actually validated, not the floor.
-# 0.7.0 (2026-10-05): rerank verified directly against the engine — it serves
-# the mlx catalog's Qwen3-Reranker mxfp8 and returns probabilities. Promote
-# `last_known_good_version` once the macOS E2E gate has run on it.
+# 0.7.0 (2026-10-06): full macOS multi-model E2E (bash + PowerShell harnesses:
+# co-load, burst, VLM, rerank discrimination + long inputs, thinking, tools,
+# json_schema, responses) passed; serves the mlx catalog's Qwen3-Reranker mxfp8
+# and returns probabilities.
 version         = "0.7.0"
 # Version gate. oMLX 0.4.0 moved the VLM loader onto a separate executor thread,
 # leaving Qwen3-VL's mRoPE `inv_freq` lazy and pinned to the construction
@@ -43,7 +44,7 @@ version         = "0.7.0"
 # but predate current model support, so the floor is 0.4.4. No upper cap —
 # advisory only.
 min_version              = "0.4.4"
-last_known_good_version  = "0.4.4"
+last_known_good_version  = "0.7.0"
 tier            = "default"
 matches_os      = "darwin"
 matches_arch    = "aarch64"
