@@ -220,7 +220,7 @@ function Invoke-E2eChatTools {
         stream      = $false
         max_tokens  = $MaxTokens
         temperature = 0
-        tools       = (Get-E2eToolsWeather)
+        tools       = @(Get-E2eToolsWeather)   # @(): a one-element function result unrolls to an object
         tool_choice = @{ type = "function"; function = @{ name = "get_weather" } }
     }
     if ($Model -match 'qwen3') { $body.chat_template_kwargs = @{ enable_thinking = $false } }
@@ -245,7 +245,7 @@ function Invoke-E2eChatToolsStream {
         stream      = $true
         max_tokens  = $MaxTokens
         temperature = 0
-        tools       = (Get-E2eToolsWeather)
+        tools       = @(Get-E2eToolsWeather)   # @(): a one-element function result unrolls to an object
         tool_choice = @{ type = "function"; function = @{ name = "get_weather" } }
     }
     if ($Model -match 'qwen3') { $body.chat_template_kwargs = @{ enable_thinking = $false } }

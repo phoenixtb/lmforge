@@ -55,6 +55,8 @@ e2e_model_installed() {
 }
 
 # e2e_pull_if_needed MODEL REF_VAR_NAME  → sets ref to 1 if newly downloaded.
+# Prints "<model> downloaded" / "<model> already present"; callers using $(...)
+# must read that message, since the ref assignment dies with the subshell.
 #
 # `lmforge pull` prints a native indicatif progress bar to STDERR and the status
 # lines ("already installed", …) to STDOUT. We capture stdout (for the

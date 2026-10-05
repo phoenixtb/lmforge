@@ -131,10 +131,19 @@ function Write-ReportFile {
     Write-Host "  results captured: $ResultsDir" -ForegroundColor DarkGray
 }
 
-function Pull-Optional([string]$Model, [ref]$PulledFlag, [ref]$Enabled) {
+# [ref] on a hashtable element ([ref]$Pulled[$m]) binds a copy, so "downloaded
+# this run" is recorded from the helper's return value instead.
+function Pull-Tracked([string]$Model) {
+    $flag = $false
+    $msg = Pull-E2eModelIfNeeded -Bin $Bin -Model $Model -PulledFlag ([ref]$flag)
+    if ($msg -eq "downloaded") { $script:Pulled[$Model] = $true }
+    return $msg
+}
+
+function Pull-Optional([string]$Model, [ref]$Enabled) {
     if (-not $Enabled.Value) { return }
     try {
-        $msg = Pull-E2eModelIfNeeded -Bin $Bin -Model $Model -PulledFlag $PulledFlag
+        $msg = Pull-Tracked $Model
         Ok "$msg $Model"
     } catch {
         Warn "Optional pull failed for ${Model}: $($_.Exception.Message) - skipping suite"
@@ -199,16 +208,13 @@ try {
 
     if (-not $SkipPull) {
         Info "Pulling models..."
-        foreach ($pair in @(
-            @($script:EmbedModel, [ref]$Pulled[$script:EmbedModel]),
-            @($script:ChatModel,  [ref]$Pulled[$script:ChatModel])
-        )) {
-            $msg = Pull-E2eModelIfNeeded -Bin $Bin -Model $pair[0] -PulledFlag $pair[1]
-            Ok "$msg $($pair[0])"
+        foreach ($m in @($script:EmbedModel, $script:ChatModel)) {
+            $msg = Pull-Tracked $m
+            Ok "$msg $m"
         }
-        Pull-Optional $script:VlmModel    ([ref]$Pulled[$script:VlmModel])    ([ref]$DoVlm)
-        Pull-Optional $script:RerankModel ([ref]$Pulled[$script:RerankModel]) ([ref]$DoRerank)
-        Pull-Optional $script:MtpModel    ([ref]$Pulled[$script:MtpModel])    ([ref]$DoMtp)
+        Pull-Optional $script:VlmModel    ([ref]$DoVlm)
+        Pull-Optional $script:RerankModel ([ref]$DoRerank)
+        Pull-Optional $script:MtpModel    ([ref]$DoMtp)
     }
 
     if (-not $SkipStart) {
@@ -392,11 +398,8 @@ try {
                             Record "TC-E11" "SKIP" $label "not installed (SKIP_PULL=1)"; continue
                         }
                     } else {
-                        # [ref] on a hashtable element binds a copy; use a local flag.
-                        $pulledNow = $false
                         try {
-                            $null = Pull-E2eModelIfNeeded -Bin $Bin -Model $rmodel -PulledFlag ([ref]$pulledNow)
-                            if ($pulledNow) { $Pulled[$rmodel] = $true }
+                            $null = Pull-Tracked $rmodel
                         } catch {
                             Record "TC-E11" "FAIL" $label "pull failed: $($_.Exception.Message)"; continue
                         }

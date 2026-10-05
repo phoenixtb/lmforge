@@ -383,6 +383,9 @@ resolve_lf_bin() { e2e_resolve_bin; }
 pull_if_needed() {
     local msg
     msg=$(e2e_pull_if_needed "$1" "$2") || fail "$msg"
+    # $(...) is a subshell: the helper's ref-var assignment is lost, so mark
+    # "downloaded this run" from its message (cleanup removes only those).
+    [[ "$msg" == *"$1 downloaded"* ]] && printf -v "$2" '%s' 1
     ok "$msg"
 }
 
@@ -392,6 +395,7 @@ pull_optional() {
     echo "  Pulling optional: ${model}"
     local msg
     if msg=$(e2e_pull_if_needed "$model" "$ref_name" 2>&1); then
+        [[ "$msg" == *"$model downloaded"* ]] && printf -v "$ref_name" '%s' 1
         ok "$msg"
     else
         warn "Optional pull failed for ${model} — skipping ${suite_var} tests"
@@ -414,7 +418,8 @@ cleanup() {
         "RERANK_PULLED_BY_TEST:$RERANK_MODEL" \
         "MTP_PULLED_BY_TEST:$MTP_MODEL"
     local m
-    for m in "${RERANK_EXTRA_PULLED[@]}"; do
+    # ${a[@]+...}: bash 3.2 (macOS) treats an empty array as unbound under set -u.
+    for m in ${RERANK_EXTRA_PULLED[@]+"${RERANK_EXTRA_PULLED[@]}"}; do
         echo "  removing $m (downloaded this run)"
         "$LF_BIN" models remove "$m" 2>/dev/null || true
     done
