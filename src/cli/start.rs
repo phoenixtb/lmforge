@@ -230,6 +230,8 @@ pub async fn run(
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
 
     let state = manager.state();
+    let shutdown_state = state.clone();
+    let shutdown_tx = cmd_tx.clone();
     let residency_kind = manager.residency_kind();
     let pull_in_flight = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     println!("\n✓ LMForge Orchestrator ready");
@@ -384,16 +386,73 @@ pub async fn run(
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(async {
-        tokio::signal::ctrl_c().await.ok();
+        shutdown_signal().await;
         println!("\n⚙ Shutting down...");
     })
     .await?;
 
+    // Stop engines through the manager (graceful per-adapter stop), bounded.
+    // Aborting the supervisor alone only drops the engine handles.
+    drain_engines(&shutdown_tx, &shutdown_state).await;
     supervise_handle.abort();
     engine::daemon::remove_pid_file(&data_dir);
     println!("✓ LMForge stopped.");
 
     Ok(())
+}
+
+/// Ctrl-C, or SIGTERM on Unix — what systemd / launchd send on `service stop`
+/// and what `lmforge stop` falls back to. The daemon used to handle only
+/// Ctrl-C, so a SIGTERM killed it on the spot and every engine was reparented
+/// to init, holding VRAM / RAM until the next start (seen in 2026-10-06 QA).
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = term.recv() => {}
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "SIGTERM handler unavailable; only Ctrl-C triggers a clean shutdown");
+                tokio::signal::ctrl_c().await.ok();
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await.ok();
+    }
+}
+
+/// Ask the manager to unload every model and wait (≤ 15 s) until it reports
+/// none running.
+async fn drain_engines(
+    cmd_tx: &tokio::sync::mpsc::Sender<crate::engine::manager::ManagerCommand>,
+    state: &std::sync::Arc<tokio::sync::RwLock<crate::engine::manager::EngineState>>,
+) {
+    if state.read().await.running_models.is_empty() {
+        return;
+    }
+    if cmd_tx
+        .send(crate::engine::manager::ManagerCommand::UnloadAll)
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::time::Instant::now() < deadline {
+        if state.read().await.running_models.is_empty() {
+            info!("All engines stopped");
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    warn!("Engines still running after 15 s; exiting (handles are dropped and killed)");
 }
 
 /// Execute a synchronous pending migration drain after dirs are ready.
