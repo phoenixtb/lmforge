@@ -154,6 +154,9 @@ fn llamacpp_variant_summary(data_dir: &std::path::Path, profile: &HardwareProfil
         vulkan_installed: vulkan,
         cpu_installed: cpu,
         prefer_cuda13,
+        force_portable: crate::engine::variant::portable_override(
+            std::env::var("LMFORGE_LLAMACPP_VARIANT").ok().as_deref(),
+        ),
     };
     let active = select(profile, &state);
 
@@ -206,6 +209,31 @@ async fn install(
     if id == "llamacpp"
         && let Some(variant_str) = variant
     {
+        use std::str::FromStr;
+        let v = crate::engine::variant::LlamaVariant::from_str(variant_str)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        // vulkan / cpu are upstream's portable builds — not in the CUDA-only
+        // variants manifest, so they were advertised here but always failed.
+        if matches!(
+            v,
+            crate::engine::variant::LlamaVariant::Vulkan
+                | crate::engine::variant::LlamaVariant::Cpu
+        ) {
+            let engine = registry
+                .get("llamacpp")
+                .ok_or_else(|| anyhow::anyhow!("llamacpp is missing from the engine registry"))?;
+            let r =
+                crate::engine::installer::install_portable_llamacpp(engine, profile, data_dir, v)
+                    .await?;
+            println!();
+            println!("  ✓ Installed: llamacpp ({v}, upstream portable build)");
+            println!("    Path:    {}", r.install_path);
+            println!(
+                "    Activate: used automatically when no CUDA variant is installed; to prefer \
+                 it over one, start with `LMFORGE_LLAMACPP_VARIANT={v}`."
+            );
+            return Ok(());
+        }
         return install_llamacpp_variant(profile, data_dir, variant_str).await;
     }
 

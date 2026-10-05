@@ -1752,7 +1752,33 @@ pub fn scan_variant_state(
         prefer_cuda13: std::env::var("LMFORGE_LLAMACPP_VARIANT")
             .map(|s| s.eq_ignore_ascii_case("cuda13"))
             .unwrap_or(false),
+        force_portable: crate::engine::variant::portable_override(
+            std::env::var("LMFORGE_LLAMACPP_VARIANT").ok().as_deref(),
+        ),
     }
+}
+
+/// Install upstream's portable `llama.cpp` build — `vulkan` (GPU via the
+/// system Vulkan loader) or `cpu` — into the flat `<data_dir>/engines/` layout,
+/// whatever GPU the host has. The manifest only carries CUDA variants, so this
+/// is how `lmforge engine install llamacpp --variant vulkan|cpu` is served.
+pub async fn install_portable_llamacpp(
+    engine: &EngineConfig,
+    profile: &HardwareProfile,
+    data_dir: &std::path::Path,
+    variant: crate::engine::variant::LlamaVariant,
+) -> Result<InstallResult> {
+    use crate::engine::variant::LlamaVariant;
+    use crate::hardware::probe::GpuVendor;
+    let mut forced = profile.clone();
+    forced.gpu_vendor = match variant {
+        // Vendor-neutral GPU → resolve_platform picks the Vulkan build on
+        // Linux and Windows (NVIDIA would select Windows' CUDA prebuilt).
+        LlamaVariant::Vulkan => GpuVendor::Amd,
+        LlamaVariant::Cpu => GpuVendor::None,
+        other => anyhow::bail!("`{other}` is a manifest variant, not a portable build"),
+    };
+    install_via_binary(engine, &forced, data_dir).await
 }
 
 fn variant_binary_name(profile: &HardwareProfile) -> &'static str {
