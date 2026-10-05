@@ -24,6 +24,9 @@
 #    CHAT_MODEL    Chat model shortcut  (default: qwen3.5:2b:4bit)
 #    VLM_MODEL     Vision model shortcut (default: qwen3-vl:2b:4bit) — skip via --skip-vlm / DO_VLM=0
 #    RERANK_MODEL  Rerank model shortcut (default: qwen3-reranker:0.6b:8bit) — skip via --skip-rerank / DO_RERANK=0
+#                  TC-E11 also checks one reranker per other family on the active
+#                  engine (E2E_RERANK_EXTRA_LLAMACPP / _OMLX); E2E_RERANK_ALL=1
+#                  checks every reranker in that engine's catalog.
 #    MTP_MODEL     MTP model shortcut (default: qwen3.5:4b:mtp:4bit) — skip via --skip-mtp / DO_MTP=0
 #    LF_HOST       LMForge API host     (default: http://127.0.0.1:11430)
 #    LF_BIN        Path to lmforge bin  (default: ./target/debug/lmforge, else PATH)
@@ -373,6 +376,7 @@ CHAT_PULLED_BY_TEST=0
 VLM_PULLED_BY_TEST=0
 RERANK_PULLED_BY_TEST=0
 MTP_PULLED_BY_TEST=0
+RERANK_EXTRA_PULLED=()   # TC-E11 family rerankers this run downloaded
 
 resolve_lf_bin() { e2e_resolve_bin; }
 
@@ -409,6 +413,11 @@ cleanup() {
         "VLM_PULLED_BY_TEST:$VLM_MODEL" \
         "RERANK_PULLED_BY_TEST:$RERANK_MODEL" \
         "MTP_PULLED_BY_TEST:$MTP_MODEL"
+    local m
+    for m in "${RERANK_EXTRA_PULLED[@]}"; do
+        echo "  removing $m (downloaded this run)"
+        "$LF_BIN" models remove "$m" 2>/dev/null || true
+    done
 }
 trap cleanup EXIT
 
@@ -838,27 +847,64 @@ if [[ "$DO_RERANK" -eq 1 ]]; then
         warn "TC-E11: active engine lacks reranking — skipping"
         record_skip "TC-E11" "Rerank endpoint" "engine lacks reranking"
     else
-        timer_start "rerank"
-        if resp=$(e2e_api_rerank "$RERANK_MODEL" 2>&1); then
+        # Discrimination, per reranker: a fixed relevant/irrelevant pair must
+        # come back as probabilities with relevant > 0.5 and a clear margin.
+        # A non-discriminating model (e.g. a headless GGUF scoring every
+        # document ≈ equal, or refused with 422) FAILS here.
+        rerank_engine=$(e2e_lf_status | jq -r '.engine.id // empty' 2>/dev/null)
+        while IFS= read -r rmodel; do
+            [[ -n "$rmodel" ]] || continue
+            label="Rerank discrimination (${rmodel})"
+            if [[ "$rmodel" != "$RERANK_MODEL" ]]; then
+                if [[ "$SKIP_PULL" -eq 1 ]]; then
+                    if ! "$LF_BIN" models list 2>/dev/null | grep -q "^${rmodel} "; then
+                        record_skip "TC-E11" "$label" "not installed (SKIP_PULL=1)"
+                        continue
+                    fi
+                else
+                    # $(...) is a subshell, so read the helper's message
+                    # rather than its ref-var flag.
+                    if ! msg=$(e2e_pull_if_needed "$rmodel" _unused 2>&1); then
+                        warn "TC-E11: pull failed for ${rmodel}"
+                        record_fail "TC-E11" "$label" "pull failed: ${msg:0:200}"
+                        continue
+                    fi
+                    [[ "$msg" == *"$rmodel downloaded"* ]] && RERANK_EXTRA_PULLED+=("$rmodel")
+                fi
+            fi
+            timer_start "rerank"
+            out=$(e2e_api_rerank_pair "$rmodel")
             rerank_ms=$(timer_end "rerank")
-            if e2e_assert_rerank_response "$resp" "TC-E11"; then
-                count=$(echo "$resp" | jq -r '.results | length' 2>/dev/null || echo 0)
-                printf "  ${GREEN}✓${NC} Rerank returned ${count} result(s)  ${DIM}%sms${NC}\n" "$rerank_ms"
-                record_pass "TC-E11" "Rerank endpoint" "${rerank_ms}ms count=${count}"
+            if e2e_assert_rerank_discrimination "$out" "TC-E11"; then
+                printf "  ${GREEN}✓${NC} %s  %s  ${DIM}%sms${NC}\n" "$rmodel" "$E2E_RERANK_DETAIL" "$rerank_ms"
+                record_pass "TC-E11" "$label" "${rerank_ms}ms ${E2E_RERANK_DETAIL}"
             else
-                record_fail "TC-E11" "Rerank endpoint" "${E2E_ASSERT_MSG}"
-                warn "TC-E11: assertion failed"
+                warn "TC-E11: ${E2E_ASSERT_MSG}"
+                record_fail "TC-E11" "$label" "${E2E_ASSERT_MSG}"
             fi
+        done < <(e2e_rerank_models_for_engine "$rerank_engine")
+
+        # Long inputs (primary reranker): ~600 tokens used to exceed
+        # llama-server's 512-token micro-batch (HTTP 500); one ~5,000-token
+        # document must be truncated, never fail the whole request.
+        long600=$(e2e_rerank_long_document 450)
+        E2E_ASSERT_MSG=""
+        out=$(e2e_api_rerank_docs "$RERANK_MODEL" "$E2E_RERANK_DISC_QUERY" \
+            "$(jq -nc --arg d "$long600" '[$d]')")
+        if [[ "${out%% *}" == 200 ]] && e2e_assert_rerank_response "${out#* }" "TC-E11L"; then
+            record_pass "TC-E11L" "Rerank ~600-token document" "200"
         else
-            timer_end "rerank" >/dev/null
-            diag=$(e2e_rerank_diag "$RERANK_MODEL")
-            if [[ "$(e2e_diag_class "$diag")" == fail ]]; then
-                warn "TC-E11: engine error — $diag"
-                record_fail "TC-E11" "Rerank endpoint" "$diag"
-            else
-                warn "TC-E11 skipped: $diag"
-                record_skip "TC-E11" "Rerank endpoint" "$diag"
-            fi
+            record_fail "TC-E11L" "Rerank ~600-token document" "${E2E_ASSERT_MSG:-HTTP ${out:0:300}}"
+            E2E_ASSERT_MSG=""
+        fi
+        long5000=$(e2e_rerank_long_document 4000)
+        out=$(e2e_api_rerank_docs "$RERANK_MODEL" "$E2E_RERANK_DISC_QUERY" \
+            "$(jq -nc --arg r "$E2E_RERANK_DISC_RELEVANT" --arg d "$long5000" --arg i "$E2E_RERANK_DISC_IRRELEVANT" '[$r,$d,$i]')")
+        if [[ "${out%% *}" == 200 ]] && [[ "$(echo "${out#* }" | jq '.results | length' 2>/dev/null)" == 3 ]]; then
+            record_pass "TC-E11L" "Rerank 5,000-token document among short ones" \
+                "200 truncated=$(echo "${out#* }" | jq -c '.meta.truncated_documents // []')"
+        else
+            record_fail "TC-E11L" "Rerank 5,000-token document among short ones" "HTTP ${out:0:300}"
         fi
     fi
 fi

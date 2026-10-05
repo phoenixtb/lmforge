@@ -394,6 +394,44 @@ e2e_api_rerank() {
             '{model:$m,query:$q,documents:$docs,top_n:3}')"
 }
 
+# TC-E11 discrimination request: documents = [irrelevant, relevant].
+e2e_api_rerank_pair() {
+    local model="${1:-$RERANK_MODEL}"
+    e2e_api_rerank_docs "$model" "$E2E_RERANK_DISC_QUERY" \
+        "$(jq -nc --arg i "$E2E_RERANK_DISC_IRRELEVANT" --arg r "$E2E_RERANK_DISC_RELEVANT" '[$i,$r]')"
+}
+
+# POST /v1/rerank without -f: prints "<http_code> <body>" so callers can
+# assert on 4xx/5xx bodies (a refused headless GGUF answers 422).
+e2e_api_rerank_docs() {
+    local model="$1" query="$2" docs="$3" body code
+    body="$(mktemp)"
+    code=$(curl -s -o "$body" -w "%{http_code}" --max-time "${E2E_RERANK_TIMEOUT:-180}" \
+        -X POST "${LF_HOST}/v1/rerank" -H "Content-Type: application/json" \
+        -d "$(jq -nc --arg m "$model" --arg q "$query" --argjson docs "$docs" \
+            '{model:$m,query:$q,documents:$docs}')" 2>/dev/null)
+    printf '%s %s' "${code:-000}" "$(cat "$body")"
+    rm -f "$body"
+}
+
+# Rerankers TC-E11 covers on the active engine: RERANK_MODEL plus one per
+# remaining family (E2E_RERANK_EXTRA_*), or with E2E_RERANK_ALL=1 every
+# reranker shortcut in that engine's catalog.
+e2e_rerank_models_for_engine() {
+    local engine="$1" fmt extra
+    case "$engine" in
+        omlx)     fmt=mlx;  extra="$E2E_RERANK_EXTRA_OMLX" ;;
+        llamacpp) fmt=gguf; extra="$E2E_RERANK_EXTRA_LLAMACPP" ;;
+        *)        fmt="";   extra="" ;;
+    esac
+    if [[ "${E2E_RERANK_ALL:-0}" -eq 1 && -n "$fmt" && -f "${E2E_REPO_ROOT:-.}/data/catalogs/$fmt.json" ]]; then
+        jq -r 'keys[] | select(startswith("_") | not) | select(test("rerank"))' \
+            "${E2E_REPO_ROOT:-.}/data/catalogs/$fmt.json"
+        return
+    fi
+    printf '%s\n' "$RERANK_MODEL" $extra | awk 'NF && !seen[$0]++'
+}
+
 e2e_api_mtp_warm() {
     local model="${1:-$MTP_MODEL}" max_tokens="${2:-${E2E_MTP_MAX_TOKENS:-256}}"
     LMFORGE_SPECULATIVE_MODE=auto \
@@ -503,11 +541,45 @@ e2e_assert_rerank_response() {
     local resp="$1" label="${2:-rerank}"
     local count
     count=$(echo "$resp" | jq -r '.results | length' 2>/dev/null || echo 0)
-    if [[ "$count" -ge 1 ]]; then
-        return 0
+    if [[ "$count" -lt 1 ]]; then
+        E2E_ASSERT_MSG="${label}: no results — ${resp:0:200}"
+        return 1
     fi
-    E2E_ASSERT_MSG="${label}: no results — ${resp:0:200}"
-    return 1
+    if ! echo "$resp" | jq -e '.score_type == "probability"
+            and all(.results[]; .relevance_score >= 0 and .relevance_score <= 1)' >/dev/null 2>&1; then
+        E2E_ASSERT_MSG="${label}: scores not probabilities in [0,1] — ${resp:0:200}"
+        return 1
+    fi
+    return 0
+}
+
+# TC-E11: "<http_code> <body>" from e2e_api_rerank_pair must be a 200 whose
+# relevant document (index 1) is a probability > 0.5 and beats the irrelevant
+# one (index 0) by E2E_RERANK_MIN_MARGIN. Sets E2E_RERANK_DETAIL on success.
+e2e_assert_rerank_discrimination() {
+    local out="$1" label="${2:-rerank}" code resp rel irr
+    code="${out%% *}"; resp="${out#* }"
+    if [[ "$code" != "200" ]]; then
+        E2E_ASSERT_MSG="${label}: HTTP ${code} — ${resp:0:300}"
+        return 1
+    fi
+    if [[ "$(echo "$resp" | jq -r '.score_type' 2>/dev/null)" != "probability" ]]; then
+        E2E_ASSERT_MSG="${label}: score_type is not \"probability\" — ${resp:0:200}"
+        return 1
+    fi
+    rel=$(echo "$resp" | jq -r '.results[] | select(.index == 1) | .relevance_score' 2>/dev/null)
+    irr=$(echo "$resp" | jq -r '.results[] | select(.index == 0) | .relevance_score' 2>/dev/null)
+    if [[ -z "$rel" || -z "$irr" ]]; then
+        E2E_ASSERT_MSG="${label}: missing scores — ${resp:0:200}"
+        return 1
+    fi
+    if ! jq -ne --argjson r "$rel" --argjson i "$irr" --argjson m "$E2E_RERANK_MIN_MARGIN" \
+            '$r >= 0 and $r <= 1 and $i >= 0 and $i <= 1 and $r > 0.5 and ($r - $i) >= $m' >/dev/null; then
+        E2E_ASSERT_MSG="${label}: not discriminating — relevant=${rel} irrelevant=${irr} (need relevant>0.5, margin>=${E2E_RERANK_MIN_MARGIN})"
+        return 1
+    fi
+    E2E_RERANK_DETAIL="relevant=$(printf '%.4f' "$rel") irrelevant=$(printf '%.4f' "$irr")"
+    return 0
 }
 
 # Remove models flagged as pulled-by-test (associative via namerefs).

@@ -381,22 +381,56 @@ try {
             Warn "TC-E11: engine lacks reranking - skipping"
             Record "TC-E11" "SKIP" "Rerank endpoint" "engine lacks reranking"
         } else {
-            $sw = [System.Diagnostics.Stopwatch]::StartNew()
-            try {
-                $r = Invoke-E2eRerank -Model $script:RerankModel
-                $sw.Stop()
-                if (@($r.results).Count -lt 1) { throw "empty rerank results" }
-                Record "TC-E11" "PASS" "Rerank endpoint" "$($sw.ElapsedMilliseconds)ms"
-            } catch {
-                $sw.Stop()
-                $detail = Get-E2eRerankDiag -Model $script:RerankModel
-                if ((Get-E2eDiagClass $detail) -eq "fail") {
-                    Warn "TC-E11 engine error - $detail"
-                    Record "TC-E11" "FAIL" "Rerank endpoint" $detail
-                } else {
-                    Warn "TC-E11 skipped: $detail"
-                    Record "TC-E11" "SKIP" "Rerank endpoint" $detail
+            # Discrimination per reranker (mirrors multi_model_e2e.sh): a headless
+            # GGUF scoring every document ~equal, or refused with 422, FAILS here.
+            $engineId = (Get-E2eStatus).engine.id
+            foreach ($rmodel in (Get-E2eRerankModelsForEngine -Engine $engineId -RepoRoot $RepoRoot)) {
+                $label = "Rerank discrimination ($rmodel)"
+                if ($rmodel -ne $script:RerankModel) {
+                    if ($SkipPull) {
+                        if (-not (Test-E2eModelInstalled -Model $rmodel)) {
+                            Record "TC-E11" "SKIP" $label "not installed (SKIP_PULL=1)"; continue
+                        }
+                    } else {
+                        # [ref] on a hashtable element binds a copy; use a local flag.
+                        $pulledNow = $false
+                        try {
+                            $null = Pull-E2eModelIfNeeded -Bin $Bin -Model $rmodel -PulledFlag ([ref]$pulledNow)
+                            if ($pulledNow) { $Pulled[$rmodel] = $true }
+                        } catch {
+                            Record "TC-E11" "FAIL" $label "pull failed: $($_.Exception.Message)"; continue
+                        }
+                    }
                 }
+                $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                $r = Invoke-E2eRerankPair -Model $rmodel
+                $sw.Stop()
+                $why = Test-E2eRerankDiscrimination $r
+                if ($null -eq $why) {
+                    $rel = (@($r.Body.results) | Where-Object { $_.index -eq 1 }).relevance_score
+                    $irr = (@($r.Body.results) | Where-Object { $_.index -eq 0 }).relevance_score
+                    Record "TC-E11" "PASS" $label ("{0}ms relevant={1:N4} irrelevant={2:N4}" -f $sw.ElapsedMilliseconds, [double]$rel, [double]$irr)
+                } else {
+                    Warn "TC-E11: $why"
+                    Record "TC-E11" "FAIL" $label $why
+                }
+            }
+
+            # Long inputs (primary reranker): ~600 tokens used to exceed the
+            # 512-token micro-batch; one ~5,000-token document must not fail the call.
+            $r = Invoke-E2eRerankDocs -Model $script:RerankModel -Query $E2E_RERANK_DISC_QUERY `
+                -Documents @(Get-E2eRerankLongDocument 450)
+            if ($r.Code -eq 200 -and $r.Body.score_type -eq "probability" -and @($r.Body.results).Count -eq 1) {
+                Record "TC-E11L" "PASS" "Rerank ~600-token document" "200"
+            } else {
+                Record "TC-E11L" "FAIL" "Rerank ~600-token document" "HTTP $($r.Code) — $($r.Raw)"
+            }
+            $r = Invoke-E2eRerankDocs -Model $script:RerankModel -Query $E2E_RERANK_DISC_QUERY `
+                -Documents @($E2E_RERANK_DISC_RELEVANT, (Get-E2eRerankLongDocument 4000), $E2E_RERANK_DISC_IRRELEVANT)
+            if ($r.Code -eq 200 -and @($r.Body.results).Count -eq 3) {
+                Record "TC-E11L" "PASS" "Rerank 5,000-token document among short ones" "200 truncated=$(@($r.Body.meta.truncated_documents) -join ',')"
+            } else {
+                Record "TC-E11L" "FAIL" "Rerank 5,000-token document among short ones" "HTTP $($r.Code) — $($r.Raw)"
             }
         }
     }

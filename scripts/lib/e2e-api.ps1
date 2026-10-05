@@ -484,6 +484,62 @@ function Invoke-E2eRerank {
     Invoke-RestMethod -Uri "$HostUrl/v1/rerank" -Method Post -Body $body -ContentType "application/json" -TimeoutSec 120
 }
 
+# POST /v1/rerank without throwing on 4xx/5xx: returns @{ Code; Body (parsed or $null); Raw }.
+function Invoke-E2eRerankDocs {
+    param([string]$Model, [string]$Query, [string[]]$Documents, [string]$HostUrl = $script:LfHost)
+    $body = @{ model = $Model; query = $Query; documents = $Documents } | ConvertTo-Json -Depth 6 -Compress
+    $code = 0; $raw = ""
+    try {
+        $resp = Invoke-WebRequest -Uri "$HostUrl/v1/rerank" -Method Post -Body $body `
+            -ContentType "application/json" -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
+        $code = [int]$resp.StatusCode; $raw = [string]$resp.Content
+    } catch {
+        if ($_.Exception.Response) { try { $code = [int]$_.Exception.Response.StatusCode } catch {} }
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $raw = $_.ErrorDetails.Message } else { $raw = $_.Exception.Message }
+    }
+    $parsed = $null
+    try { $parsed = $raw | ConvertFrom-Json } catch {}
+    return @{ Code = $code; Body = $parsed; Raw = $raw }
+}
+
+# TC-E11 discrimination request: documents = [irrelevant, relevant].
+function Invoke-E2eRerankPair {
+    param([string]$Model = $script:RerankModel)
+    Invoke-E2eRerankDocs -Model $Model -Query $E2E_RERANK_DISC_QUERY `
+        -Documents @($E2E_RERANK_DISC_IRRELEVANT, $E2E_RERANK_DISC_RELEVANT)
+}
+
+# Returns $null when the pair discriminates (relevant index 1 is a probability
+# > 0.5 beating index 0 by E2E_RERANK_MIN_MARGIN), else the failure reason.
+function Test-E2eRerankDiscrimination {
+    param($Result)
+    $raw = [string]$Result.Raw
+    if ($raw.Length -gt 300) { $raw = $raw.Substring(0, 300) }
+    if ($Result.Code -ne 200 -or -not $Result.Body) { return "HTTP $($Result.Code) — $raw" }
+    if ($Result.Body.score_type -ne "probability") { return "score_type is not 'probability' — $raw" }
+    $rel = (@($Result.Body.results) | Where-Object { $_.index -eq 1 } | Select-Object -First 1).relevance_score
+    $irr = (@($Result.Body.results) | Where-Object { $_.index -eq 0 } | Select-Object -First 1).relevance_score
+    if ($null -eq $rel -or $null -eq $irr) { return "missing scores — $raw" }
+    $rel = [double]$rel; $irr = [double]$irr
+    if ($rel -lt 0 -or $rel -gt 1 -or $irr -lt 0 -or $irr -gt 1 -or $rel -le 0.5 -or ($rel - $irr) -lt $E2E_RERANK_MIN_MARGIN) {
+        return "not discriminating — relevant=$rel irrelevant=$irr (need relevant>0.5, margin>=$E2E_RERANK_MIN_MARGIN)"
+    }
+    return $null
+}
+
+# Rerankers TC-E11 covers on the active engine (mirrors e2e_rerank_models_for_engine).
+function Get-E2eRerankModelsForEngine {
+    param([string]$Engine, [string]$RepoRoot)
+    $fmt = switch ($Engine) { "omlx" { "mlx" } "llamacpp" { "gguf" } default { "" } }
+    $extra = switch ($Engine) { "omlx" { $E2E_RERANK_EXTRA_OMLX } "llamacpp" { $E2E_RERANK_EXTRA_LLAMACPP } default { "" } }
+    $catalog = if ($fmt) { Join-Path $RepoRoot "data\catalogs\$fmt.json" } else { "" }
+    if ($env:E2E_RERANK_ALL -match '^(1|true|yes)$' -and $catalog -and (Test-Path $catalog)) {
+        return @((Get-Content $catalog -Raw | ConvertFrom-Json).PSObject.Properties.Name |
+            Where-Object { $_ -notlike "_*" -and $_ -match "rerank" })
+    }
+    return @(@($script:RerankModel) + @($extra -split '\s+' | Where-Object { $_ }) | Select-Object -Unique)
+}
+
 function Invoke-E2eMtpWarm {
     param(
         [string]$Model = $script:MtpModel,

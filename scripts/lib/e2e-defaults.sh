@@ -40,6 +40,28 @@ E2E_VLM_BASE64_PROMPT="${E2E_VLM_BASE64_PROMPT:-This image is a tiny test patter
 
 E2E_RERANK_QUERY="${E2E_RERANK_QUERY:-Which passage best explains deploying a private OpenAI-compatible LLM server for a team that needs offline document Q&A?}"
 
+# TC-E11 discrimination pair (fixed: one clearly relevant, one clearly
+# irrelevant document). Measured 2026-10-05, relevant vs irrelevant probability:
+# Qwen3-Reranker 0.9998/0.0000 (llama.cpp) and 1.0/0.0 (oMLX), bge-reranker-v2-m3
+# 0.967/0.000, jina-reranker-v2 0.779/0.031. A headless GGUF scores both ≈ equal.
+E2E_RERANK_DISC_QUERY="How do I reset a forgotten password?"
+E2E_RERANK_DISC_RELEVANT="To reset a forgotten password, click Forgot password on the sign-in page and follow the link sent to your email."
+E2E_RERANK_DISC_IRRELEVANT="The museum is closed on public holidays."
+E2E_RERANK_MIN_MARGIN="${E2E_RERANK_MIN_MARGIN:-0.3}"
+
+# TC-E11 rerankers beyond RERANK_MODEL, per engine — one per model family.
+# E2E_RERANK_ALL=1 runs every reranker in the engine's catalog instead.
+E2E_RERANK_EXTRA_LLAMACPP="${E2E_RERANK_EXTRA_LLAMACPP:-bge-reranker-v2-m3:8bit jina-reranker-v2:multilingual:8bit}"
+E2E_RERANK_EXTRA_OMLX="${E2E_RERANK_EXTRA_OMLX:-}"
+
+# ~N-word on-topic filler for the long-input rerank probes (≈1.3 tokens/word).
+e2e_rerank_long_document() {
+    local words="$1" sentence="Password recovery requires access to the registered email account and a working sign-in page link. "
+    local n=$(( (words + 15) / 16 )) out="" i
+    for (( i = 0; i < n; i++ )); do out+="$sentence"; done
+    printf '%s' "$out"
+}
+
 E2E_MTP_WARM="${E2E_MTP_WARM:-Write a technical paragraph of at least 100 words on how speculative decoding with draft MTP heads raises tokens-per-second on CUDA inference while preserving output quality when acceptance thresholds are tuned correctly.}"
 
 e2e_burst_embed_text() {
