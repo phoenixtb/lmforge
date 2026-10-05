@@ -137,7 +137,8 @@ try {
 Get-Process -Name "lmforge" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 # Stop engine subprocesses (e.g. llama-server) that keep DLL handles (cublas, ...)
 # open under the engines dir - otherwise a --purge can't delete them on Windows.
-Get-Process -Name "llama-server" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+# Only processes running from our engines dir: a by-name kill also stopped
+# llama-servers the user runs outside LMForge.
 try {
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object { $_.ExecutablePath -and $_.ExecutablePath -like "$DataDir\engines\*" } |
