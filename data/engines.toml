@@ -26,7 +26,14 @@
 [[engine]]
 id              = "omlx"
 name            = "oMLX"
-version         = "0.4.4"
+# `version` is the release LMForge was last tested against (shown by `doctor`,
+# `/lf/status`, the rerank 501 message, and the default last-known-good hint).
+# It does NOT pin what Homebrew installs — brew always installs the current
+# formula — so it must track the build actually validated, not the floor.
+# 0.7.0 (2026-10-05): rerank verified directly against the engine — it serves
+# the mlx catalog's Qwen3-Reranker mxfp8 and returns probabilities. Promote
+# `last_known_good_version` once the macOS E2E gate has run on it.
+version         = "0.7.0"
 # Version gate. oMLX 0.4.0 moved the VLM loader onto a separate executor thread,
 # leaving Qwen3-VL's mRoPE `inv_freq` lazy and pinned to the construction
 # thread's GPU stream — every VLM chat completion died with "There is no
@@ -51,7 +58,7 @@ start_cmd       = "omlx"
 start_args      = ["serve", "--port", "{port}", "--model-dir", "{models_dir}"]
 health_endpoint = "/v1/models"
 supports_embeddings = true
-supports_reranking  = true    # Jina Reranker V3 support added in v0.3.6
+supports_reranking  = true    # seq-classifier, Jina and CausalLM (Qwen3-Reranker) rerankers; scores are probabilities
 priority        = 10
 
 [[engine]]

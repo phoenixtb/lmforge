@@ -919,7 +919,7 @@ mod tests {
         let registry = EngineRegistry::load(None).unwrap();
         let selected = registry.select(&apple_silicon()).unwrap();
         assert_eq!(selected.id, "omlx");
-        assert_eq!(selected.version, "0.4.4");
+        assert_eq!(selected.version, "0.7.0");
         // Version gate: floor at the build that fixed the Qwen3-VL stream crash.
         assert_eq!(selected.min_version.as_deref(), Some("0.4.4"));
         assert_eq!(selected.last_known_good_version.as_deref(), Some("0.4.4"));
@@ -1053,7 +1053,7 @@ mod tests {
     #[test]
     fn test_pinned_versions() {
         let registry = EngineRegistry::load(None).unwrap();
-        assert_eq!(registry.get("omlx").unwrap().version, "0.4.4");
+        assert_eq!(registry.get("omlx").unwrap().version, "0.7.0");
         assert_eq!(registry.get("llamacpp").unwrap().version, "b9861");
         assert_eq!(registry.get("sglang").unwrap().version, "0.5.10.post1");
     }

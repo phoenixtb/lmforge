@@ -359,7 +359,7 @@ export OPENAI_API_KEY=none    # no key required
 | `/v1/responses` | POST | Responses API adapter over the chat path (streaming + non-streaming, function tools, `text.format`). Stateless: `previous_response_id`, `conversation`, `background` and non-function tools return 400 |
 | `/v1/completions` | POST | Text completion |
 | `/v1/embeddings` | POST | Generate embeddings (batched, auto-chunked) |
-| `/v1/rerank` | POST | Rerank documents |
+| `/v1/rerank` | POST | Rerank documents (Cohere/Jina schema). `relevance_score` is a relevance probability in [0, 1] on every engine (`"score_type": "probability"`); see [Reranking](#reranking--scores-and-long-documents) |
 
 ### Ollama-compatible (`/api/*`)
 
@@ -472,6 +472,29 @@ curl -sS http://127.0.0.1:11430/v1/embeddings \
 - `capabilities.embedding_dims` is `null` until the first successful call
   observes it, then it's persisted to `models.json`.
 - Sending a non-embedding model returns **400** with a clear suggestion.
+
+### Reranking — scores and long documents
+
+- **Scores are probabilities** on every engine, flagged by `"score_type": "probability"`
+  in the response. LMForge calibrates per engine and model family: oMLX and
+  llama.cpp's Qwen3-Reranker head already return P(relevant) and pass through
+  unchanged; BERT cross-encoders on llama.cpp (bge, jina) return logits and
+  get a sigmoid. Before 0.3.0 every score went through a sigmoid, squeezing
+  probabilities into [0.5, 0.731] — thresholds tuned on that scale must be
+  re-tuned (old 0.55 ≈ 0.2 now).
+- **Long documents are truncated, never fatal.** Each query+document pair must
+  fit the engine's per-pair window. A longer document is cut from the end and
+  its index listed in `meta.truncated_documents`; the query is never cut, and
+  a query that alone fills the window is a 400 (`query_too_long`). On
+  llama.cpp the window is the pooled batch (`LMFORGE_LLAMACPP_POOLING_BATCH`,
+  default 2048 tokens, capped at the model's trained context — 1024 for
+  jina-reranker-v2); oMLX truncates inside the engine (8192 tokens for
+  Qwen3-Reranker, 512 for sequence classifiers).
+- **Headless GGUFs are refused.** A reranker GGUF must carry a classification
+  head (`cls.output.weight`); without one llama.cpp gives every document the
+  same score. `pull` refuses such a file, `/v1/rerank` answers 422
+  (`reranker_unusable`), and `lmforge doctor` / `lmforge models list` flag
+  installs from before 0.3.0. Fix: `lmforge models remove <id> && lmforge pull <id>`.
 
 ### Reranking — SGLang caveat (opt-in only)
 
@@ -757,17 +780,16 @@ GGUF VLM entries automatically pull the multimodal projector (`mmproj-*.gguf`)
 alongside the main weights. The safetensors column requires `--engine sglang`
 (`experimental` tier, never auto-selected — see [ADR-001](docs/architecture/ADR-001-engine-tiers.md)).
 
-### Re-ranking Models (llama.cpp only)
+### Re-ranking Models
 
-| Shortcut | GGUF Repo |
-|---|---|
-| `bge-reranker-v2-m3:f16` | `gpustack/bge-reranker-v2-m3-GGUF` |
-| `bge-reranker:large:f16` | `gpustack/bge-reranker-large-GGUF` |
-| `jina-reranker-v2:f16` | `gpustack/jina-reranker-v2-base-multilingual-GGUF` |
-| `qwen3-reranker:0.6b:q4` | `Qwen/Qwen3-Reranker-0.6B-GGUF` |
-| `qwen3-reranker:4b:q4` | `Qwen/Qwen3-Reranker-4B-GGUF` |
+| Shortcut | macOS (MLX) | Linux / Windows (GGUF) |
+|---|---|---|
+| `qwen3-reranker:0.6b:8bit` | `mlx-community/Qwen3-Reranker-0.6B-mxfp8` | `ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF` |
+| `qwen3-reranker:{0.6b,4b,8b}:{f16,8bit,4bit}` | `:8bit` only (`mlx-community/Qwen3-Reranker-*-mxfp8`) | `giladgd/Qwen3-Reranker-*-GGUF` |
+| `bge-reranker-v2-m3:{f16,8bit}` | — | `gpustack/bge-reranker-v2-m3-GGUF` |
+| `jina-reranker-v2:multilingual:{f16,8bit}` | — | `gpustack/jina-reranker-v2-base-multilingual-GGUF` |
 
-> **Re-ranking** requires llama.cpp with `--reranking`. The `/v1/rerank` endpoint returns 501 on oMLX and on the opt-in SGLang engine. See "Reranking — SGLang caveat" under [Configuration](#configuration) for workarounds.
+> **Re-ranking** runs on oMLX (macOS) and llama.cpp (`--reranking`; Linux / Windows); the opt-in SGLang engine returns 501 (see "Reranking — SGLang caveat" under [Configuration](#configuration)). Most community Qwen3-Reranker GGUFs are plain causal-LM conversions without the classification head llama.cpp needs; the catalog points only at files verified to carry it (`cls.output.weight`, rank pooling) — see [Reranking — scores and long documents](#reranking--scores-and-long-documents).
 
 You can also pull any HuggingFace repo directly by its full path:
 
@@ -838,6 +860,7 @@ embed_batch_size  = 32            # max inputs per engine call for /v1/embedding
 | `LMFORGE_SGLANG_MEM_FRACTION` | `0.5` | Opt-in SGLang engine's `--mem-fraction-static` (raise to `0.85` for single-slot deployments). No effect unless you `--engine sglang`. |
 | `LMFORGE_LLAMACPP_NGL` | auto | Force `-ngl <N>` for `llama-server` (0..=99). Default is computed from free VRAM and model size. Set to `0` to disable GPU offload entirely; set to `99` to force full offload. |
 | `LMFORGE_LLAMACPP_CTX` | auto | Force `--ctx-size <N>` for VLM (mmproj) loads. Default scales 1024 → 8192 with post-load free VRAM. Values below 512 are ignored. |
+| `LMFORGE_LLAMACPP_POOLING_BATCH` | `2048` | Embed/rerank `--batch-size`/`--ubatch-size`: the most tokens one embedding input or rerank query+document pair may use (capped at the model's trained context; clamped 256..=32768). `/v1/rerank` truncates documents to it. Raising it grows the compute buffer (Qwen3-Reranker-0.6B: ~1.2 GiB at 2048). |
 | `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN` | unset | Used by the downloader for gated repos. |
 
 ### Observability
