@@ -168,6 +168,13 @@ pub fn check_model_dir(model_dir: &Path) -> Result<GgufRerankProfile, HeadDefect
     })
 }
 
+/// Header facts of the largest GGUF in `model_dir` (cached like
+/// [`check_model_dir`]). The llama.cpp adapter sizes embed / rerank loads
+/// from them.
+pub fn model_gguf_facts(model_dir: &Path) -> Option<RerankHeadInfo> {
+    cached_head(&largest_gguf_in_dir(model_dir)?)
+}
+
 /// Remediation for a defective reranker install, shared by every surface
 /// that reports one (pull, load, `/v1/rerank`, `doctor`, `models list`).
 pub fn repull_hint(model_id: &str) -> String {

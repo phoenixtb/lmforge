@@ -197,14 +197,6 @@ pub fn read_architecture_for_model(model_dir: &Path) -> Option<String> {
     read_metadata_string(&gguf, "general.architecture")
 }
 
-/// Read the trained context window (`{arch}.context_length`) from the
-/// largest GGUF in `model_dir`.
-pub fn read_context_length_for_model(model_dir: &Path) -> Option<u64> {
-    let gguf = largest_gguf_in_dir(model_dir)?;
-    let arch = read_metadata_string(&gguf, "general.architecture")?;
-    read_metadata_u64(&gguf, &format!("{arch}.context_length"))
-}
-
 /// Read KV-cache geometry from the largest GGUF in `model_dir`.
 ///
 /// Resolves the architecture prefix (`general.architecture`) then reads the
@@ -328,6 +320,12 @@ pub struct RerankHeadInfo {
     /// `tokenizer.chat_template.rerank` — the prompt llama-server wraps
     /// around each query/document pair (`{query}` / `{document}` slots).
     pub rerank_template: Option<String>,
+    /// `{arch}.attention.causal` — `Some(false)` for BERT-style encoders,
+    /// which llama.cpp runs without a KV cache. Absent on decoders.
+    pub causal_attention: Option<bool>,
+    /// Length of `tokenizer.ggml.tokens`. Decoders keep their LM head in the
+    /// graph, so a pooled load's compute buffer is ~`ubatch × vocab × 4 B`.
+    pub vocab_size: Option<u64>,
 }
 
 /// Read the [`RerankHeadInfo`] of a GGUF file. `None` when the file can't be
@@ -356,6 +354,7 @@ pub fn read_rerank_head(gguf_path: &Path) -> Option<RerankHeadInfo> {
     let mut pooling: Vec<(String, u64)> = Vec::new();
     let mut context: Vec<(String, u64)> = Vec::new();
     let mut labels: Vec<(String, Vec<String>)> = Vec::new();
+    let mut causal: Vec<(String, bool)> = Vec::new();
     for _ in 0..metadata_kv_count {
         let key = read_string(&mut r).ok()?;
         let vtype = MetaType::from_u32(read_u32(&mut r).ok()?)?;
@@ -371,11 +370,25 @@ pub fn read_rerank_head(gguf_path: &Path) -> Option<RerankHeadInfo> {
             && vtype == MetaType::Array
         {
             labels.push((prefix.to_string(), read_string_array(&mut r).ok()?));
+        } else if let Some(prefix) = key.strip_suffix(".attention.causal")
+            && vtype == MetaType::Bool
+        {
+            let mut b = [0u8; 1];
+            read_exact(&mut r, &mut b).ok()?;
+            causal.push((prefix.to_string(), b[0] != 0));
+        } else if key == "tokenizer.ggml.tokens" && vtype == MetaType::Array {
+            let elem = MetaType::from_u32(read_u32(&mut r).ok()?)?;
+            let len = read_u64(&mut r).ok()?;
+            info.vocab_size = Some(len);
+            for _ in 0..len {
+                skip_value(&mut r, elem).ok()?;
+            }
         } else {
             skip_value(&mut r, vtype).ok()?;
         }
     }
     let arch = info.architecture.clone().unwrap_or_default();
+    info.causal_attention = causal.into_iter().find(|(p, _)| *p == arch).map(|(_, v)| v);
     info.pooling_type = pooling
         .into_iter()
         .find(|(p, _)| *p == arch)
@@ -868,6 +881,14 @@ mod tests {
         b
     }
 
+    fn bool_kv(key: &str, val: bool) -> Vec<u8> {
+        let mut b = Vec::new();
+        write_string(&mut b, key);
+        b.extend_from_slice(&7u32.to_le_bytes()); // MetaType::Bool
+        b.push(val as u8);
+        b
+    }
+
     fn str_array_kv(key: &str, vals: &[&str]) -> Vec<u8> {
         let mut b = Vec::new();
         write_string(&mut b, key);
@@ -910,6 +931,8 @@ mod tests {
         assert_eq!(h.classifier_labels, vec!["yes", "no"]);
         assert_eq!(h.cls_output_rows, Some(2));
         assert!(h.rerank_template.unwrap().contains("{document}"));
+        assert_eq!(h.vocab_size, Some(3));
+        assert_eq!(h.causal_attention, None);
     }
 
     #[test]
@@ -936,6 +959,7 @@ mod tests {
             &[
                 str_kv("general.architecture", "bert"),
                 u32_kv("bert.context_length", 8192),
+                bool_kv("bert.attention.causal", false),
             ],
             &[
                 ("cls.weight", &[1024, 1024]),
@@ -943,6 +967,7 @@ mod tests {
             ],
         );
         let h = read_rerank_head(&p).unwrap();
+        assert_eq!(h.causal_attention, Some(false));
         assert_eq!(h.cls_output_rows, Some(1));
         assert_eq!(h.context_length, Some(8192));
     }

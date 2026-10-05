@@ -351,11 +351,8 @@ fn error_response(
 /// 500 (`input (N tokens) is too large to process…`); that is the caller's
 /// input, so it becomes a 400. Anything else passes through unchanged.
 fn map_engine_error(status: u16, text: String, window: Option<usize>) -> axum::response::Response {
-    let message = serde_json::from_str::<Value>(&text)
-        .ok()
-        .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
-        .unwrap_or_else(|| text.clone());
-    if is_input_too_long(&message) {
+    let message = proxy::engine_error_message(&text);
+    if proxy::is_engine_input_too_long(&message) {
         let window = window.map_or_else(|| "per-pair".to_string(), |w| format!("{w}-token"));
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -370,11 +367,6 @@ fn map_engine_error(status: u16, text: String, window: Option<usize>) -> axum::r
         .body(Body::from(text))
         .unwrap()
         .into_response()
-}
-
-fn is_input_too_long(engine_message: &str) -> bool {
-    engine_message.contains("too large to process")
-        || engine_message.contains("larger than the max context size")
 }
 
 // ── Document fitting (llama.cpp) ─────────────────────────────────────────────
@@ -727,12 +719,12 @@ mod tests {
 
     #[test]
     fn llama_server_oversize_errors_are_recognised() {
-        assert!(is_input_too_long(
+        assert!(proxy::is_engine_input_too_long(
             "input (796 tokens) is too large to process. increase the physical batch size (current batch size: 512)"
         ));
-        assert!(is_input_too_long(
+        assert!(proxy::is_engine_input_too_long(
             "input (9000 tokens) is larger than the max context size (8192 tokens). skipping"
         ));
-        assert!(!is_input_too_long("model not loaded"));
+        assert!(!proxy::is_engine_input_too_long("model not loaded"));
     }
 }
