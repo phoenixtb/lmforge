@@ -860,6 +860,7 @@ embed_batch_size  = 32            # max inputs per engine call for /v1/embedding
 | `LMFORGE_SGLANG_MEM_FRACTION` | `0.5` | Opt-in SGLang engine's `--mem-fraction-static` (raise to `0.85` for single-slot deployments). No effect unless you `--engine sglang`. |
 | `LMFORGE_LLAMACPP_NGL` | auto | Force `-ngl <N>` for `llama-server` (0..=99). Default is computed from free VRAM and model size. Set to `0` to disable GPU offload entirely; set to `99` to force full offload. |
 | `LMFORGE_LLAMACPP_CTX` | auto | Force `--ctx-size <N>` for VLM (mmproj) loads. Default scales 1024 → 8192 with post-load free VRAM. Values below 512 are ignored. |
+| `LMFORGE_ENGINE_PORT` | API port + 1 | Base port for engine processes (11431 with the default API port). Derived from `--port`, so two instances on different API ports don't collide. Startup only ever kills a stale port holder that belongs to this instance (its argv references this data/models dir); anything else is reported and left running. |
 | `LMFORGE_LLAMACPP_POOLING_BATCH` | `2048` | Embed/rerank `--batch-size`/`--ubatch-size`: the most tokens one embedding input or rerank query+document pair may use (capped at the model's trained context; clamped 256..=32768). `/v1/rerank` truncates documents to it. Raising it grows the compute buffer (Qwen3-Reranker-0.6B: ~1.2 GiB at 2048). |
 | `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN` | unset | Used by the downloader for gated repos. |
 
