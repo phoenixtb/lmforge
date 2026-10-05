@@ -42,16 +42,16 @@ $E2E_VLM_BASE64_PROMPT = if ($env:E2E_VLM_BASE64_PROMPT) { $env:E2E_VLM_BASE64_P
 $E2E_RERANK_QUERY = if ($env:E2E_RERANK_QUERY) { $env:E2E_RERANK_QUERY } else {
     "Which passage best explains deploying a private OpenAI-compatible LLM server for a team that needs offline document Q&A?"
 }
-# TC-E11 discrimination pair — see e2e-defaults.sh for the measured scores.
+# TC-E11 discrimination pair - see e2e-defaults.sh for the measured scores.
 $E2E_RERANK_DISC_QUERY      = "How do I reset a forgotten password?"
 $E2E_RERANK_DISC_RELEVANT   = "To reset a forgotten password, click Forgot password on the sign-in page and follow the link sent to your email."
 $E2E_RERANK_DISC_IRRELEVANT = "The museum is closed on public holidays."
 $E2E_RERANK_MIN_MARGIN = if ($env:E2E_RERANK_MIN_MARGIN) { [double]$env:E2E_RERANK_MIN_MARGIN } else { 0.3 }
-# TC-E11 rerankers beyond RERANK_MODEL, per engine; E2E_RERANK_ALL=1 → whole catalog.
+# TC-E11 rerankers beyond RERANK_MODEL, per engine; E2E_RERANK_ALL=1 -> whole catalog.
 $E2E_RERANK_EXTRA_LLAMACPP = if ($null -ne $env:E2E_RERANK_EXTRA_LLAMACPP) { $env:E2E_RERANK_EXTRA_LLAMACPP } else { "bge-reranker-v2-m3:8bit jina-reranker-v2:multilingual:8bit" }
 $E2E_RERANK_EXTRA_OMLX     = if ($null -ne $env:E2E_RERANK_EXTRA_OMLX) { $env:E2E_RERANK_EXTRA_OMLX } else { "" }
 
-# ~N-word on-topic filler for the long-input rerank probes (≈1.3 tokens/word).
+# ~N-word on-topic filler for the long-input rerank probes (~1.3 tokens/word).
 function Get-E2eRerankLongDocument([int]$Words) {
     $sentence = "Password recovery requires access to the registered email account and a working sign-in page link. "
     return ($sentence * [Math]::Ceiling($Words / 16))

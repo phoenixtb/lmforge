@@ -579,7 +579,7 @@ try {
             $reqSw = [System.Diagnostics.Stopwatch]::StartNew()
             $body = @{
                 model       = $Model
-                messages    = @(@{ role = "user"; content = "Concurrent request $Idx of $Total: name one benefit of local LLM inference." })
+                messages    = @(@{ role = "user"; content = "Concurrent request $Idx of ${Total}: name one benefit of local LLM inference." })
                 stream      = $false
                 max_tokens  = $MaxTokens
                 temperature = 0

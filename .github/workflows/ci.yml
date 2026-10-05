@@ -73,6 +73,11 @@ jobs:
           if [ "$fail" -ne 0 ]; then exit 1; fi
           echo "All .ps1 files OK."
 
+      # pwsh ships on ubuntu-latest runners. Parses every tracked .ps1 so a
+      # syntax error can't reach the Windows-only E2E/install paths unseen.
+      - name: PowerShell scripts parse check
+        run: pwsh -NoProfile -NonInteractive -File scripts/util/test-ps1-syntax.ps1
+
   # ── Core unit + integration tests (macOS + Linux + Windows) ───────────────
   test:
     name: Tests — ${{ matrix.os }}
