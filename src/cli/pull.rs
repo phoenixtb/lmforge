@@ -94,6 +94,7 @@ pub async fn run(
                 &resolved.id,
                 &resolved.format,
                 entry.capabilities.reranking,
+                true,
             );
             idx.add(entry);
             idx.save(&data_dir, &models_dir)?;
@@ -153,6 +154,7 @@ pub async fn run(
                 &resolved.id,
                 &resolved.format,
                 entry.capabilities.reranking,
+                true,
             );
             idx.add(entry);
             idx.save(&data_dir, &models_dir)?;
@@ -164,11 +166,13 @@ pub async fn run(
             "  Model '{}' already installed at {}",
             resolved.id, existing.path
         );
+        // The catalog-moved note below carries the same remove + pull command.
         warn_if_defective_reranker(
             &existing_dir,
             &resolved.id,
             &resolved.format,
             existing.capabilities.reranking,
+            !installed_elsewhere,
         );
         if installed_elsewhere {
             println!(
@@ -380,13 +384,16 @@ fn warn_if_defective_reranker(
     model_id: &str,
     format: &resolver::ModelFormat,
     is_reranker: bool,
+    with_hint: bool,
 ) {
     if is_reranker
         && matches!(format, resolver::ModelFormat::Gguf)
         && let Err(defect) = crate::model::rerank_head::check_model_dir(model_dir)
     {
         println!("  ⚠ Reranker head: {defect}");
-        println!("    {}", crate::model::rerank_head::repull_hint(model_id));
+        if with_hint {
+            println!("    {}", crate::model::rerank_head::repull_hint(model_id));
+        }
     }
 }
 
