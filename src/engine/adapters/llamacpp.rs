@@ -1151,8 +1151,9 @@ impl PooledPlan {
 ///   inputs across micro-batches, so they keep llama-server's default batch: a
 ///   2048 batch only adds `batch × vocab × 4 B` of logits buffer (+1 GB,
 ///   measured). Mean/CLS-pooled encoders (bge-m3, nomic) can't split and get
-///   batch = the embedding context (no LM head, so it is cheap: bge-m3 +265 MB
-///   at 8192). On GPU the context is capped at
+///   batch = window (inputs up to 2048 tokens by default; the batch also caps
+///   llama-server's ~`batch × vocab × 4 B` pinned host buffer). On GPU the
+///   context is capped at
 ///   `LMFORGE_LLAMACPP_EMBED_CTX` (default 8192, ≤ trained context), unified
 ///   across slots, so one input may still use all of it.
 /// * Bit-equal on CPU and GPU except the context, which on CPU stays the
@@ -1175,18 +1176,12 @@ pub(crate) fn pooled_plan(
         }
         ModelRole::Embed => {
             let splittable = facts.and_then(|f| f.pooling_type) == Some(POOLING_TYPE_LAST);
-            let encoder = facts.and_then(|f| f.causal_attention) == Some(false);
-            // Encoders have no LM head, so a whole-context batch is cheap
-            // (bge-m3: +265 MB at 8192) and accepts every input the context
-            // does; decoders that can't split pay the logits buffer, so they
-            // keep the pooling window.
-            let batch = (!splittable).then(|| {
-                if encoder {
-                    embed_ctx(ctx_train)
-                } else {
-                    pooling_window(ctx_train)
-                }
-            });
+            // Not the whole context: llama-server holds a pinned host buffer of
+            // ~`ubatch × vocab × 4 B` while it runs an unsplittable input, so a
+            // batch is also a host-RAM ceiling (bge-m3, vocab 250k: 1 MiB per
+            // input token — an 8192 batch let a 6k-token input take 6 GB and
+            // get OOM-killed on a 16 GB box; measured b9861/CUDA).
+            let batch = (!splittable).then(|| pooling_window(ctx_train));
             let gpu_ctx = (!cpu_only).then(|| embed_ctx(ctx_train).max(batch.unwrap_or(0)));
             PooledPlan {
                 batch,
@@ -2113,10 +2108,11 @@ mod tests {
             std::env::remove_var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV);
             std::env::remove_var(LMFORGE_LLAMACPP_EMBED_CTX_ENV);
         }
-        // bge-m3: bert, mean pooling (1), trained 8192 — batch = whole context.
+        // bge-m3: bert, mean pooling (1), trained 8192. The batch stays at the
+        // window: it bounds the ~batch × vocab × 4 B pinned host buffer.
         let bge = facts("bert", Some(1), 8192, Some(false));
         let p = pooled_plan(ModelRole::Embed, false, Some(&bge));
-        assert_eq!(p.batch, Some(8192));
+        assert_eq!(p.batch, Some(2048));
         assert_eq!(p.gpu_ctx, Some(8192));
         // A mean-pooled *decoder* pays the logits buffer: pooling window.
         let dec = facts("qwen2", Some(1), 32768, None);
