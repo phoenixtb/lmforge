@@ -723,7 +723,8 @@ const SCRATCH_GB: f32 = 0.4;
 /// Compute buffer of a pooled load. Decoders keep their LM head in the graph,
 /// so llama.cpp reserves a `ubatch × vocab` f32 logits buffer — measured on
 /// b9861/CUDA for Qwen3-Reranker-0.6B (vocab 151 669): 299 / 598 / 1201 MiB at
-/// ubatch 512 / 1024 / 2048. Encoders (bge, jina) have no LM head: 13–56 MiB.
+/// ubatch 512 / 1024 / 2048. Encoders have no LM head; bge-m3 measured 12.5 /
+/// 56 / 320 MiB at 512 / 2048 / 8192, i.e. ~40 KiB per batch token.
 fn pooled_scratch_gb(
     batch: Option<u32>,
     facts: Option<&crate::model::gguf_inspect::RerankHeadInfo>,
@@ -731,10 +732,10 @@ fn pooled_scratch_gb(
 ) -> f32 {
     const GIB: f32 = 1024.0 * 1024.0 * 1024.0;
     const LLAMACPP_DEFAULT_UBATCH: u32 = 512;
-    if encoder {
-        return 0.1;
-    }
     let ubatch = batch.unwrap_or(LLAMACPP_DEFAULT_UBATCH) as f32;
+    if encoder {
+        return (ubatch * 40.0 * 1024.0 / GIB).max(0.05);
+    }
     let vocab = facts.and_then(|f| f.vocab_size).unwrap_or(152_000) as f32;
     ubatch * vocab * 4.0 / GIB + 0.05
 }
@@ -1115,7 +1116,8 @@ impl PooledPlan {
 ///   inputs across micro-batches, so they keep llama-server's default batch: a
 ///   2048 batch only adds `batch × vocab × 4 B` of logits buffer (+1 GB,
 ///   measured). Mean/CLS-pooled encoders (bge-m3, nomic) can't split and get
-///   batch = window. On GPU the context is capped at
+///   batch = the embedding context (no LM head, so it is cheap: bge-m3 +265 MB
+///   at 8192). On GPU the context is capped at
 ///   `LMFORGE_LLAMACPP_EMBED_CTX` (default 8192, ≤ trained context), unified
 ///   across slots, so one input may still use all of it.
 /// * Bit-equal on CPU and GPU except the context, which on CPU stays the
@@ -1138,7 +1140,18 @@ pub(crate) fn pooled_plan(
         }
         ModelRole::Embed => {
             let splittable = facts.and_then(|f| f.pooling_type) == Some(POOLING_TYPE_LAST);
-            let batch = (!splittable).then(|| pooling_window(ctx_train));
+            let encoder = facts.and_then(|f| f.causal_attention) == Some(false);
+            // Encoders have no LM head, so a whole-context batch is cheap
+            // (bge-m3: +265 MB at 8192) and accepts every input the context
+            // does; decoders that can't split pay the logits buffer, so they
+            // keep the pooling window.
+            let batch = (!splittable).then(|| {
+                if encoder {
+                    embed_ctx(ctx_train)
+                } else {
+                    pooling_window(ctx_train)
+                }
+            });
             let gpu_ctx = (!cpu_only).then(|| embed_ctx(ctx_train).max(batch.unwrap_or(0)));
             PooledPlan {
                 batch,
@@ -2065,11 +2078,17 @@ mod tests {
             std::env::remove_var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV);
             std::env::remove_var(LMFORGE_LLAMACPP_EMBED_CTX_ENV);
         }
-        // bge-m3: bert, mean pooling (1), trained 8192.
+        // bge-m3: bert, mean pooling (1), trained 8192 — batch = whole context.
         let bge = facts("bert", Some(1), 8192, Some(false));
         let p = pooled_plan(ModelRole::Embed, false, Some(&bge));
-        assert_eq!(p.batch, Some(2048));
+        assert_eq!(p.batch, Some(8192));
         assert_eq!(p.gpu_ctx, Some(8192));
+        // A mean-pooled *decoder* pays the logits buffer: pooling window.
+        let dec = facts("qwen2", Some(1), 32768, None);
+        assert_eq!(
+            pooled_plan(ModelRole::Embed, false, Some(&dec)).batch,
+            Some(2048)
+        );
         // nomic-embed (2048 trained): context never below the batch.
         let nomic = facts("nomic-bert", Some(1), 2048, Some(false));
         let p = pooled_plan(ModelRole::Embed, false, Some(&nomic));
@@ -2106,8 +2125,9 @@ mod tests {
         let at_2048 = pooled_scratch_gb(Some(2048), Some(&qwen), false);
         assert!((at_512 - (299.0 / 1024.0)).abs() < 0.07, "{at_512}");
         assert!((at_2048 - (1201.0 / 1024.0)).abs() < 0.07, "{at_2048}");
-        // Encoders: no LM head (bge measured 56 MiB @2048).
-        assert!(pooled_scratch_gb(Some(2048), None, true) <= 0.1);
+        // Encoders: no LM head (bge-m3 measured 56 MiB @2048, 320 MiB @8192).
+        assert!((pooled_scratch_gb(Some(2048), None, true) - 0.078).abs() < 0.03);
+        assert!((pooled_scratch_gb(Some(8192), None, true) - 0.3125).abs() < 0.03);
     }
 
     #[test]
