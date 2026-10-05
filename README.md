@@ -134,8 +134,11 @@ What the install script does on macOS/Linux:
 4. Registers a system service (`launchd` on macOS, `systemd --user` on Linux)
 5. Starts the daemon immediately
 
-Override variant: `LMFORGE_LLAMACPP_VARIANT={cuda12,cuda13,cpu,gpu}` before
-`lmforge init`. Run `lmforge doctor` to see installed variants and which is active.
+Override variant: `LMFORGE_LLAMACPP_VARIANT={cuda12,cuda13,vulkan,cpu,gpu}` before
+`lmforge init`. Add a build later with `lmforge engine install llamacpp --variant
+<cuda12|cuda13|vulkan|cpu>`; at `lmforge start`, `LMFORGE_LLAMACPP_VARIANT=cuda13`
+prefers cuda13 and `=vulkan` / `=cpu` force the portable build even when a CUDA
+variant is installed. Run `lmforge doctor` to see installed variants and which is active.
 
 To pin a specific version:
 ```bash
