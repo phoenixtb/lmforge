@@ -101,7 +101,7 @@ pub fn resolve_mtp_for_model(model_dir: &Path, catalog_mtp: Option<bool>) -> Opt
 
 /// Find the largest `.gguf` file under `dir` (non-recursive — model dirs
 /// are flat). Returns `None` if no `.gguf` files are present.
-fn largest_gguf_in_dir(dir: &Path) -> Option<std::path::PathBuf> {
+pub(crate) fn largest_gguf_in_dir(dir: &Path) -> Option<std::path::PathBuf> {
     let entries = std::fs::read_dir(dir).ok()?;
     let mut best: Option<(u64, std::path::PathBuf)> = None;
     for entry in entries.flatten() {
@@ -195,6 +195,14 @@ pub struct KvGeometry {
 pub fn read_architecture_for_model(model_dir: &Path) -> Option<String> {
     let gguf = largest_gguf_in_dir(model_dir)?;
     read_metadata_string(&gguf, "general.architecture")
+}
+
+/// Read the trained context window (`{arch}.context_length`) from the
+/// largest GGUF in `model_dir`.
+pub fn read_context_length_for_model(model_dir: &Path) -> Option<u64> {
+    let gguf = largest_gguf_in_dir(model_dir)?;
+    let arch = read_metadata_string(&gguf, "general.architecture")?;
+    read_metadata_u64(&gguf, &format!("{arch}.context_length"))
 }
 
 /// Read KV-cache geometry from the largest GGUF in `model_dir`.
@@ -293,6 +301,127 @@ fn read_int_value<R: Read>(r: &mut R, t: MetaType) -> Option<u64> {
         MetaType::U64 | MetaType::I64 => read_u64(r).ok()?,
         _ => return None,
     })
+}
+
+/// What a GGUF declares about its re-ranking head — everything llama.cpp's
+/// `--reranking` path depends on, read in one pass over the header.
+///
+/// llama.cpp computes a rank score by projecting the pooled hidden state
+/// through `cls.output.weight` (plus `cls.weight`/`cls.bias` for BERT-style
+/// heads), then — for Qwen3 only — a softmax over the projected rows. A file
+/// without `cls.output.weight` silently "works" but scores the raw hidden
+/// state, so every document gets the same meaningless value.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RerankHeadInfo {
+    /// `general.architecture` (e.g. `qwen3`, `bert`).
+    pub architecture: Option<String>,
+    /// `{arch}.pooling_type` (llama.cpp enum; 4 = RANK). Often absent on
+    /// BERT-family conversions — `--reranking` forces RANK pooling anyway.
+    pub pooling_type: Option<u64>,
+    /// `{arch}.classifier.output_labels` (Qwen3-Reranker: `["yes", "no"]`).
+    pub classifier_labels: Vec<String>,
+    /// Output rows of `cls.output.weight` (1 for a 1-D tensor); `None` when
+    /// the tensor is absent.
+    pub cls_output_rows: Option<u64>,
+    /// `{arch}.context_length` — the trained context window.
+    pub context_length: Option<u64>,
+    /// `tokenizer.chat_template.rerank` — the prompt llama-server wraps
+    /// around each query/document pair (`{query}` / `{document}` slots).
+    pub rerank_template: Option<String>,
+}
+
+/// Read the [`RerankHeadInfo`] of a GGUF file. `None` when the file can't be
+/// parsed (missing, truncated, not GGUF).
+pub fn read_rerank_head(gguf_path: &Path) -> Option<RerankHeadInfo> {
+    let f = File::open(gguf_path).ok()?;
+    let mut r = BufReader::new(f);
+
+    let mut magic = [0u8; 4];
+    read_exact(&mut r, &mut magic).ok()?;
+    if magic != GGUF_MAGIC {
+        return None;
+    }
+    if read_u32(&mut r).ok()? < 2 {
+        return None;
+    }
+    let tensor_count = read_u64(&mut r).ok()?;
+    let metadata_kv_count = read_u64(&mut r).ok()?;
+    if tensor_count > MAX_TENSOR_COUNT || metadata_kv_count > MAX_METADATA_ENTRIES {
+        return None;
+    }
+
+    // Arch-prefixed keys are collected by suffix and matched against
+    // `general.architecture` afterwards, so key order doesn't matter.
+    let mut info = RerankHeadInfo::default();
+    let mut pooling: Vec<(String, u64)> = Vec::new();
+    let mut context: Vec<(String, u64)> = Vec::new();
+    let mut labels: Vec<(String, Vec<String>)> = Vec::new();
+    for _ in 0..metadata_kv_count {
+        let key = read_string(&mut r).ok()?;
+        let vtype = MetaType::from_u32(read_u32(&mut r).ok()?)?;
+        if key == "general.architecture" && vtype == MetaType::String {
+            info.architecture = Some(read_string(&mut r).ok()?);
+        } else if key == "tokenizer.chat_template.rerank" && vtype == MetaType::String {
+            info.rerank_template = Some(read_string(&mut r).ok()?);
+        } else if let Some(prefix) = key.strip_suffix(".pooling_type") {
+            pooling.push((prefix.to_string(), read_int_value(&mut r, vtype)?));
+        } else if let Some(prefix) = key.strip_suffix(".context_length") {
+            context.push((prefix.to_string(), read_int_value(&mut r, vtype)?));
+        } else if let Some(prefix) = key.strip_suffix(".classifier.output_labels")
+            && vtype == MetaType::Array
+        {
+            labels.push((prefix.to_string(), read_string_array(&mut r).ok()?));
+        } else {
+            skip_value(&mut r, vtype).ok()?;
+        }
+    }
+    let arch = info.architecture.clone().unwrap_or_default();
+    info.pooling_type = pooling
+        .into_iter()
+        .find(|(p, _)| *p == arch)
+        .map(|(_, v)| v);
+    info.context_length = context
+        .into_iter()
+        .find(|(p, _)| *p == arch)
+        .map(|(_, v)| v);
+    info.classifier_labels = labels
+        .into_iter()
+        .find(|(p, _)| *p == arch)
+        .map(|(_, v)| v)
+        .unwrap_or_default();
+
+    for _ in 0..tensor_count {
+        let name = read_string(&mut r).ok()?;
+        let n_dims = read_u32(&mut r).ok()?;
+        if n_dims > 8 {
+            return None;
+        }
+        let mut dims = Vec::with_capacity(n_dims as usize);
+        for _ in 0..n_dims {
+            dims.push(read_u64(&mut r).ok()?);
+        }
+        let _ggml_type = read_u32(&mut r).ok()?;
+        let _offset = read_u64(&mut r).ok()?;
+        if name == "cls.output.weight" {
+            // ggml order: ne[0] = input dim, ne[1] = output rows.
+            info.cls_output_rows = Some(dims.get(1).copied().unwrap_or(1));
+        }
+    }
+    Some(info)
+}
+
+/// Read an Array-typed value whose elements are strings. Errors on any
+/// other element type (the caller only asks for string arrays).
+fn read_string_array<R: Read>(r: &mut R) -> Result<Vec<String>, String> {
+    let elem_type = read_u32(r)?;
+    if elem_type != MetaType::String as u32 {
+        return Err(format!("expected string array, got elem type {elem_type}"));
+    }
+    let len = read_u64(r)?;
+    if len > MAX_METADATA_ENTRIES {
+        return Err(format!("string array len {len} > cap"));
+    }
+    (0..len).map(|_| read_string(r)).collect()
 }
 
 /// Return all tensor names from a GGUF file. Errors propagate as a
@@ -440,6 +569,7 @@ fn skip_value<R: Read + Seek>(r: &mut R, t: MetaType) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::path::PathBuf;
     use tempfile::NamedTempFile;
 
     fn write_string(buf: &mut Vec<u8>, s: &str) {
@@ -698,6 +828,145 @@ mod tests {
         assert_eq!(g.head_count_kv, 8);
         assert_eq!(g.key_length, 128);
         assert_eq!(g.value_length, 128);
+    }
+
+    // ── read_rerank_head ─────────────────────────────────────────────────────
+
+    /// Synthesize a GGUF with arbitrary pre-encoded KVs and (name, dims) tensors.
+    fn write_head_gguf(dir: &Path, kvs: &[Vec<u8>], tensors: &[(&str, &[u64])]) -> PathBuf {
+        let mut buf = Vec::<u8>::new();
+        buf.extend_from_slice(&GGUF_MAGIC);
+        buf.extend_from_slice(&3u32.to_le_bytes());
+        buf.extend_from_slice(&(tensors.len() as u64).to_le_bytes());
+        buf.extend_from_slice(&(kvs.len() as u64).to_le_bytes());
+        for kv in kvs {
+            buf.extend_from_slice(kv);
+        }
+        for (name, dims) in tensors {
+            write_string(&mut buf, name);
+            buf.extend_from_slice(&(dims.len() as u32).to_le_bytes());
+            for d in *dims {
+                buf.extend_from_slice(&d.to_le_bytes());
+            }
+            buf.extend_from_slice(&0u32.to_le_bytes());
+            buf.extend_from_slice(&0u64.to_le_bytes());
+        }
+        let p = dir.join("model.gguf");
+        std::fs::write(&p, buf).unwrap();
+        p
+    }
+
+    fn str_kv(key: &str, val: &str) -> Vec<u8> {
+        let mut b = Vec::new();
+        write_str_kv(&mut b, key, val);
+        b
+    }
+
+    fn u32_kv(key: &str, val: u32) -> Vec<u8> {
+        let mut b = Vec::new();
+        write_u32_kv(&mut b, key, val);
+        b
+    }
+
+    fn str_array_kv(key: &str, vals: &[&str]) -> Vec<u8> {
+        let mut b = Vec::new();
+        write_string(&mut b, key);
+        b.extend_from_slice(&9u32.to_le_bytes()); // MetaType::Array
+        b.extend_from_slice(&8u32.to_le_bytes()); // of String
+        b.extend_from_slice(&(vals.len() as u64).to_le_bytes());
+        for v in vals {
+            write_string(&mut b, v);
+        }
+        b
+    }
+
+    #[test]
+    fn read_rerank_head_reads_a_converted_qwen3_reranker() {
+        // Shape of ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF.
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_head_gguf(
+            dir.path(),
+            &[
+                // Arch-prefixed keys before general.architecture: order must not matter.
+                u32_kv("qwen3.pooling_type", 4),
+                str_kv("general.architecture", "qwen3"),
+                u32_kv("qwen3.context_length", 40960),
+                str_array_kv("qwen3.classifier.output_labels", &["yes", "no"]),
+                str_kv(
+                    "tokenizer.chat_template.rerank",
+                    "<Query>: {query}\n<Document>: {document}",
+                ),
+                str_array_kv("tokenizer.ggml.tokens", &["a", "b", "c"]),
+            ],
+            &[
+                ("output_norm.weight", &[1024]),
+                ("cls.output.weight", &[1024, 2]),
+            ],
+        );
+        let h = read_rerank_head(&p).unwrap();
+        assert_eq!(h.architecture.as_deref(), Some("qwen3"));
+        assert_eq!(h.pooling_type, Some(4));
+        assert_eq!(h.context_length, Some(40960));
+        assert_eq!(h.classifier_labels, vec!["yes", "no"]);
+        assert_eq!(h.cls_output_rows, Some(2));
+        assert!(h.rerank_template.unwrap().contains("{document}"));
+    }
+
+    #[test]
+    fn read_rerank_head_reports_a_missing_head_on_a_plain_conversion() {
+        // Shape of mradermacher/Qwen3-Reranker-0.6B-GGUF.
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_head_gguf(
+            dir.path(),
+            &[str_kv("general.architecture", "qwen3")],
+            &[("output_norm.weight", &[1024])],
+        );
+        let h = read_rerank_head(&p).unwrap();
+        assert_eq!(h.pooling_type, None);
+        assert_eq!(h.cls_output_rows, None);
+        assert!(h.classifier_labels.is_empty());
+    }
+
+    #[test]
+    fn read_rerank_head_treats_a_1d_cls_output_as_one_row() {
+        // Shape of gpustack bge-reranker-v2-m3: cls.output.weight is [1024].
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_head_gguf(
+            dir.path(),
+            &[
+                str_kv("general.architecture", "bert"),
+                u32_kv("bert.context_length", 8192),
+            ],
+            &[
+                ("cls.weight", &[1024, 1024]),
+                ("cls.output.weight", &[1024]),
+            ],
+        );
+        let h = read_rerank_head(&p).unwrap();
+        assert_eq!(h.cls_output_rows, Some(1));
+        assert_eq!(h.context_length, Some(8192));
+    }
+
+    #[test]
+    fn read_rerank_head_ignores_keys_of_another_architecture() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_head_gguf(
+            dir.path(),
+            &[
+                str_kv("general.architecture", "bert"),
+                u32_kv("qwen3.pooling_type", 4),
+            ],
+            &[],
+        );
+        assert_eq!(read_rerank_head(&p).unwrap().pooling_type, None);
+    }
+
+    #[test]
+    fn read_rerank_head_returns_none_on_garbage() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        tmp.write_all(b"not-a-gguf-file").unwrap();
+        tmp.flush().unwrap();
+        assert_eq!(read_rerank_head(tmp.path()), None);
     }
 
     #[test]

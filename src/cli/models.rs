@@ -71,6 +71,12 @@ pub async fn run(config: &LmForgeConfig, action: ModelsAction) -> Result<()> {
                 fmt_size(total_bytes),
                 models.len()
             );
+
+            for (id, defect) in crate::model::rerank_head::defective_gguf_rerankers(&idx) {
+                println!();
+                println!("⚠ {id}: {defect}");
+                println!("  {}", crate::model::rerank_head::repull_hint(&id));
+            }
         }
 
         ModelsAction::Remove { name } => {

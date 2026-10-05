@@ -60,10 +60,18 @@ pub async fn run(
     let mut idx = index::ModelIndex::load(&data_dir, &models_dir)?;
 
     if let Some(existing) = idx.get(&resolved.id) {
+        let existing_dir = std::path::PathBuf::from(&existing.path);
+        // The catalog may now resolve this id to a different repo (e.g. the
+        // 0.3.0 Qwen3-Reranker move) or another format: the install is then
+        // not `model_dir`. Never backfill or re-stamp it as the new repo —
+        // that downloads into a new dir while the index keeps the old one.
+        let installed_elsewhere =
+            existing_dir.file_name() != Some(std::ffi::OsStr::new(&resolved.dir_name));
+
         // VLM repos ship an mmproj sidecar alongside the main quant. Older
         // pulls only downloaded the backbone — backfill any resolved files
         // that are still missing on disk without forcing a full re-download.
-        if download_missing_files(&resolved, &model_dir).await? {
+        if !installed_elsewhere && download_missing_files(&resolved, &model_dir).await? {
             let caps = detect_and_print_capabilities(
                 &model_dir,
                 &resolved.id,
@@ -81,6 +89,12 @@ pub async fn run(
                 capabilities: caps,
                 added_at: existing.added_at.clone(),
             };
+            warn_if_defective_reranker(
+                &model_dir,
+                &resolved.id,
+                &resolved.format,
+                entry.capabilities.reranking,
+            );
             idx.add(entry);
             idx.save(&data_dir, &models_dir)?;
             println!(
@@ -101,10 +115,25 @@ pub async fn run(
                 resolved.id, existing.path
             );
 
+            // Detect on the installed copy; keep its provenance when the
+            // catalog has since moved the id elsewhere.
+            let (hf_repo, format, engine) = if installed_elsewhere {
+                (
+                    existing.hf_repo.clone(),
+                    existing.format.clone(),
+                    existing.engine.clone(),
+                )
+            } else {
+                (
+                    Some(resolved.hf_repo.clone()),
+                    resolved.format.to_string(),
+                    engine_format.clone(),
+                )
+            };
             let caps = detect_and_print_capabilities(
-                &model_dir,
+                &existing_dir,
                 &resolved.id,
-                &resolved.hf_repo,
+                hf_repo.as_deref().unwrap_or(&resolved.hf_repo),
                 &resolved.format,
                 resolved.mtp,
             );
@@ -112,13 +141,19 @@ pub async fn run(
             let entry = index::ModelEntry {
                 id: resolved.id.clone(),
                 path: existing.path.clone(),
-                format: resolved.format.to_string(),
-                engine: engine_format.clone(),
-                hf_repo: Some(resolved.hf_repo.clone()),
-                size_bytes: index::dir_size(&model_dir),
+                format,
+                engine,
+                hf_repo,
+                size_bytes: index::dir_size(&existing_dir),
                 capabilities: caps,
                 added_at: existing.added_at.clone(),
             };
+            warn_if_defective_reranker(
+                &existing_dir,
+                &resolved.id,
+                &resolved.format,
+                entry.capabilities.reranking,
+            );
             idx.add(entry);
             idx.save(&data_dir, &models_dir)?;
 
@@ -129,6 +164,24 @@ pub async fn run(
             "  Model '{}' already installed at {}",
             resolved.id, existing.path
         );
+        warn_if_defective_reranker(
+            &existing_dir,
+            &resolved.id,
+            &resolved.format,
+            existing.capabilities.reranking,
+        );
+        if installed_elsewhere {
+            println!(
+                "  ⚠ The catalog now resolves '{}' to {}; the installed copy is from {}.",
+                resolved.id,
+                resolved.hf_repo,
+                existing.hf_repo.as_deref().unwrap_or("an unknown repo")
+            );
+            println!(
+                "    To switch: lmforge models remove {id} && lmforge pull {id}",
+                id = resolved.id
+            );
+        }
         println!(
             "  To re-download, remove it first: lmforge models remove {}",
             resolved.id
@@ -227,6 +280,16 @@ pub async fn run(
         resolved.mtp,
     );
 
+    if let Some(msg) = crate::model::rerank_head::pull_rejection(
+        &resolved.id,
+        &resolved.hf_repo,
+        &model_dir,
+        matches!(resolved.format, resolver::ModelFormat::Gguf),
+        caps.reranking,
+    ) {
+        anyhow::bail!("❌ {msg}");
+    }
+
     // Add to index
     let entry = index::ModelEntry {
         id: resolved.id.clone(),
@@ -307,6 +370,24 @@ fn detect_and_print_capabilities(
         println!("  mmproj:       {}", mmproj);
     }
     caps
+}
+
+/// Flag an installed GGUF reranker without a usable head (pre-0.3.0 catalog
+/// pulls). Shown on paths that keep the install as-is, so `lmforge pull <id>`
+/// on an old bad install says how to fix it instead of only "already installed".
+fn warn_if_defective_reranker(
+    model_dir: &std::path::Path,
+    model_id: &str,
+    format: &resolver::ModelFormat,
+    is_reranker: bool,
+) {
+    if is_reranker
+        && matches!(format, resolver::ModelFormat::Gguf)
+        && let Err(defect) = crate::model::rerank_head::check_model_dir(model_dir)
+    {
+        println!("  ⚠ Reranker head: {defect}");
+        println!("    {}", crate::model::rerank_head::repull_hint(model_id));
+    }
 }
 
 // `detect_engine_format` lives in `crate::model::catalog` so pull / run /

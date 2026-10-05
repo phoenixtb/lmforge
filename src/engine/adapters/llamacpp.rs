@@ -258,8 +258,34 @@ impl EngineAdapter for LlamacppAdapter {
                 args.push("--embeddings".to_string());
             }
             ModelRole::Rerank => {
+                // Refuse a GGUF without a reranker head: llama-server would
+                // load it and score every document the same (mradermacher
+                // Qwen3-Reranker conversions — no `cls.output.weight`).
+                if let Err(defect) = crate::model::rerank_head::check_model_dir(model_dir) {
+                    return Err(
+                        crate::engine::adapter::EngineLoadError::InvalidModel(format!(
+                            "'{model_id}' cannot be served as a reranker: {defect}. {}",
+                            crate::model::rerank_head::repull_hint(model_id)
+                        ))
+                        .into(),
+                    );
+                }
                 args.push("--reranking".to_string());
             }
+        }
+
+        // Pooled roles must fit one input per micro-batch (non-causal
+        // attention can't split a sequence); llama-server's default ubatch of
+        // 512 failed every longer rerank pair with an HTTP 500.
+        let pooling_window = matches!(role, ModelRole::Embed | ModelRole::Rerank).then(|| {
+            pooling_window(crate::model::gguf_inspect::read_context_length_for_model(
+                model_dir,
+            ))
+        });
+        let cpu_only = matches!(profile.gpu_vendor, GpuVendor::None);
+        if let Some(window) = pooling_window {
+            args.extend(pooling_args(role, cpu_only, window));
+            info!(role = ?role, window, "llama.cpp pooled-role batch sized");
         }
 
         // Batch 2 §2.4 — `--flash-attn on`. Measured decode was ~67% of the
@@ -301,17 +327,20 @@ impl EngineAdapter for LlamacppAdapter {
         // together; GPU / Apple paths keep the large default (VRAM headroom and
         // Metal paging make it safe and desirable there). Both are
         // env-overridable: LMFORGE_LLAMACPP_CTX and LMFORGE_LLAMACPP_PARALLEL.
-        if matches!(profile.gpu_vendor, GpuVendor::None) {
+        if cpu_only {
+            let parallel = resolve_cpu_parallel();
+            // Explicit --parallel makes slots non-unified (each gets
+            // ctx/parallel), so a pooled role needs ctx >= window * parallel.
+            let ctx_size = cpu_ctx_for_role(plan.runtime.ctx_size, pooling_window, parallel);
             // VLM already emitted --ctx-size in the mmproj block above.
             if !is_vlm {
                 args.push("--ctx-size".to_string());
-                args.push(plan.runtime.ctx_size.to_string());
+                args.push(ctx_size.to_string());
             }
-            let parallel = resolve_cpu_parallel();
             args.push("--parallel".to_string());
             args.push(parallel.to_string());
             info!(
-                ctx_size = plan.runtime.ctx_size,
+                ctx_size,
                 parallel, "CPU-only: bounding context + parallel slots to contain KV cache"
             );
         }
@@ -940,6 +969,79 @@ pub(crate) fn resolve_cpu_parallel() -> u32 {
         .and_then(|s| s.parse::<u32>().ok())
         .map(|n| n.clamp(1, 16))
         .unwrap_or(1)
+}
+
+/// Env override for the pooled-role (Embed/Rerank) batch: the token budget
+/// one embedding input or one rerank query+document pair may occupy.
+pub const LMFORGE_LLAMACPP_POOLING_BATCH_ENV: &str = "LMFORGE_LLAMACPP_POOLING_BATCH";
+
+/// Default pooled-role batch. Matches llama.cpp's own logical `n_batch`
+/// default; measured on b9861 (Metal) the Qwen3-Reranker-0.6B compute buffer
+/// grows 338 MiB → 1.2 GiB from ubatch 512 → 2048, bge-reranker-v2-m3 16 → 57 MiB.
+const DEFAULT_POOLING_BATCH: u32 = 2048;
+
+/// Slots llama-server picks when `--parallel` is not passed (`-np auto`).
+const LLAMACPP_AUTO_SLOTS: u32 = 4;
+
+/// The `-b/-ub` value for pooled roles: the override (clamped to
+/// 256..=32768) or [`DEFAULT_POOLING_BATCH`], capped at the model's trained
+/// context (jina-reranker-v2: 1024). `/v1/rerank` truncates documents to this
+/// same window, so both sides must call this one function.
+pub fn pooling_window(model_ctx_train: Option<u64>) -> u32 {
+    let requested = std::env::var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV)
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(|n| n.clamp(256, 32768))
+        .unwrap_or(DEFAULT_POOLING_BATCH);
+    match model_ctx_train {
+        Some(n) if n > 0 => requested.min(u32::try_from(n).unwrap_or(u32::MAX)),
+        _ => requested,
+    }
+}
+
+/// Batch (and, for GPU rerank, context) args for a pooled role.
+///
+/// `--batch-size` must equal `--ubatch-size`: llama.cpp lowers `n_batch` to
+/// `n_ubatch` for non-causal models anyway, and a pooled input must fit one
+/// micro-batch.
+///
+/// GPU Rerank also gets `--ctx-size window*slots --parallel slots`: RANK pooling
+/// can never split an input, so context beyond one window per slot is unusable
+/// — and without the bound llama-server sizes the KV cache to the trained
+/// context (Qwen3-Reranker-0.6B: 4480 MiB vs 896 MiB, measured). GPU Embed is
+/// left unbounded: last-token-pooled embedders (Qwen3-Embedding) *can* split
+/// and use the full context. CPU context/slots are set in `start()` via
+/// [`cpu_ctx_for_role`].
+pub(crate) fn pooling_args(role: ModelRole, cpu_only: bool, window: u32) -> Vec<String> {
+    let mut args = vec![
+        "--batch-size".to_string(),
+        window.to_string(),
+        "--ubatch-size".to_string(),
+        window.to_string(),
+    ];
+    if role == ModelRole::Rerank && !cpu_only {
+        args.extend([
+            "--ctx-size".to_string(),
+            (window * LLAMACPP_AUTO_SLOTS).to_string(),
+            "--parallel".to_string(),
+            LLAMACPP_AUTO_SLOTS.to_string(),
+        ]);
+    }
+    args
+}
+
+/// CPU `--ctx-size` for a role: the planned (RAM-tiered or overridden)
+/// context, raised so each of the `parallel` non-unified slots holds at
+/// least one pooled window. Chat (no window) keeps the plan unchanged.
+pub(crate) fn cpu_ctx_for_role(
+    planned_ctx: u32,
+    pooling_window: Option<u32>,
+    parallel: u32,
+) -> u32 {
+    match pooling_window {
+        Some(w) => planned_ctx.max(w.saturating_mul(parallel.max(1))),
+        None => planned_ctx,
+    }
 }
 
 /// Look up the model's `capabilities.mtp` flag from the on-disk index.
@@ -1732,6 +1834,72 @@ mod tests {
             args.is_empty(),
             "only the exact value `q8_0` is supported today"
         );
+    }
+
+    // ── pooled-role batch sizing (Embed / Rerank) ─────────────────────────
+
+    #[test]
+    fn pooling_window_defaults_to_2048_capped_by_trained_context() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV) };
+        assert_eq!(pooling_window(Some(40960)), 2048); // Qwen3-Reranker
+        assert_eq!(pooling_window(Some(1024)), 1024); // jina-reranker-v2
+        assert_eq!(pooling_window(None), 2048);
+        assert_eq!(pooling_window(Some(0)), 2048);
+    }
+
+    #[test]
+    fn pooling_window_env_override_is_clamped() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV, "4096") };
+        let raised = pooling_window(Some(8192));
+        unsafe { std::env::set_var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV, "16") };
+        let floored = pooling_window(None);
+        unsafe { std::env::set_var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV, "lots") };
+        let ignored = pooling_window(None);
+        unsafe { std::env::remove_var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV) };
+        assert_eq!(raised, 4096);
+        assert_eq!(floored, 256);
+        assert_eq!(ignored, 2048);
+    }
+
+    #[test]
+    fn pooling_args_set_equal_batch_and_ubatch() {
+        let args = pooling_args(ModelRole::Embed, false, 2048);
+        assert_eq!(args, ["--batch-size", "2048", "--ubatch-size", "2048"]);
+        // CPU rerank: ctx/slots come from the CPU block, not from here.
+        let args = pooling_args(ModelRole::Rerank, true, 2048);
+        assert_eq!(args, ["--batch-size", "2048", "--ubatch-size", "2048"]);
+    }
+
+    #[test]
+    fn gpu_rerank_bounds_context_to_one_window_per_slot() {
+        let args = pooling_args(ModelRole::Rerank, false, 1024);
+        assert_eq!(
+            args,
+            [
+                "--batch-size",
+                "1024",
+                "--ubatch-size",
+                "1024",
+                "--ctx-size",
+                "4096",
+                "--parallel",
+                "4"
+            ]
+        );
+    }
+
+    #[test]
+    fn cpu_context_holds_one_window_per_slot_for_pooled_roles() {
+        // Default CPU plan (RAM-tiered 4096, 1 slot) already fits a 2048 window.
+        assert_eq!(cpu_ctx_for_role(4096, Some(2048), 1), 4096);
+        // Operator asked for 4 slots / 4096 ctx: raise so each slot holds 2048.
+        assert_eq!(cpu_ctx_for_role(4096, Some(2048), 4), 8192);
+        // Operator shrank ctx below the window.
+        assert_eq!(cpu_ctx_for_role(1024, Some(2048), 1), 2048);
+        // Chat is untouched.
+        assert_eq!(cpu_ctx_for_role(1024, None, 4), 1024);
     }
 
     #[test]
