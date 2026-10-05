@@ -21,7 +21,9 @@ const SCHEMA_VERSION: u32 = 2;
 ///   * 1 — locked-thinking / dedicated-reasoning hint detection (GGUF `phi4:reasoning`).
 ///   * 2 — MTP tensor probe in heal/scan (daemon-pulled GGUF models had mtp=None,
 ///     silently disabling speculative decoding — 2026-07-07 e2e TC-E12 skip).
-pub const CAPS_DETECTOR_VERSION: u32 = 2;
+///   * 3 — GGUF header (pooling / encoder / cls head) classifies embedders and
+///     rerankers; `bge-m3` GGUF had been detected as a chat model (2026-10-06).
+pub const CAPS_DETECTOR_VERSION: u32 = 3;
 
 /// The models.json index
 #[derive(Debug, Serialize, Deserialize)]
@@ -721,6 +723,40 @@ pub fn detect_capabilities(
     }
 
     // =========================================================================
+    // Signal F — GGUF header classifies embedders and rerankers.
+    //
+    // Name signals miss GGUF embedders whose id/repo lack "embed" — `bge-m3`
+    // (gpustack/bge-m3-GGUF) fell through to Signal E and was served as a chat
+    // model, so /v1/embeddings refused it. The header is ground truth:
+    //   * a `cls.output.weight` head on an encoder or a rank-pooled model → reranker;
+    //   * a declared MEAN / CLS / LAST pooling, or an encoder (attention.causal =
+    //     false) without a head → embedder.
+    // Chat GGUFs declare neither. Runs before the Signal E chat fallback.
+    // =========================================================================
+    if !caps.embeddings
+        && !caps.reranking
+        && !caps.vision
+        && !config_path.exists()
+        && has_gguf_weights(model_dir)
+        && let Some(f) = crate::model::rerank_head::model_gguf_facts(model_dir)
+    {
+        match gguf_pooled_role(&f) {
+            Some(GgufPooledRole::Rerank) => {
+                caps.reranking = true;
+                caps.chat = false;
+                debug!("Signal F: GGUF classifier head — flagging as re-ranker");
+            }
+            Some(GgufPooledRole::Embed) => {
+                caps.embeddings = true;
+                caps.chat = false;
+                caps.thinking = false;
+                debug!("Signal F: GGUF pooling/encoder header — flagging as embedding model");
+            }
+            None => {}
+        }
+    }
+
+    // =========================================================================
     // Signal E — GGUF chat fallback.
     //
     // GGUF model dirs typically contain just the `.gguf` weights file and no
@@ -811,6 +847,25 @@ pub fn detect_capabilities(
     }
 
     caps
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum GgufPooledRole {
+    Embed,
+    Rerank,
+}
+
+/// What a GGUF header says the model is for, when it says anything (llama.cpp
+/// pooling enum: 1 MEAN, 2 CLS, 3 LAST, 4 RANK).
+fn gguf_pooled_role(f: &crate::model::gguf_inspect::RerankHeadInfo) -> Option<GgufPooledRole> {
+    let encoder = f.causal_attention == Some(false);
+    if f.cls_output_rows.is_some() && (encoder || f.pooling_type == Some(4)) {
+        return Some(GgufPooledRole::Rerank);
+    }
+    if matches!(f.pooling_type, Some(1..=3)) || (encoder && f.cls_output_rows.is_none()) {
+        return Some(GgufPooledRole::Embed);
+    }
+    None
 }
 
 /// True when `model_dir` contains at least one `.gguf` weights file that is
@@ -905,6 +960,91 @@ mod tests {
             "Catalog 'embed' shortcut must keep embeddings=true"
         );
         assert!(!caps.chat, "Embedding model must not be flagged as chat");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Header-only GGUF: arch, optional pooling / causal keys, optional cls head.
+    fn gguf_header(arch: &str, pooling: Option<u32>, causal: Option<bool>, cls: bool) -> Vec<u8> {
+        fn put(buf: &mut Vec<u8>, s: &str) {
+            buf.extend_from_slice(&(s.len() as u64).to_le_bytes());
+            buf.extend_from_slice(s.as_bytes());
+        }
+        let mut kvs = Vec::new();
+        let mut n = 1u64;
+        put(&mut kvs, "general.architecture");
+        kvs.extend_from_slice(&8u32.to_le_bytes());
+        put(&mut kvs, arch);
+        if let Some(p) = pooling {
+            put(&mut kvs, &format!("{arch}.pooling_type"));
+            kvs.extend_from_slice(&4u32.to_le_bytes());
+            kvs.extend_from_slice(&p.to_le_bytes());
+            n += 1;
+        }
+        if let Some(c) = causal {
+            put(&mut kvs, &format!("{arch}.attention.causal"));
+            kvs.extend_from_slice(&7u32.to_le_bytes());
+            kvs.push(c as u8);
+            n += 1;
+        }
+        let tensors: Vec<&str> = if cls {
+            vec!["cls.output.weight"]
+        } else {
+            vec!["output_norm.weight"]
+        };
+        let mut buf = b"GGUF".to_vec();
+        buf.extend_from_slice(&3u32.to_le_bytes());
+        buf.extend_from_slice(&(tensors.len() as u64).to_le_bytes());
+        buf.extend_from_slice(&n.to_le_bytes());
+        buf.extend_from_slice(&kvs);
+        for t in tensors {
+            put(&mut buf, t);
+            buf.extend_from_slice(&1u32.to_le_bytes());
+            buf.extend_from_slice(&1024u64.to_le_bytes());
+            buf.extend_from_slice(&0u32.to_le_bytes());
+            buf.extend_from_slice(&0u64.to_le_bytes());
+        }
+        buf
+    }
+
+    #[test]
+    fn gguf_encoder_embedder_without_embed_in_its_name_is_an_embedder() {
+        // gpustack/bge-m3-GGUF: bert, mean pooling, attention.causal = false.
+        let hdr = gguf_header("bert", Some(1), Some(false), false);
+        let dir = make_gguf_dir("gguf_bge_m3", &[("bge-m3-Q8_0.gguf", &hdr)]);
+        let caps = detect_capabilities(&dir, Some("bge-m3:8bit"), Some("gpustack/bge-m3-GGUF"));
+        assert!(caps.embeddings, "bge-m3 must be served by /v1/embeddings");
+        assert!(!caps.chat);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn gguf_last_pooled_decoder_embedder_is_an_embedder() {
+        let hdr = gguf_header("qwen3", Some(3), None, false);
+        let dir = make_gguf_dir("gguf_last_embed", &[("model.gguf", &hdr)]);
+        let caps = detect_capabilities(&dir, None, Some("someone/custom-gguf"));
+        assert!(caps.embeddings && !caps.chat);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn gguf_cross_encoder_with_a_head_is_a_reranker_even_unnamed() {
+        let hdr = gguf_header("bert", None, Some(false), true);
+        let dir = make_gguf_dir("gguf_unnamed_ce", &[("model.gguf", &hdr)]);
+        let caps = detect_capabilities(&dir, None, Some("someone/cross-encoder-gguf"));
+        assert!(caps.reranking && !caps.chat && !caps.embeddings);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn gguf_chat_header_stays_chat() {
+        let hdr = gguf_header("qwen3", None, None, false);
+        let dir = make_gguf_dir("gguf_plain_chat", &[("Qwen3-1.7B-Q4_K_M.gguf", &hdr)]);
+        let caps = detect_capabilities(
+            &dir,
+            Some("qwen3:1.7b:4bit"),
+            Some("unsloth/Qwen3-1.7B-GGUF"),
+        );
+        assert!(caps.chat && !caps.embeddings && !caps.reranking);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

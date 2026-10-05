@@ -126,6 +126,23 @@ impl EngineAdapter for LlamacppAdapter {
             facts.as_ref(),
         );
 
+        // Second pass: decide full vs partial offload with the same non-weight
+        // budget (KV + scratch + GPU context) admission uses, so a load the
+        // manager admits without evicting is not then planned as a partial
+        // offload — which the host-RAM gate refused on RAM-tight boxes
+        // (bge-reranker, 1.5 GB free, flat 1.0 GB headroom → ngl 89 → 503).
+        if matches!(
+            profile.gpu_vendor,
+            GpuVendor::Nvidia | GpuVendor::Amd | GpuVendor::Intel
+        ) && ngl_override().is_none()
+        {
+            runtime.ngl = discrete_ngl(
+                free_vram_gb,
+                model_size_gb + mmproj_size_gb,
+                footprint.base_gb() - footprint.weights_gb,
+            );
+        }
+
         LoadPlan {
             footprint,
             spec,
@@ -699,11 +716,15 @@ fn compute_footprint(
     };
 
     let is_pooled = pooled.batch.is_some() || pooled.gpu_ctx.is_some();
+    let discrete_gpu = matches!(
+        gpu_vendor,
+        GpuVendor::Nvidia | GpuVendor::Amd | GpuVendor::Intel
+    );
     let scratch_gb = if is_pooled {
         pooled_scratch_gb(pooled.batch, facts, encoder)
     } else {
         SCRATCH_GB
-    };
+    } + if discrete_gpu { GPU_CONTEXT_GB } else { 0.0 };
 
     let arch = crate::model::gguf_inspect::read_architecture_for_model(model_dir);
     let spec_gb = spec_overhead_gb(arch.as_deref(), model_size_gb, spec);
@@ -792,6 +813,14 @@ pub struct RuntimePlan {
 /// front; the calibration cache replaces this with the measured total.)
 const LLAMACPP_DEFAULT_CTX: u32 = 4096;
 
+/// `LMFORGE_LLAMACPP_NGL` (0..=99), when set.
+fn ngl_override() -> Option<u32> {
+    std::env::var("LMFORGE_LLAMACPP_NGL")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(|n| n.min(99))
+}
+
 /// Compute `-ngl` and `--ctx-size` from the live VRAM budget and model size.
 ///
 /// Operator escape hatches (always win when set):
@@ -814,10 +843,7 @@ fn plan_runtime(
     mmproj_size_gb: f32,
     is_vlm: bool,
 ) -> RuntimePlan {
-    let ngl_override = std::env::var("LMFORGE_LLAMACPP_NGL")
-        .ok()
-        .and_then(|s| s.parse::<u32>().ok())
-        .map(|n| n.min(99));
+    let ngl_override = ngl_override();
     let ctx_override = std::env::var("LMFORGE_LLAMACPP_CTX")
         .ok()
         .and_then(|s| s.parse::<u32>().ok())
@@ -834,22 +860,10 @@ fn plan_runtime(
             // (see hardware::vram::estimate_intel_vram), so `free_vram_gb`
             // is already a conservative shared-RAM-based number.
             GpuVendor::Nvidia | GpuVendor::Amd | GpuVendor::Intel => {
-                // 1.0 GB compute-scratch + KV-growth headroom on top of
-                // the weights themselves (mmproj also lives in VRAM).
-                const SCRATCH_GB: f32 = 1.0;
-                let needed = model_size_gb + mmproj_size_gb;
-                let budget = (free_vram_gb - SCRATCH_GB).max(0.0);
-                if needed <= 0.0 || budget <= 0.0 {
-                    0
-                } else if needed <= budget {
-                    99
-                } else {
-                    // Proportional partial offload; clamp 1..=98 so we never
-                    // claim "all layers" when we can't actually fit them, and
-                    // never go to 0 when we have *some* budget.
-                    let fraction = (budget / needed).clamp(0.0, 1.0);
-                    ((fraction * 99.0).floor() as u32).clamp(1, 98)
-                }
+                // First pass: a flat 1.0 GB compute-scratch + KV headroom on
+                // top of the weights. plan_load re-decides with the model's
+                // own footprint once it is known (`discrete_ngl`).
+                discrete_ngl(free_vram_gb, model_size_gb + mmproj_size_gb, 1.0)
             }
         }
     };
@@ -887,6 +901,27 @@ fn plan_runtime(
         free_vram_gb,
     }
 }
+
+/// `-ngl` on a discrete GPU: full offload when the weights plus `headroom_gb`
+/// (everything else the load allocates in VRAM) fit `free_vram_gb`, else a
+/// proportional partial offload clamped to 1..=98 (never "all layers" when
+/// they can't fit, never 0 when there is *some* budget).
+fn discrete_ngl(free_vram_gb: f32, weights_gb: f32, headroom_gb: f32) -> u32 {
+    let budget = (free_vram_gb - headroom_gb).max(0.0);
+    if weights_gb <= 0.0 || budget <= 0.0 {
+        0
+    } else if weights_gb <= budget {
+        99
+    } else {
+        let fraction = (budget / weights_gb).clamp(0.0, 1.0);
+        ((fraction * 99.0).floor() as u32).clamp(1, 98)
+    }
+}
+
+/// CUDA/Vulkan context a llama-server process allocates on the device before
+/// any model tensor (~0.3 GB on b9861/CUDA). Part of the discrete-GPU
+/// footprint so admission and the offload decision budget the same total.
+const GPU_CONTEXT_GB: f32 = 0.3;
 
 /// `--flash-attn on` argument pair (Batch 2 §2.4), gated to CUDA variants
 /// only. `on` is the b9861 explicit-enable form (the flag also accepts
@@ -2107,6 +2142,20 @@ mod tests {
         let floored = embed_ctx(None);
         unsafe { std::env::remove_var(LMFORGE_LLAMACPP_EMBED_CTX_ENV) };
         assert_eq!((raised, capped, floored), (32768, 16384, 512));
+    }
+
+    #[test]
+    fn offload_decision_uses_the_models_own_headroom() {
+        // 2026-10-06 Ubuntu QA: bge-reranker (0.59 GB) with 1.53 GB free.
+        // The flat 1.0 GB headroom planned a partial offload (ngl 89) that the
+        // host-RAM gate then refused; its real non-weight footprint is ~0.4 GB.
+        assert_eq!(discrete_ngl(1.534, 0.592, 1.0), 89);
+        let bge_headroom = pooled_scratch_gb(Some(2048), None, true) + GPU_CONTEXT_GB;
+        assert_eq!(discrete_ngl(1.534, 0.592, bge_headroom), 99);
+        // Genuinely too big → proportional, never 0 or 99.
+        assert_eq!(discrete_ngl(3.0, 5.0, 1.0), 39);
+        assert_eq!(discrete_ngl(0.5, 5.0, 1.0), 0);
+        assert_eq!(discrete_ngl(100.0, 0.0, 1.0), 0);
     }
 
     #[test]
