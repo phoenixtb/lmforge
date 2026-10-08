@@ -64,7 +64,11 @@ CUDA variants live under `~/.lmforge/engines/llamacpp/variants/<id>/` with
 bundled libs + RPATH. Vulkan/CPU still use the legacy flat layout until
 those entries land in the variants manifest.
 
-Override selection with `LMFORGE_LLAMACPP_VARIANT={cuda12,cuda13,cpu,gpu}`.
+Override selection with `LMFORGE_LLAMACPP_VARIANT={cuda12,cuda13,vulkan,cpu,gpu}`
+before `lmforge init`. Add a build later with `lmforge engine install llamacpp
+--variant <cuda12|cuda13|vulkan|cpu>` (vulkan/cpu install upstream's portable
+build into the flat layout). At `lmforge start`, `=cuda13` prefers cuda13 and
+`=vulkan` / `=cpu` force the portable build even when a CUDA variant is installed.
 Use `lmforge doctor` to see installed variants and which one is **ACTIVE**.
 
 ### Speculative decoding (MTP)

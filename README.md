@@ -1189,9 +1189,10 @@ cargo run -- start                          # equivalent shorthand
 RUST_LOG=debug ./target/debug/lmforge start
 RUST_LOG=debug cargo run -- start           # equivalent shorthand
 
-# Use a different port (e.g. to avoid clashing with an installed daemon)
-./target/debug/lmforge start --port 11431
-cargo run -- start --port 11431             # equivalent shorthand
+# Run beside an installed daemon: another API port (its engines use port + 1)
+# and another data dir — startup reclaims stale engines of its own data dir.
+./target/debug/lmforge --data-dir /tmp/lmforge-dev start --port 11530
+cargo run -- --data-dir /tmp/lmforge-dev start --port 11530   # equivalent shorthand
 ```
 
 #### 4 — Quick smoke-tests while the daemon is running
