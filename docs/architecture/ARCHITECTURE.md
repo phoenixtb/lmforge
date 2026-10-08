@@ -108,8 +108,10 @@ flowchart LR
   (one `omlx serve`, all models on one port; oMLX owns LRU). llama.cpp uses
   **ProcessPool** (one `llama-server` per loaded model, each on its own port;
   LMForge owns admission and LRU). See [ADR-008](./ADR-008-pool-residency.md).
-- **SGLang is not first-class.** It remains in the registry as experimental
-  opt-in only; production paths are oMLX (macOS) and llama.cpp (Linux/Windows).
+- **SGLang is not first-class.** `tier = experimental`: never auto-selected
+  (including Linux NVIDIA ≥ 8 GB). Reachable only via `--engine sglang` on
+  Linux x86_64, sm_90–sm_103. Production defaults are oMLX (macOS) and
+  llama.cpp (Linux/Windows).
 - **No model is preloaded.** Cold-load (3–60 s) is paid on first request,
   unless the operator opted into `[orchestrator] auto_load = [...]` or a
   consumer explicitly warmed via `POST /lf/model/switch`.

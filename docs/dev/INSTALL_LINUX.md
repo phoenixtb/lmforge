@@ -20,7 +20,7 @@ isolated venvs under `~/.lmforge/engines/<id>/venv/`.
 
 Default on Linux is **`llama.cpp`** (Vulkan, CUDA12, or CUDA13 per driver —
 see variant table below). Opt-in: **`vllm`**, **`tabbyapi`**. Experimental
-**`sglang`** is refused on consumer Blackwell (`sm_120`).
+**`sglang`** is `experimental` and never auto-selected. It is refused on consumer Blackwell (`sm_120`); on sm_90–sm_103 it still requires `lmforge run --engine sglang`. The 8 GB `min_vram_gb` in `engines.toml` is that opt-in floor, not a default-engine cutoff.
 
 Full tier model and OS matrix: [ADR-001](../architecture/ADR-001-engine-tiers.md).
 Day-to-day dev scripts: [DEV_GUIDE](./DEV_GUIDE.md).

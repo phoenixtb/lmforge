@@ -6,13 +6,13 @@
 
 ## Context
 
-Up through May 2026, `lmforge` shipped three engines selected by a flat priority list:
+Up through May 2026, `lmforge` shipped three engines selected by a flat priority list. **That table is the policy this ADR replaced.** It is not the current selector (`data/engines.toml`: SGLang `tier = "experimental"`, never a candidate unless `--engine sglang`):
 
-| Engine | OS | GPU | Priority | Role |
+| Engine | OS | GPU | Priority | Role (superseded) |
 | --- | --- | --- | --- | --- |
 | oMLX | macOS aarch64 | Apple | 10 | Default on Apple Silicon |
-| SGLang | Linux x86_64 | NVIDIA | 20 | Default on Linux+NVIDIA ≥ 8 GB VRAM |
-| llama.cpp | any | any | 100 | Fallback |
+| SGLang | Linux x86_64 | NVIDIA | 20 | Was the default on Linux+NVIDIA ≥ 8 GB VRAM |
+| llama.cpp | any | any | 100 | Was the fallback |
 
 Two issues forced this revision:
 
@@ -119,8 +119,10 @@ explicitly *and* the user confirmed the warning prompt.
 ### Neutral
 
 - SGLang **stays in the codebase**. Demoted to `experimental`, gated to
-  `sm_90..=sm_103`, never auto-selected on consumer Blackwell.
-  Cost-to-keep is negligible.
+  `sm_90..=sm_103` on Linux x86_64 only, and **never auto-selected on any
+  platform** — including Hopper / datacenter GPUs with ≥ 8 GB VRAM. The
+  8 GB figure in `engines.toml` (`min_vram_gb`) is only a floor for an
+  explicit `lmforge run --engine sglang`. Cost-to-keep is negligible.
 
 ## Re-evaluation triggers
 
@@ -145,7 +147,7 @@ in Phase 5):
 Linux + NVIDIA sm_75+  llamacpp      vllm, exl3          sglang (sm_90..sm_103 only)
 Linux + AMD            llamacpp      —                   —
 Linux + CPU only       llamacpp      —                   —
-WSL2  + NVIDIA sm_75+  llamacpp      vllm, exl3          sglang (same gate)
+WSL2  + NVIDIA sm_75+  llamacpp      vllm, exl3          —     (sglang is linux-only; refused on windows-wsl2)
 Win   + NVIDIA sm_75+  llamacpp      exl3                —     (vLLM NOT offered on native Windows)
 Win   + CPU only       llamacpp      —                   —
 macOS + Apple Silicon  omlx, llamacpp —                  —     (no NVIDIA tiers on Darwin)

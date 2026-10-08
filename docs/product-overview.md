@@ -37,7 +37,7 @@ LMForge is fully cross-platform and picks the best inference engine for your har
 | **Linux** | NVIDIA (any GPU) | llama.cpp CUDA (cuda12/cuda13 variants) — works out of the box on consumer Blackwell (RTX 50-series) too |
 | **Linux** | AMD / Intel GPU, or CPU | llama.cpp (Vulkan or CPU) |
 
-Advanced engines (vLLM, TabbyAPI/ExLlamaV3, SGLang, and similar) are available as **opt-in / experimental** installs for power users chasing higher concurrency on datacenter-class GPUs — never installed automatically. You never have to think about this on day one — LMForge detects your GPU, VRAM, and drivers and chooses a **default** engine for you. Run `lmforge doctor` anytime to see what is installed and active.
+Advanced engines (vLLM, TabbyAPI/ExLlamaV3, SGLang, and similar) are **opt-in / experimental** and never auto-selected — including SGLang on Linux NVIDIA with ≥ 8 GB VRAM. SGLang also requires an explicit `--engine sglang` (Linux x86_64, sm_90–sm_103 only). You never have to think about this on day one — LMForge detects your GPU, VRAM, and drivers and chooses a **default** engine for you. Run `lmforge doctor` anytime to see what is installed and active.
 
 ---
 
