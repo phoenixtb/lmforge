@@ -99,8 +99,9 @@ pkill -x "$BINARY_NAME" 2>/dev/null || true
 sleep 1
 pkill -9 -x "$BINARY_NAME" 2>/dev/null || true
 # Stop orphaned engine subprocesses (e.g. llama-server) so they don't hold GPU
-# memory or files under the engines dir after the daemon is gone.
-pkill -x llama-server 2>/dev/null || true
+# memory or files under the engines dir after the daemon is gone. Match on our
+# engines dir only: a bare `pkill -x llama-server` also killed llama-servers the
+# user runs outside LMForge.
 pkill -f "$DATA_DIR/engines/" 2>/dev/null || true
 info "No lmforge processes running"
 

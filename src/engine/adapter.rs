@@ -20,6 +20,10 @@ pub enum EngineLoadError {
     /// The fix is `lmforge engine install <engine>`.
     #[error("{0}")]
     EngineNotInstalled(String),
+    /// The weights are present but unusable for the requested role (e.g. a
+    /// reranker GGUF without a classification head). The fix is a re-pull.
+    #[error("{0}")]
+    InvalidModel(String),
 }
 
 /// The functional role an engine slot is serving.

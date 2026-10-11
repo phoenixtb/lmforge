@@ -106,6 +106,20 @@ pub struct VariantState {
     /// cuda12. Driven by `LMFORGE_LLAMACPP_VARIANT=cuda13` or an explicit
     /// `lmforge engine install llamacpp --variant cuda13`.
     pub prefer_cuda13: bool,
+    /// `LMFORGE_LLAMACPP_VARIANT=vulkan|cpu`: run the portable upstream build
+    /// (staged at `<data_dir>/engines/llama-server`) even when a CUDA variant
+    /// is installed. `None` keeps hardware-driven selection.
+    pub force_portable: Option<LlamaVariant>,
+}
+
+/// Parse `LMFORGE_LLAMACPP_VARIANT` into a portable-build force (`vulkan` /
+/// `cpu`); every other value (cuda12, cuda13, auto, gpu, unset) is `None`.
+pub fn portable_override(value: Option<&str>) -> Option<LlamaVariant> {
+    match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("vulkan") => Some(LlamaVariant::Vulkan),
+        Some("cpu") => Some(LlamaVariant::Cpu),
+        _ => None,
+    }
 }
 
 /// Pure variant selection — no env reads, no I/O, no panics.
@@ -130,6 +144,9 @@ pub struct VariantState {
 /// `installer::resolve_platform` — this selector intentionally does NOT
 /// touch Windows so the existing flow stays as-is.
 pub fn select(profile: &HardwareProfile, state: &VariantState) -> LlamaVariant {
+    if let Some(forced) = state.force_portable {
+        return forced;
+    }
     if matches!(profile.os, Os::Linux) && profile.gpu_vendor == GpuVendor::Nvidia {
         let driver = profile
             .driver_tuple
@@ -483,6 +500,33 @@ impl Manifest {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn portable_override_forces_vulkan_or_cpu_only() {
+        use super::*;
+        assert_eq!(
+            portable_override(Some("vulkan")),
+            Some(LlamaVariant::Vulkan)
+        );
+        assert_eq!(portable_override(Some(" CPU ")), Some(LlamaVariant::Cpu));
+        assert_eq!(portable_override(Some("cuda13")), None);
+        assert_eq!(portable_override(Some("auto")), None);
+        assert_eq!(portable_override(None), None);
+        // A forced portable build wins over an installed CUDA variant.
+        let profile = HardwareProfile {
+            os: Os::Linux,
+            gpu_vendor: GpuVendor::Nvidia,
+            compute_cap: Some((12, 0)),
+            driver_tuple: Some((595, 84, 0)),
+            ..Default::default()
+        };
+        let state = VariantState {
+            cuda12_installed: true,
+            force_portable: Some(LlamaVariant::Vulkan),
+            ..Default::default()
+        };
+        assert_eq!(select(&profile, &state), LlamaVariant::Vulkan);
+    }
+
     use super::*;
     use crate::hardware::probe::{Arch, GpuVendor, Os};
 
@@ -565,6 +609,7 @@ mod tests {
             cuda12_installed: true,
             cuda13_installed: true,
             prefer_cuda13: true,
+            force_portable: None,
             ..Default::default()
         };
         assert_eq!(select(&p, &s), LlamaVariant::Cuda13);
@@ -578,6 +623,7 @@ mod tests {
             cuda12_installed: true,
             cuda13_installed: true,
             prefer_cuda13: true,
+            force_portable: None,
             ..Default::default()
         };
         assert_eq!(select(&p, &s), LlamaVariant::Cuda12);
@@ -623,6 +669,7 @@ mod tests {
             cuda12_installed: false,
             cuda13_installed: true,
             prefer_cuda13: false,
+            force_portable: None,
             ..Default::default()
         };
         assert_eq!(select(&p, &s), LlamaVariant::Cuda13);

@@ -42,14 +42,12 @@ impl EngineAdapter for OmlxAdapter {
         role: ModelRole,
         _plan: &crate::engine::adapter::LoadPlan,
     ) -> Result<ActiveEngine> {
-        // ModelRole::Rerank — oMLX 0.3.6+ supports Jina-architecture rerankers
-        // (JinaForRanking) natively. oMLX auto-detects the model type from each model's
+        // ModelRole::Rerank — oMLX auto-detects the reranker type from each model's
         // config.json, so no extra CLI flag is required here, just like embedding models.
-        //
-        // Note: Generative decoder-based rerankers (Qwen3-Reranker) are NOT supported
-        // by oMLX as of v0.3.6 — those should only be pulled with the GGUF catalog and
-        // served by llama.cpp via --reranking. If a user attempts to load one, oMLX will
-        // emit a clear architecture error from its own config.json parsing.
+        // oMLX 0.7.0 serves sequence-classification cross-encoders, Jina rerankers and
+        // decoder (CausalLM yes/no) rerankers — the mlx catalog's
+        // `mlx-community/Qwen3-Reranker-*-mxfp8` included (verified 2026-10-05). Every
+        // path returns a probability in [0, 1]; see `model::rerank_head`.
         //
         // Chat and Embed: oMLX discovers models from subdirectories of --model-dir and
         // dispatches by subdir name. oMLX auto-detects embed vs chat from config.json.

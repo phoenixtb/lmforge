@@ -187,6 +187,10 @@ Canonical defaults live in `scripts/lib/e2e-defaults.{sh,ps1}` (sourced by
 | `EMBED_MODEL` / `E2E_EMBED_MODEL` | `qwen3-embed:0.6b:8bit` |
 | `VLM_MODEL` / `E2E_VLM_MODEL` | `qwen3-vl:2b:4bit` |
 | `RERANK_MODEL` / `E2E_RERANK_MODEL` | `qwen3-reranker:0.6b:8bit` |
+| `E2E_RERANK_EXTRA_LLAMACPP` | `bge-reranker-v2-m3:8bit jina-reranker-v2:multilingual:8bit` |
+| `E2E_RERANK_EXTRA_OMLX` | *(empty — the mlx catalog only has Qwen3-Reranker)* |
+| `E2E_RERANK_ALL` | `0` (`1` = every reranker in the active engine's catalog) |
+| `E2E_RERANK_MIN_MARGIN` | `0.3` |
 | `MTP_MODEL` / `E2E_MTP_MODEL` | `qwen3.5:4b:mtp:4bit` |
 | `E2E_VLM_IMAGE_URL` | `https://picsum.photos/seed/picsum/200/300` |
 | `E2E_CHAT_MAX_TOKENS` | `128` |
@@ -195,6 +199,20 @@ Canonical defaults live in `scripts/lib/e2e-defaults.{sh,ps1}` (sourced by
 
 Shared API helpers (health, pull, chat, embed, VLM, rerank, MTP, assertions):
 `scripts/lib/e2e-api.{sh,ps1}`.
+
+**TC-E11 (rerank) asserts discrimination, not just a response.** For
+`RERANK_MODEL` plus one reranker per other family on the active engine, a fixed
+relevant/irrelevant pair must come back with `score_type: "probability"`, both
+scores in [0, 1], relevant > 0.5 and relevant − irrelevant ≥
+`E2E_RERANK_MIN_MARGIN`. A headless GGUF (every document scored alike, or
+refused with 422) fails it. Extra rerankers are pulled on demand and removed
+afterwards; with `SKIP_PULL=1` uninstalled ones SKIP. TC-E11L checks a
+~600-token document and one ~5,000-token document among short ones (both 200).
+The same discrimination check runs fast against any live daemon:
+
+```bash
+LMFORGE_RERANK_MODEL=qwen3-reranker:0.6b:8bit cargo test --test rerank_live -- --ignored --nocapture
+```
 
 ---
 

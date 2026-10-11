@@ -90,7 +90,7 @@ This is the **Docker model**: the engine is a service, the UI is just a client. 
 
 > **macOS Intel (x86_64)** binaries are available but not currently published via the CI release pipeline. Build from source with `cargo build --release --target x86_64-apple-darwin`.
 
-> **SGLang is `experimental`, not auto-selected on any platform** (see [ADR-001](docs/architecture/ADR-001-engine-tiers.md)) — upstream `sgl-kernel` ships `sm_90`/`sm_100` cubins only, so it hangs at first token on consumer Blackwell (RTX 50-series). `llama.cpp` is the default engine on every NVIDIA box instead, Linux or Windows. If your GPU falls in the supported `sm_90`–`sm_103` window (Hopper/datacenter Blackwell) and you still want SGLang, opt in explicitly: `lmforge run --engine sglang <model>` (Linux only upstream; native Windows use WSL2 + Ubuntu with the NVIDIA Windows driver, CUDA-on-WSL is included automatically — do **not** install a Linux NVIDIA driver inside WSL).
+> **SGLang is `experimental`, not auto-selected on any platform** (see [ADR-001](docs/architecture/ADR-001-engine-tiers.md)) — upstream `sgl-kernel` ships `sm_90`/`sm_100` cubins only, so it hangs at first token on consumer Blackwell (RTX 50-series). `llama.cpp` is the default engine on every NVIDIA box instead, Linux or Windows. If your GPU falls in the supported `sm_90`–`sm_103` window (Hopper/datacenter Blackwell) and you still want SGLang, opt in explicitly on **Linux x86_64**: `lmforge run --engine sglang <model>`. It is refused on native Windows and on WSL2. The 8 GB VRAM floor in `engines.toml` applies only after that explicit opt-in; it is not an auto-select threshold.
 
 > **Windows 10 users** must install the Edge WebView2 Runtime before launching the desktop UI (preinstalled on Windows 11). Get it from <https://developer.microsoft.com/microsoft-edge/webview2/>.
 
@@ -134,8 +134,11 @@ What the install script does on macOS/Linux:
 4. Registers a system service (`launchd` on macOS, `systemd --user` on Linux)
 5. Starts the daemon immediately
 
-Override variant: `LMFORGE_LLAMACPP_VARIANT={cuda12,cuda13,cpu,gpu}` before
-`lmforge init`. Run `lmforge doctor` to see installed variants and which is active.
+Override variant: `LMFORGE_LLAMACPP_VARIANT={cuda12,cuda13,vulkan,cpu,gpu}` before
+`lmforge init`. Add a build later with `lmforge engine install llamacpp --variant
+<cuda12|cuda13|vulkan|cpu>`; at `lmforge start`, `LMFORGE_LLAMACPP_VARIANT=cuda13`
+prefers cuda13 and `=vulkan` / `=cpu` force the portable build even when a CUDA
+variant is installed. Run `lmforge doctor` to see installed variants and which is active.
 
 To pin a specific version:
 ```bash
@@ -359,7 +362,7 @@ export OPENAI_API_KEY=none    # no key required
 | `/v1/responses` | POST | Responses API adapter over the chat path (streaming + non-streaming, function tools, `text.format`). Stateless: `previous_response_id`, `conversation`, `background` and non-function tools return 400 |
 | `/v1/completions` | POST | Text completion |
 | `/v1/embeddings` | POST | Generate embeddings (batched, auto-chunked) |
-| `/v1/rerank` | POST | Rerank documents |
+| `/v1/rerank` | POST | Rerank documents (Cohere/Jina schema). `relevance_score` is a relevance probability in [0, 1] on every engine (`"score_type": "probability"`); see [Reranking](#reranking--scores-and-long-documents) |
 
 ### Ollama-compatible (`/api/*`)
 
@@ -472,6 +475,29 @@ curl -sS http://127.0.0.1:11430/v1/embeddings \
 - `capabilities.embedding_dims` is `null` until the first successful call
   observes it, then it's persisted to `models.json`.
 - Sending a non-embedding model returns **400** with a clear suggestion.
+
+### Reranking — scores and long documents
+
+- **Scores are probabilities** on every engine, flagged by `"score_type": "probability"`
+  in the response. LMForge calibrates per engine and model family: oMLX and
+  llama.cpp's Qwen3-Reranker head already return P(relevant) and pass through
+  unchanged; BERT cross-encoders on llama.cpp (bge, jina) return logits and
+  get a sigmoid. Before 0.3.0 every score went through a sigmoid, squeezing
+  probabilities into [0.5, 0.731] — thresholds tuned on that scale must be
+  re-tuned (old 0.55 ≈ 0.2 now).
+- **Long documents are truncated, never fatal.** Each query+document pair must
+  fit the engine's per-pair window. A longer document is cut from the end and
+  its index listed in `meta.truncated_documents`; the query is never cut, and
+  a query that alone fills the window is a 400 (`query_too_long`). On
+  llama.cpp the window is the pooled batch (`LMFORGE_LLAMACPP_POOLING_BATCH`,
+  default 2048 tokens, capped at the model's trained context — 1024 for
+  jina-reranker-v2); oMLX truncates inside the engine (8192 tokens for
+  Qwen3-Reranker, 512 for sequence classifiers).
+- **Headless GGUFs are refused.** A reranker GGUF must carry a classification
+  head (`cls.output.weight`); without one llama.cpp gives every document the
+  same score. `pull` refuses such a file, `/v1/rerank` answers 422
+  (`reranker_unusable`), and `lmforge doctor` / `lmforge models list` flag
+  installs from before 0.3.0. Fix: `lmforge models remove <id> && lmforge pull <id>`.
 
 ### Reranking — SGLang caveat (opt-in only)
 
@@ -757,17 +783,16 @@ GGUF VLM entries automatically pull the multimodal projector (`mmproj-*.gguf`)
 alongside the main weights. The safetensors column requires `--engine sglang`
 (`experimental` tier, never auto-selected — see [ADR-001](docs/architecture/ADR-001-engine-tiers.md)).
 
-### Re-ranking Models (llama.cpp only)
+### Re-ranking Models
 
-| Shortcut | GGUF Repo |
-|---|---|
-| `bge-reranker-v2-m3:f16` | `gpustack/bge-reranker-v2-m3-GGUF` |
-| `bge-reranker:large:f16` | `gpustack/bge-reranker-large-GGUF` |
-| `jina-reranker-v2:f16` | `gpustack/jina-reranker-v2-base-multilingual-GGUF` |
-| `qwen3-reranker:0.6b:q4` | `Qwen/Qwen3-Reranker-0.6B-GGUF` |
-| `qwen3-reranker:4b:q4` | `Qwen/Qwen3-Reranker-4B-GGUF` |
+| Shortcut | macOS (MLX) | Linux / Windows (GGUF) |
+|---|---|---|
+| `qwen3-reranker:0.6b:8bit` | `mlx-community/Qwen3-Reranker-0.6B-mxfp8` | `ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF` |
+| `qwen3-reranker:{0.6b,4b,8b}:{f16,8bit,4bit}` | `:8bit` only (`mlx-community/Qwen3-Reranker-*-mxfp8`) | `giladgd/Qwen3-Reranker-*-GGUF` |
+| `bge-reranker-v2-m3:{f16,8bit}` | — | `gpustack/bge-reranker-v2-m3-GGUF` |
+| `jina-reranker-v2:multilingual:{f16,8bit}` | — | `gpustack/jina-reranker-v2-base-multilingual-GGUF` |
 
-> **Re-ranking** requires llama.cpp with `--reranking`. The `/v1/rerank` endpoint returns 501 on oMLX and on the opt-in SGLang engine. See "Reranking — SGLang caveat" under [Configuration](#configuration) for workarounds.
+> **Re-ranking** runs on oMLX (macOS) and llama.cpp (`--reranking`; Linux / Windows); the opt-in SGLang engine returns 501 (see "Reranking — SGLang caveat" under [Configuration](#configuration)). Most community Qwen3-Reranker GGUFs are plain causal-LM conversions without the classification head llama.cpp needs; the catalog points only at files verified to carry it (`cls.output.weight`, rank pooling) — see [Reranking — scores and long documents](#reranking--scores-and-long-documents).
 
 You can also pull any HuggingFace repo directly by its full path:
 
@@ -838,6 +863,9 @@ embed_batch_size  = 32            # max inputs per engine call for /v1/embedding
 | `LMFORGE_SGLANG_MEM_FRACTION` | `0.5` | Opt-in SGLang engine's `--mem-fraction-static` (raise to `0.85` for single-slot deployments). No effect unless you `--engine sglang`. |
 | `LMFORGE_LLAMACPP_NGL` | auto | Force `-ngl <N>` for `llama-server` (0..=99). Default is computed from free VRAM and model size. Set to `0` to disable GPU offload entirely; set to `99` to force full offload. |
 | `LMFORGE_LLAMACPP_CTX` | auto | Force `--ctx-size <N>` for VLM (mmproj) loads. Default scales 1024 → 8192 with post-load free VRAM. Values below 512 are ignored. |
+| `LMFORGE_ENGINE_PORT` | API port + 1 | Base port for engine processes (11431 with the default API port). Derived from `--port`, so two instances on different API ports don't collide. Startup only ever kills a stale port holder that belongs to this instance (its argv references this data/models dir); anything else is reported and left running. |
+| `LMFORGE_LLAMACPP_POOLING_BATCH` | `2048` | `--batch-size`/`--ubatch-size` for loads that must fit a whole input in one micro-batch: rerankers (query+document pair) and mean/CLS-pooled embedders (bge-m3, nomic). It is also the longest input those models accept (`/v1/rerank` truncates documents to it; a longer embedding input gets 400 `input_too_long`). Capped at the trained context; clamped 256..=32768. Cost scales with it: llama-server holds ~`batch × vocab × 4 B` of pinned host RAM while running such an input (bge-m3: ~1 MiB per token, ~2 GiB at 2048) and decoder rerankers the same in VRAM (Qwen3-Reranker: ~1.2 GiB). Last-token-pooled embedders (Qwen3-Embedding) split inputs and keep llama-server's default batch. |
+| `LMFORGE_LLAMACPP_EMBED_CTX` | `8192` | GPU context for embedding models (capped at the trained context). Longer inputs get 400 `input_too_long`. Qwen3-Embedding-0.6B: 2.0 GB VRAM at 8192 vs 4.7 GB at its trained 32768. |
 | `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN` | unset | Used by the downloader for gated repos. |
 
 ### Observability
@@ -1161,9 +1189,10 @@ cargo run -- start                          # equivalent shorthand
 RUST_LOG=debug ./target/debug/lmforge start
 RUST_LOG=debug cargo run -- start           # equivalent shorthand
 
-# Use a different port (e.g. to avoid clashing with an installed daemon)
-./target/debug/lmforge start --port 11431
-cargo run -- start --port 11431             # equivalent shorthand
+# Run beside an installed daemon: another API port (its engines use port + 1)
+# and another data dir — startup reclaims stale engines of its own data dir.
+./target/debug/lmforge --data-dir /tmp/lmforge-dev start --port 11530
+cargo run -- --data-dir /tmp/lmforge-dev start --port 11530   # equivalent shorthand
 ```
 
 #### 4 — Quick smoke-tests while the daemon is running

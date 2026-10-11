@@ -65,7 +65,7 @@ impl EngineAdapter for LlamacppAdapter {
         let mmproj_size_gb = mmproj_path.as_deref().map(file_size_gb).unwrap_or(0.0);
         let is_vlm = mmproj_path.is_some();
 
-        let runtime = plan_runtime(
+        let mut runtime = plan_runtime(
             profile.gpu_vendor,
             profile.total_ram_gb,
             free_vram_gb,
@@ -73,6 +73,19 @@ impl EngineAdapter for LlamacppAdapter {
             mmproj_size_gb,
             is_vlm,
         );
+
+        // Pooled roles run with a known context (see `pooled_plan`); record it
+        // in the plan so the footprint, the calibration key and the spawn args
+        // all agree. Changing pooled sizing therefore re-keys calibration
+        // instead of inheriting a stale (max-only) measurement.
+        let facts = crate::model::rerank_head::model_gguf_facts(model_dir);
+        let pooled = pooled_plan(role, profile.gpu_vendor == GpuVendor::None, facts.as_ref());
+        if let Some(ctx) = pooled.gpu_ctx {
+            runtime.ctx_size = ctx;
+        } else if profile.gpu_vendor == GpuVendor::None && !is_vlm {
+            runtime.ctx_size =
+                cpu_ctx_for_role(runtime.ctx_size, pooled.batch, resolve_cpu_parallel());
+        }
 
         // Spec-dec decision (chat only). The resolver no longer VRAM-gates MTP —
         // the manager folds spec overhead into the footprint and evicts/degrades.
@@ -109,7 +122,26 @@ impl EngineAdapter for LlamacppAdapter {
             is_vlm,
             profile.gpu_vendor,
             &spec,
+            &pooled,
+            facts.as_ref(),
         );
+
+        // Second pass: decide full vs partial offload with the same non-weight
+        // budget (KV + scratch + GPU context) admission uses, so a load the
+        // manager admits without evicting is not then planned as a partial
+        // offload — which the host-RAM gate refused on RAM-tight boxes
+        // (bge-reranker, 1.5 GB free, flat 1.0 GB headroom → ngl 89 → 503).
+        if matches!(
+            profile.gpu_vendor,
+            GpuVendor::Nvidia | GpuVendor::Amd | GpuVendor::Intel
+        ) && ngl_override().is_none()
+        {
+            runtime.ngl = discrete_ngl(
+                free_vram_gb,
+                model_size_gb + mmproj_size_gb,
+                footprint.base_gb() - footprint.weights_gb,
+            );
+        }
 
         LoadPlan {
             footprint,
@@ -258,8 +290,46 @@ impl EngineAdapter for LlamacppAdapter {
                 args.push("--embeddings".to_string());
             }
             ModelRole::Rerank => {
+                // Refuse a GGUF without a reranker head: llama-server would
+                // load it and score every document the same (mradermacher
+                // Qwen3-Reranker conversions — no `cls.output.weight`).
+                if let Err(defect) = crate::model::rerank_head::check_model_dir(model_dir) {
+                    return Err(
+                        crate::engine::adapter::EngineLoadError::InvalidModel(format!(
+                            "'{model_id}' cannot be served as a reranker: {defect}. {}",
+                            crate::model::rerank_head::repull_hint(model_id)
+                        ))
+                        .into(),
+                    );
+                }
                 args.push("--reranking".to_string());
             }
+        }
+
+        // Pooled roles (embed / rerank): batch and context from `pooled_plan`;
+        // `plan.runtime.ctx_size` already carries the resulting context.
+        let cpu_only = matches!(profile.gpu_vendor, GpuVendor::None);
+        let pooled = pooled_plan(
+            role,
+            cpu_only,
+            crate::model::rerank_head::model_gguf_facts(model_dir).as_ref(),
+        );
+        args.extend(pooled.batch_args());
+        if !cpu_only && pooled.gpu_ctx.is_some() {
+            args.push("--ctx-size".to_string());
+            args.push(plan.runtime.ctx_size.to_string());
+            if let Some(slots) = pooled.gpu_parallel {
+                args.push("--parallel".to_string());
+                args.push(slots.to_string());
+            }
+        }
+        if matches!(role, ModelRole::Embed | ModelRole::Rerank) {
+            info!(
+                role = ?role,
+                batch = ?pooled.batch,
+                ctx_size = plan.runtime.ctx_size,
+                "llama.cpp pooled-role sizing"
+            );
         }
 
         // Batch 2 §2.4 — `--flash-attn on`. Measured decode was ~67% of the
@@ -301,17 +371,20 @@ impl EngineAdapter for LlamacppAdapter {
         // together; GPU / Apple paths keep the large default (VRAM headroom and
         // Metal paging make it safe and desirable there). Both are
         // env-overridable: LMFORGE_LLAMACPP_CTX and LMFORGE_LLAMACPP_PARALLEL.
-        if matches!(profile.gpu_vendor, GpuVendor::None) {
+        if cpu_only {
+            let parallel = resolve_cpu_parallel();
+            // plan_load already raised a pooled role's context so each of the
+            // non-unified slots (explicit --parallel) holds one whole input.
+            let ctx_size = plan.runtime.ctx_size;
             // VLM already emitted --ctx-size in the mmproj block above.
             if !is_vlm {
                 args.push("--ctx-size".to_string());
-                args.push(plan.runtime.ctx_size.to_string());
+                args.push(ctx_size.to_string());
             }
-            let parallel = resolve_cpu_parallel();
             args.push("--parallel".to_string());
             args.push(parallel.to_string());
             info!(
-                ctx_size = plan.runtime.ctx_size,
+                ctx_size,
                 parallel, "CPU-only: bounding context + parallel slots to contain KV cache"
             );
         }
@@ -607,6 +680,7 @@ fn file_size_gb(path: &Path) -> f32 {
 ///
 /// This is the cold-start *prior* the manager budgets with; the empirical
 /// calibration cache corrects it after the first successful load.
+#[allow(clippy::too_many_arguments)]
 fn compute_footprint(
     model_dir: &Path,
     model_size_gb: f32,
@@ -615,23 +689,42 @@ fn compute_footprint(
     is_vlm: bool,
     gpu_vendor: GpuVendor,
     spec: &SpecResolved,
+    pooled: &PooledPlan,
+    facts: Option<&crate::model::gguf_inspect::RerankHeadInfo>,
 ) -> crate::hardware::vram::VramFootprint {
     use crate::hardware::vram::VramFootprint;
     const GIB: f32 = 1024.0 * 1024.0 * 1024.0;
 
-    // Effective context the engine will actually use: on GPU chat/embed we don't
-    // pass --ctx-size so llama-server uses its default; VLM/CPU use the plan.
-    let ctx = if is_vlm || gpu_vendor == GpuVendor::None {
+    // Effective context: VLM, CPU and GPU pooled loads pass --ctx-size =
+    // runtime.ctx_size. GPU chat leaves it to llama-server (trained context,
+    // shrunk to fit VRAM), which no prior can know; LLAMACPP_DEFAULT_CTX is the
+    // first-load guess and calibration replaces it with the measured total.
+    let ctx = if is_vlm || gpu_vendor == GpuVendor::None || pooled.gpu_ctx.is_some() {
         runtime.ctx_size
     } else {
         LLAMACPP_DEFAULT_CTX
     };
 
-    let kv_gb = crate::model::gguf_inspect::read_kv_geometry_for_model(model_dir)
-        .map(|g| crate::model::gguf_inspect::kv_cache_bytes(&g, ctx as u64) as f32 / GIB)
-        .unwrap_or(model_size_gb * 0.2);
+    // BERT-style encoders (attention.causal = false) run without a KV cache.
+    let encoder = facts.and_then(|f| f.causal_attention) == Some(false);
+    let kv_gb = if encoder {
+        0.0
+    } else {
+        crate::model::gguf_inspect::read_kv_geometry_for_model(model_dir)
+            .map(|g| crate::model::gguf_inspect::kv_cache_bytes(&g, ctx as u64) as f32 / GIB)
+            .unwrap_or(model_size_gb * 0.2)
+    };
 
-    const SCRATCH_GB: f32 = 0.4;
+    let is_pooled = pooled.batch.is_some() || pooled.gpu_ctx.is_some();
+    let discrete_gpu = matches!(
+        gpu_vendor,
+        GpuVendor::Nvidia | GpuVendor::Amd | GpuVendor::Intel
+    );
+    let scratch_gb = if is_pooled {
+        pooled_scratch_gb(pooled.batch, facts, encoder)
+    } else {
+        SCRATCH_GB
+    } + if discrete_gpu { GPU_CONTEXT_GB } else { 0.0 };
 
     let arch = crate::model::gguf_inspect::read_architecture_for_model(model_dir);
     let spec_gb = spec_overhead_gb(arch.as_deref(), model_size_gb, spec);
@@ -639,10 +732,33 @@ fn compute_footprint(
     VramFootprint {
         weights_gb: model_size_gb + mmproj_size_gb,
         kv_gb,
-        scratch_gb: SCRATCH_GB,
+        scratch_gb,
         spec_gb,
         calibrated_total_gb: None,
     }
+}
+
+/// Compute-scratch prior for chat loads (llama-server's default 512 ubatch).
+const SCRATCH_GB: f32 = 0.4;
+
+/// Compute buffer of a pooled load. Decoders keep their LM head in the graph,
+/// so llama.cpp reserves a `ubatch × vocab` f32 logits buffer — measured on
+/// b9861/CUDA for Qwen3-Reranker-0.6B (vocab 151 669): 299 / 598 / 1201 MiB at
+/// ubatch 512 / 1024 / 2048. Encoders have no LM head; bge-m3 measured 12.5 /
+/// 56 / 320 MiB at 512 / 2048 / 8192, i.e. ~40 KiB per batch token.
+fn pooled_scratch_gb(
+    batch: Option<u32>,
+    facts: Option<&crate::model::gguf_inspect::RerankHeadInfo>,
+    encoder: bool,
+) -> f32 {
+    const GIB: f32 = 1024.0 * 1024.0 * 1024.0;
+    const LLAMACPP_DEFAULT_UBATCH: u32 = 512;
+    let ubatch = batch.unwrap_or(LLAMACPP_DEFAULT_UBATCH) as f32;
+    if encoder {
+        return (ubatch * 40.0 * 1024.0 / GIB).max(0.05);
+    }
+    let vocab = facts.and_then(|f| f.vocab_size).unwrap_or(152_000) as f32;
+    ubatch * vocab * 4.0 / GIB + 0.05
 }
 
 /// Speculative-decoding VRAM overhead (GB). Zero when spec-dec is off.
@@ -692,9 +808,18 @@ pub struct RuntimePlan {
     pub free_vram_gb: f32,
 }
 
-/// llama-server's default context window when `--ctx-size` is not passed
-/// (chat/embed on GPU). Used by the footprint estimator to size the KV cache.
+/// First-load KV prior for GPU chat, where `--ctx-size` is not passed. (b9861
+/// actually uses the trained context, shrunk to fit free VRAM — unknowable up
+/// front; the calibration cache replaces this with the measured total.)
 const LLAMACPP_DEFAULT_CTX: u32 = 4096;
+
+/// `LMFORGE_LLAMACPP_NGL` (0..=99), when set.
+fn ngl_override() -> Option<u32> {
+    std::env::var("LMFORGE_LLAMACPP_NGL")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(|n| n.min(99))
+}
 
 /// Compute `-ngl` and `--ctx-size` from the live VRAM budget and model size.
 ///
@@ -718,10 +843,7 @@ fn plan_runtime(
     mmproj_size_gb: f32,
     is_vlm: bool,
 ) -> RuntimePlan {
-    let ngl_override = std::env::var("LMFORGE_LLAMACPP_NGL")
-        .ok()
-        .and_then(|s| s.parse::<u32>().ok())
-        .map(|n| n.min(99));
+    let ngl_override = ngl_override();
     let ctx_override = std::env::var("LMFORGE_LLAMACPP_CTX")
         .ok()
         .and_then(|s| s.parse::<u32>().ok())
@@ -738,22 +860,10 @@ fn plan_runtime(
             // (see hardware::vram::estimate_intel_vram), so `free_vram_gb`
             // is already a conservative shared-RAM-based number.
             GpuVendor::Nvidia | GpuVendor::Amd | GpuVendor::Intel => {
-                // 1.0 GB compute-scratch + KV-growth headroom on top of
-                // the weights themselves (mmproj also lives in VRAM).
-                const SCRATCH_GB: f32 = 1.0;
-                let needed = model_size_gb + mmproj_size_gb;
-                let budget = (free_vram_gb - SCRATCH_GB).max(0.0);
-                if needed <= 0.0 || budget <= 0.0 {
-                    0
-                } else if needed <= budget {
-                    99
-                } else {
-                    // Proportional partial offload; clamp 1..=98 so we never
-                    // claim "all layers" when we can't actually fit them, and
-                    // never go to 0 when we have *some* budget.
-                    let fraction = (budget / needed).clamp(0.0, 1.0);
-                    ((fraction * 99.0).floor() as u32).clamp(1, 98)
-                }
+                // First pass: a flat 1.0 GB compute-scratch + KV headroom on
+                // top of the weights. plan_load re-decides with the model's
+                // own footprint once it is known (`discrete_ngl`).
+                discrete_ngl(free_vram_gb, model_size_gb + mmproj_size_gb, 1.0)
             }
         }
     };
@@ -791,6 +901,27 @@ fn plan_runtime(
         free_vram_gb,
     }
 }
+
+/// `-ngl` on a discrete GPU: full offload when the weights plus `headroom_gb`
+/// (everything else the load allocates in VRAM) fit `free_vram_gb`, else a
+/// proportional partial offload clamped to 1..=98 (never "all layers" when
+/// they can't fit, never 0 when there is *some* budget).
+fn discrete_ngl(free_vram_gb: f32, weights_gb: f32, headroom_gb: f32) -> u32 {
+    let budget = (free_vram_gb - headroom_gb).max(0.0);
+    if weights_gb <= 0.0 || budget <= 0.0 {
+        0
+    } else if weights_gb <= budget {
+        99
+    } else {
+        let fraction = (budget / weights_gb).clamp(0.0, 1.0);
+        ((fraction * 99.0).floor() as u32).clamp(1, 98)
+    }
+}
+
+/// CUDA/Vulkan context a llama-server process allocates on the device before
+/// any model tensor (~0.3 GB on b9861/CUDA). Part of the discrete-GPU
+/// footprint so admission and the offload decision budget the same total.
+const GPU_CONTEXT_GB: f32 = 0.3;
 
 /// `--flash-attn on` argument pair (Batch 2 §2.4), gated to CUDA variants
 /// only. `on` is the b9861 explicit-enable form (the flag also accepts
@@ -940,6 +1071,153 @@ pub(crate) fn resolve_cpu_parallel() -> u32 {
         .and_then(|s| s.parse::<u32>().ok())
         .map(|n| n.clamp(1, 16))
         .unwrap_or(1)
+}
+
+/// Env override for the pooled-role (Embed/Rerank) batch: the token budget
+/// one embedding input or one rerank query+document pair may occupy.
+pub const LMFORGE_LLAMACPP_POOLING_BATCH_ENV: &str = "LMFORGE_LLAMACPP_POOLING_BATCH";
+
+/// Default pooled-role batch. Matches llama.cpp's own logical `n_batch`
+/// default; measured on b9861 (Metal) the Qwen3-Reranker-0.6B compute buffer
+/// grows 338 MiB → 1.2 GiB from ubatch 512 → 2048, bge-reranker-v2-m3 16 → 57 MiB.
+const DEFAULT_POOLING_BATCH: u32 = 2048;
+
+/// Slots llama-server picks when `--parallel` is not passed (`-np auto`).
+const LLAMACPP_AUTO_SLOTS: u32 = 4;
+
+/// The `-b/-ub` value for pooled roles: the override (clamped to
+/// 256..=32768) or [`DEFAULT_POOLING_BATCH`], capped at the model's trained
+/// context (jina-reranker-v2: 1024). `/v1/rerank` truncates documents to this
+/// same window, so both sides must call this one function.
+pub fn pooling_window(model_ctx_train: Option<u64>) -> u32 {
+    let requested = std::env::var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV)
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(|n| n.clamp(256, 32768))
+        .unwrap_or(DEFAULT_POOLING_BATCH);
+    match model_ctx_train {
+        Some(n) if n > 0 => requested.min(u32::try_from(n).unwrap_or(u32::MAX)),
+        _ => requested,
+    }
+}
+
+/// Env override for the GPU embedding context (tokens). Default 8192, capped
+/// at the model's trained context.
+pub const LMFORGE_LLAMACPP_EMBED_CTX_ENV: &str = "LMFORGE_LLAMACPP_EMBED_CTX";
+
+/// Default GPU context for embedding models — OpenAI's own embedding input
+/// limit is 8191 tokens. Measured on b9861/CUDA, Qwen3-Embedding-0.6B at its
+/// trained 32768 takes 4.7 GB (3.5 GB KV); at 8192 it takes 2.0 GB.
+const DEFAULT_EMBED_CTX: u32 = 8192;
+
+/// llama.cpp `LLAMA_POOLING_TYPE_LAST`: the only pooled mode whose inputs
+/// llama-server can split across micro-batches (causal attention + KV).
+const POOLING_TYPE_LAST: u64 = 3;
+
+/// Batch and context for an embed / rerank load. Empty for chat.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PooledPlan {
+    /// `--batch-size`/`--ubatch-size`: set when a whole input must fit one
+    /// micro-batch (rerank always; embedders whose pooling isn't LAST).
+    pub batch: Option<u32>,
+    /// GPU `--ctx-size` (unset on CPU, where `cpu_ctx_for_role` applies).
+    pub gpu_ctx: Option<u32>,
+    /// GPU `--parallel`, when the context is split into fixed slots.
+    pub gpu_parallel: Option<u32>,
+}
+
+impl PooledPlan {
+    fn batch_args(&self) -> Vec<String> {
+        match self.batch {
+            Some(b) => vec![
+                "--batch-size".to_string(),
+                b.to_string(),
+                "--ubatch-size".to_string(),
+                b.to_string(),
+            ],
+            None => Vec::new(),
+        }
+    }
+}
+
+/// Size a pooled load from the GGUF's facts.
+///
+/// * **Rerank** — RANK pooling never splits an input, so the pair must fit one
+///   micro-batch: batch = [`pooling_window`]. On GPU the context is exactly one
+///   window per slot (`window × 4`, 4 slots): more is unusable, and leaving it
+///   to llama-server sizes the KV cache to the trained context
+///   (Qwen3-Reranker-0.6B: 4480 → 896 MiB).
+/// * **Embed** — last-token-pooled embedders (Qwen3-Embedding) split long
+///   inputs across micro-batches, so they keep llama-server's default batch: a
+///   2048 batch only adds `batch × vocab × 4 B` of logits buffer (+1 GB,
+///   measured). Mean/CLS-pooled encoders (bge-m3, nomic) can't split and get
+///   batch = window (inputs up to 2048 tokens by default; the batch also caps
+///   llama-server's ~`batch × vocab × 4 B` pinned host buffer). On GPU the
+///   context is capped at
+///   `LMFORGE_LLAMACPP_EMBED_CTX` (default 8192, ≤ trained context), unified
+///   across slots, so one input may still use all of it.
+/// * Bit-equal on CPU and GPU except the context, which on CPU stays the
+///   RAM-tiered plan raised by [`cpu_ctx_for_role`].
+pub(crate) fn pooled_plan(
+    role: ModelRole,
+    cpu_only: bool,
+    facts: Option<&crate::model::gguf_inspect::RerankHeadInfo>,
+) -> PooledPlan {
+    let ctx_train = facts.and_then(|f| f.context_length);
+    match role {
+        ModelRole::Chat => PooledPlan::default(),
+        ModelRole::Rerank => {
+            let window = pooling_window(ctx_train);
+            PooledPlan {
+                batch: Some(window),
+                gpu_ctx: (!cpu_only).then_some(window * LLAMACPP_AUTO_SLOTS),
+                gpu_parallel: (!cpu_only).then_some(LLAMACPP_AUTO_SLOTS),
+            }
+        }
+        ModelRole::Embed => {
+            let splittable = facts.and_then(|f| f.pooling_type) == Some(POOLING_TYPE_LAST);
+            // Not the whole context: llama-server holds a pinned host buffer of
+            // ~`ubatch × vocab × 4 B` while it runs an unsplittable input, so a
+            // batch is also a host-RAM ceiling (bge-m3, vocab 250k: 1 MiB per
+            // input token — an 8192 batch let a 6k-token input take 6 GB and
+            // get OOM-killed on a 16 GB box; measured b9861/CUDA).
+            let batch = (!splittable).then(|| pooling_window(ctx_train));
+            let gpu_ctx = (!cpu_only).then(|| embed_ctx(ctx_train).max(batch.unwrap_or(0)));
+            PooledPlan {
+                batch,
+                gpu_ctx,
+                gpu_parallel: None,
+            }
+        }
+    }
+}
+
+/// GPU embedding context: the override (clamped 512..=262144) or
+/// [`DEFAULT_EMBED_CTX`], capped at the trained context.
+fn embed_ctx(ctx_train: Option<u64>) -> u32 {
+    let requested = std::env::var(LMFORGE_LLAMACPP_EMBED_CTX_ENV)
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(|n| n.clamp(512, 262_144))
+        .unwrap_or(DEFAULT_EMBED_CTX);
+    match ctx_train {
+        Some(n) if n > 0 => requested.min(u32::try_from(n).unwrap_or(u32::MAX)),
+        _ => requested,
+    }
+}
+
+/// CPU `--ctx-size` for a role: the planned (RAM-tiered or overridden)
+/// context, raised so each of the `parallel` non-unified slots holds at
+/// least one pooled window. Chat (no window) keeps the plan unchanged.
+pub(crate) fn cpu_ctx_for_role(
+    planned_ctx: u32,
+    pooling_window: Option<u32>,
+    parallel: u32,
+) -> u32 {
+    match pooling_window {
+        Some(w) => planned_ctx.max(w.saturating_mul(parallel.max(1))),
+        None => planned_ctx,
+    }
 }
 
 /// Look up the model's `capabilities.mtp` flag from the on-disk index.
@@ -1732,6 +2010,181 @@ mod tests {
             args.is_empty(),
             "only the exact value `q8_0` is supported today"
         );
+    }
+
+    // ── pooled-role batch sizing (Embed / Rerank) ─────────────────────────
+
+    #[test]
+    fn pooling_window_defaults_to_2048_capped_by_trained_context() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV) };
+        assert_eq!(pooling_window(Some(40960)), 2048); // Qwen3-Reranker
+        assert_eq!(pooling_window(Some(1024)), 1024); // jina-reranker-v2
+        assert_eq!(pooling_window(None), 2048);
+        assert_eq!(pooling_window(Some(0)), 2048);
+    }
+
+    #[test]
+    fn pooling_window_env_override_is_clamped() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV, "4096") };
+        let raised = pooling_window(Some(8192));
+        unsafe { std::env::set_var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV, "16") };
+        let floored = pooling_window(None);
+        unsafe { std::env::set_var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV, "lots") };
+        let ignored = pooling_window(None);
+        unsafe { std::env::remove_var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV) };
+        assert_eq!(raised, 4096);
+        assert_eq!(floored, 256);
+        assert_eq!(ignored, 2048);
+    }
+
+    fn facts(
+        arch: &str,
+        pooling: Option<u64>,
+        ctx_train: u64,
+        causal: Option<bool>,
+    ) -> crate::model::gguf_inspect::RerankHeadInfo {
+        crate::model::gguf_inspect::RerankHeadInfo {
+            architecture: Some(arch.to_string()),
+            pooling_type: pooling,
+            context_length: Some(ctx_train),
+            causal_attention: causal,
+            vocab_size: Some(151_669),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn rerank_fits_a_whole_pair_per_micro_batch_and_one_window_per_slot() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV) };
+        let qwen = facts("qwen3", Some(4), 40960, None);
+        let gpu = pooled_plan(ModelRole::Rerank, false, Some(&qwen));
+        assert_eq!(gpu.batch, Some(2048));
+        assert_eq!(gpu.gpu_ctx, Some(8192));
+        assert_eq!(gpu.gpu_parallel, Some(4));
+        assert_eq!(
+            gpu.batch_args(),
+            ["--batch-size", "2048", "--ubatch-size", "2048"]
+        );
+        // jina-reranker-v2: window capped by the 1024 trained context.
+        let jina = facts("bert", None, 1024, Some(false));
+        assert_eq!(
+            pooled_plan(ModelRole::Rerank, false, Some(&jina)).gpu_ctx,
+            Some(4096)
+        );
+        // CPU: batch only; context/slots come from the CPU block.
+        let cpu = pooled_plan(ModelRole::Rerank, true, Some(&qwen));
+        assert_eq!(
+            (cpu.batch, cpu.gpu_ctx, cpu.gpu_parallel),
+            (Some(2048), None, None)
+        );
+    }
+
+    #[test]
+    fn last_pooled_embedder_keeps_default_batch_and_caps_context() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV);
+            std::env::remove_var(LMFORGE_LLAMACPP_EMBED_CTX_ENV);
+        }
+        // Qwen3-Embedding: pooling LAST (3), trained 32768.
+        let qwen = facts("qwen3", Some(3), 32768, None);
+        let p = pooled_plan(ModelRole::Embed, false, Some(&qwen));
+        assert_eq!(
+            p.batch, None,
+            "LAST pooling splits; a big batch only adds logits buffer"
+        );
+        assert!(p.batch_args().is_empty());
+        assert_eq!(p.gpu_ctx, Some(8192));
+        assert_eq!(p.gpu_parallel, None, "unified: one input may use all 8192");
+    }
+
+    #[test]
+    fn mean_pooled_encoder_embedder_gets_a_whole_input_batch() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var(LMFORGE_LLAMACPP_POOLING_BATCH_ENV);
+            std::env::remove_var(LMFORGE_LLAMACPP_EMBED_CTX_ENV);
+        }
+        // bge-m3: bert, mean pooling (1), trained 8192. The batch stays at the
+        // window: it bounds the ~batch × vocab × 4 B pinned host buffer.
+        let bge = facts("bert", Some(1), 8192, Some(false));
+        let p = pooled_plan(ModelRole::Embed, false, Some(&bge));
+        assert_eq!(p.batch, Some(2048));
+        assert_eq!(p.gpu_ctx, Some(8192));
+        // A mean-pooled *decoder* pays the logits buffer: pooling window.
+        let dec = facts("qwen2", Some(1), 32768, None);
+        assert_eq!(
+            pooled_plan(ModelRole::Embed, false, Some(&dec)).batch,
+            Some(2048)
+        );
+        // nomic-embed (2048 trained): context never below the batch.
+        let nomic = facts("nomic-bert", Some(1), 2048, Some(false));
+        let p = pooled_plan(ModelRole::Embed, false, Some(&nomic));
+        assert_eq!((p.batch, p.gpu_ctx), (Some(2048), Some(2048)));
+        // Unknown pooling (facts unreadable) is treated as unsplittable.
+        assert_eq!(pooled_plan(ModelRole::Embed, false, None).batch, Some(2048));
+    }
+
+    #[test]
+    fn embed_context_override_is_clamped_and_capped() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var(LMFORGE_LLAMACPP_EMBED_CTX_ENV, "32768") };
+        let raised = embed_ctx(Some(32768));
+        let capped = embed_ctx(Some(16384));
+        unsafe { std::env::set_var(LMFORGE_LLAMACPP_EMBED_CTX_ENV, "10") };
+        let floored = embed_ctx(None);
+        unsafe { std::env::remove_var(LMFORGE_LLAMACPP_EMBED_CTX_ENV) };
+        assert_eq!((raised, capped, floored), (32768, 16384, 512));
+    }
+
+    #[test]
+    fn offload_decision_uses_the_models_own_headroom() {
+        // 2026-10-06 Ubuntu QA: bge-reranker (0.59 GB) with 1.53 GB free.
+        // The flat 1.0 GB headroom planned a partial offload (ngl 89) that the
+        // host-RAM gate then refused; its real non-weight footprint is ~0.4 GB.
+        assert_eq!(discrete_ngl(1.534, 0.592, 1.0), 89);
+        let bge_headroom = pooled_scratch_gb(Some(2048), None, true) + GPU_CONTEXT_GB;
+        assert_eq!(discrete_ngl(1.534, 0.592, bge_headroom), 99);
+        // Genuinely too big → proportional, never 0 or 99.
+        assert_eq!(discrete_ngl(3.0, 5.0, 1.0), 39);
+        assert_eq!(discrete_ngl(0.5, 5.0, 1.0), 0);
+        assert_eq!(discrete_ngl(100.0, 0.0, 1.0), 0);
+    }
+
+    #[test]
+    fn chat_has_no_pooled_sizing() {
+        assert_eq!(
+            pooled_plan(ModelRole::Chat, false, None),
+            PooledPlan::default()
+        );
+    }
+
+    #[test]
+    fn pooled_scratch_matches_measured_logits_buffer() {
+        // Measured (b9861, CUDA, Qwen3-Reranker-0.6B): 299 MiB @512, 1201 MiB @2048.
+        let qwen = facts("qwen3", Some(4), 40960, None);
+        let at_512 = pooled_scratch_gb(Some(512), Some(&qwen), false);
+        let at_2048 = pooled_scratch_gb(Some(2048), Some(&qwen), false);
+        assert!((at_512 - (299.0 / 1024.0)).abs() < 0.07, "{at_512}");
+        assert!((at_2048 - (1201.0 / 1024.0)).abs() < 0.07, "{at_2048}");
+        // Encoders: no LM head (bge-m3 measured 56 MiB @2048, 320 MiB @8192).
+        assert!((pooled_scratch_gb(Some(2048), None, true) - 0.078).abs() < 0.03);
+        assert!((pooled_scratch_gb(Some(8192), None, true) - 0.3125).abs() < 0.03);
+    }
+
+    #[test]
+    fn cpu_context_holds_one_window_per_slot_for_pooled_roles() {
+        // Default CPU plan (RAM-tiered 4096, 1 slot) already fits a 2048 window.
+        assert_eq!(cpu_ctx_for_role(4096, Some(2048), 1), 4096);
+        // Operator asked for 4 slots / 4096 ctx: raise so each slot holds 2048.
+        assert_eq!(cpu_ctx_for_role(4096, Some(2048), 4), 8192);
+        // Operator shrank ctx below the window.
+        assert_eq!(cpu_ctx_for_role(1024, Some(2048), 1), 2048);
+        // Chat is untouched.
+        assert_eq!(cpu_ctx_for_role(1024, None, 4), 1024);
     }
 
     #[test]

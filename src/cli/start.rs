@@ -69,7 +69,7 @@ pub async fn run(
         .ok()
         .filter(|s| !s.is_empty())
         .or_else(|| config.api_key.clone());
-    let engine_port: u16 = 11431; // Internal engine port
+    let engine_port = resolve_engine_port(api_port)?;
     let data_dir = config.data_dir();
     let models_dir = config.models_dir();
 
@@ -133,7 +133,7 @@ pub async fn run(
     // 2. Proactive startup cleanup — kill any stale LMForge or engine processes
     //    and verify both ports are free BEFORE we do anything expensive.
     //    This must happen before hardware probe, engine spawn, or model load.
-    startup_cleanup(&data_dir, api_port, engine_port).await?;
+    startup_cleanup(&data_dir, &models_dir, api_port, engine_port).await?;
 
     // 3. Load or probe hardware
     let profile = if data_dir.join("hardware.json").exists() {
@@ -230,6 +230,8 @@ pub async fn run(
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
 
     let state = manager.state();
+    let shutdown_state = state.clone();
+    let shutdown_tx = cmd_tx.clone();
     let residency_kind = manager.residency_kind();
     let pull_in_flight = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     println!("\n✓ LMForge Orchestrator ready");
@@ -384,16 +386,73 @@ pub async fn run(
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(async {
-        tokio::signal::ctrl_c().await.ok();
+        shutdown_signal().await;
         println!("\n⚙ Shutting down...");
     })
     .await?;
 
+    // Stop engines through the manager (graceful per-adapter stop), bounded.
+    // Aborting the supervisor alone only drops the engine handles.
+    drain_engines(&shutdown_tx, &shutdown_state).await;
     supervise_handle.abort();
     engine::daemon::remove_pid_file(&data_dir);
     println!("✓ LMForge stopped.");
 
     Ok(())
+}
+
+/// Ctrl-C, or SIGTERM on Unix — what systemd / launchd send on `service stop`
+/// and what `lmforge stop` falls back to. The daemon used to handle only
+/// Ctrl-C, so a SIGTERM killed it on the spot and every engine was reparented
+/// to init, holding VRAM / RAM until the next start (seen in 2026-10-06 QA).
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = term.recv() => {}
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "SIGTERM handler unavailable; only Ctrl-C triggers a clean shutdown");
+                tokio::signal::ctrl_c().await.ok();
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await.ok();
+    }
+}
+
+/// Ask the manager to unload every model and wait (≤ 15 s) until it reports
+/// none running.
+async fn drain_engines(
+    cmd_tx: &tokio::sync::mpsc::Sender<crate::engine::manager::ManagerCommand>,
+    state: &std::sync::Arc<tokio::sync::RwLock<crate::engine::manager::EngineState>>,
+) {
+    if state.read().await.running_models.is_empty() {
+        return;
+    }
+    if cmd_tx
+        .send(crate::engine::manager::ManagerCommand::UnloadAll)
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::time::Instant::now() < deadline {
+        if state.read().await.running_models.is_empty() {
+            info!("All engines stopped");
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    warn!("Engines still running after 15 s; exiting (handles are dropped and killed)");
 }
 
 /// Execute a synchronous pending migration drain after dirs are ready.
@@ -527,6 +586,7 @@ pub(crate) async fn run_background_migration(
 ///      Returns Err if either port is still occupied after all attempts.
 async fn startup_cleanup(
     data_dir: &std::path::Path,
+    models_dir: &std::path::Path,
     api_port: u16,
     engine_port: u16,
 ) -> anyhow::Result<()> {
@@ -537,8 +597,12 @@ async fn startup_cleanup(
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Verify both ports are free, with last-resort lsof kill if not
-    ensure_port_free(api_port).await?;
-    ensure_port_free(engine_port).await?;
+    // Only this instance's processes may be killed: engines carry the data or
+    // models dir in their argv; a hung daemon on *our* API port is an lmforge
+    // binary. Anything else (another instance, an unrelated app) is an error.
+    let roots = crate::util::port_owner::owned_roots(&[data_dir, models_dir]);
+    ensure_port_free(api_port, &roots, &["lmforge"], "--port").await?;
+    ensure_port_free(engine_port, &roots, &[], "LMFORGE_ENGINE_PORT").await?;
 
     Ok(())
 }
@@ -625,20 +689,24 @@ fn kill_engine_pid_files(data_dir: &std::path::Path) {
     }
 }
 
-/// Ensure a TCP port is free.  If it is still bound after PID-based kills,
-/// use `lsof` to find and kill the holding process, then wait up to 10s.
-async fn ensure_port_free(port: u16) -> anyhow::Result<()> {
-    // Fast path — already free
+/// Ensure a TCP port is free. If it is still bound after the PID-file kills,
+/// kill the listeners this instance owns (see `util::port_owner`), then wait
+/// up to 10s. A port held by someone else is an error, never a kill.
+async fn ensure_port_free(
+    port: u16,
+    owned_roots: &[std::path::PathBuf],
+    owned_exes: &[&str],
+    override_hint: &str,
+) -> anyhow::Result<()> {
     if is_port_free(port).await {
         return Ok(());
     }
 
-    // Last resort: ask lsof who is holding the port and kill it
     warn!(
         port,
-        "Port still occupied after PID cleanup — using lsof to identify holder"
+        "Port still occupied after PID cleanup — checking who listens on it"
     );
-    kill_port_holder_via_lsof(port);
+    let foreign = crate::util::port_owner::kill_owned_listeners(port, owned_roots, owned_exes);
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
     for _ in 0..9 {
@@ -648,18 +716,48 @@ async fn ensure_port_free(port: u16) -> anyhow::Result<()> {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
 
-    #[cfg(unix)]
-    let manual_hint = format!("lsof -ti :{port} | xargs kill -9");
-    #[cfg(windows)]
-    let manual_hint = format!(
-        "for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :{port}') do taskkill /F /PID %a"
-    );
-
+    let holders = if foreign.is_empty() {
+        "an unidentified process".to_string()
+    } else {
+        foreign
+            .iter()
+            .map(|(pid, cmd)| format!("pid {pid} ({cmd})"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     anyhow::bail!(
-        "Port {} is still occupied after cleanup. Kill it manually:\n  {}",
-        port,
-        manual_hint
+        "Port {port} is held by {holders}, which this LMForge instance does not own, so it \
+         was left running. Stop it, or pick another port with {override_hint}."
     )
+}
+
+/// Internal engine base port: `LMFORGE_ENGINE_PORT`, else the API port + 1
+/// (11430 → 11431 by default). Deriving it from the API port is what lets two
+/// instances on different `--port`s coexist; a fixed 11431 made the second
+/// one reclaim — i.e. kill — the first one's engine.
+fn resolve_engine_port(api_port: u16) -> anyhow::Result<u16> {
+    engine_port_from(
+        api_port,
+        std::env::var("LMFORGE_ENGINE_PORT").ok().as_deref(),
+    )
+}
+
+fn engine_port_from(api_port: u16, env: Option<&str>) -> anyhow::Result<u16> {
+    match env.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(v) => {
+            let p: u16 = v
+                .parse()
+                .map_err(|_| anyhow::anyhow!("LMFORGE_ENGINE_PORT={v} is not a port number"))?;
+            anyhow::ensure!(
+                p != 0 && p != api_port,
+                "LMFORGE_ENGINE_PORT must be non-zero and differ from the API port ({api_port})"
+            );
+            Ok(p)
+        }
+        None => api_port.checked_add(1).ok_or_else(|| {
+            anyhow::anyhow!("API port {api_port} leaves no room for the engine port")
+        }),
+    }
 }
 
 /// Check if a LMForge daemon is already listening and healthy on this port.
@@ -794,49 +892,6 @@ async fn is_port_free(port: u16) -> bool {
     tokio::net::TcpListener::bind(("127.0.0.1", port))
         .await
         .is_ok()
-}
-
-/// Use `lsof` (Unix) or `netstat`+`taskkill` (Windows) to free a held port.
-fn kill_port_holder_via_lsof(port: u16) {
-    #[cfg(unix)]
-    {
-        let output = std::process::Command::new("lsof")
-            .args(["-ti", &format!(":{}", port)])
-            .output();
-        if let Ok(out) = output {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            for line in stdout.lines() {
-                if let Ok(pid) = line.trim().parse::<u32>() {
-                    use nix::sys::signal::{Signal, kill};
-                    use nix::unistd::Pid;
-                    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
-                    warn!(pid, port, "Sent SIGKILL to port holder (via lsof)");
-                }
-            }
-        }
-    }
-
-    #[cfg(windows)]
-    {
-        // netstat -ano | findstr :<port>  → last column is PID
-        let output = crate::util::subprocess::hidden("netstat")
-            .args(["-ano"])
-            .output();
-        if let Ok(out) = output {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            for line in stdout.lines() {
-                if (line.contains(&format!(":{} ", port)) || line.contains(&format!(":{}	", port)))
-                    && let Some(pid_str) = line.split_whitespace().last()
-                    && let Ok(pid) = pid_str.trim().parse::<u32>()
-                {
-                    let _ = crate::util::subprocess::hidden("taskkill")
-                        .args(["/F", "/PID", &pid.to_string()])
-                        .output();
-                    warn!(pid, port, "Sent taskkill /F to port holder (via netstat)");
-                }
-            }
-        }
-    }
 }
 
 /// True when the bind address is a loopback address.
@@ -993,6 +1048,22 @@ fn command_exists(cmd: &str) -> bool {
 mod tests {
     use super::*;
     use crate::engine::registry::{EngineConfig, EngineTier};
+
+    #[test]
+    fn engine_port_follows_the_api_port() {
+        assert_eq!(engine_port_from(11430, None).unwrap(), 11431);
+        assert_eq!(engine_port_from(11530, None).unwrap(), 11531);
+        assert_eq!(engine_port_from(11530, Some("  ")).unwrap(), 11531);
+        assert!(engine_port_from(u16::MAX, None).is_err());
+    }
+
+    #[test]
+    fn engine_port_env_override_is_validated() {
+        assert_eq!(engine_port_from(11430, Some("12000")).unwrap(), 12000);
+        assert!(engine_port_from(11430, Some("11430")).is_err());
+        assert!(engine_port_from(11430, Some("0")).is_err());
+        assert!(engine_port_from(11430, Some("eleven")).is_err());
+    }
 
     fn experimental_cfg() -> EngineConfig {
         EngineConfig {

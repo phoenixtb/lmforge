@@ -636,7 +636,17 @@ pub async fn embeddings(State(state): State<AppState>, body: Bytes) -> impl Into
         }
     };
 
+    // llama-server reports an input longer than the loaded context as a 500;
+    // it is the caller's input, so answer 400 like OpenAI's own length error.
+    // (The batched path surfaces engine errors as Err, the single path as Ok.)
+    let result = result.map(map_embed_oversize).map_err(map_embed_oversize);
+
     let response = match result {
+        Ok((status, text)) if status >= 400 => Response::builder()
+            .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(text))
+            .unwrap(),
         Ok((status, text)) => {
             // --- Dim auto-detection (fire-and-forget background task) ---
             let data_dir = state.data_dir.clone();
@@ -660,6 +670,29 @@ pub async fn embeddings(State(state): State<AppState>, body: Bytes) -> impl Into
             .unwrap(),
     };
     super::attach_inflight_guard(response, guard)
+}
+
+fn map_embed_oversize((status, text): (u16, String)) -> (u16, String) {
+    if status >= 400 && proxy::is_engine_input_too_long(&proxy::engine_error_message(&text)) {
+        (400, embed_input_too_long_body(&text))
+    } else {
+        (status, text)
+    }
+}
+
+/// 400 body for an embedding input the loaded model can't hold.
+fn embed_input_too_long_body(engine_body: &str) -> String {
+    let detail = proxy::engine_error_message(engine_body);
+    serde_json::json!({"error": {
+        "message": format!(
+            "An input exceeds this embedding model's context window: {detail}. Split the \
+             input, or on llama.cpp raise LMFORGE_LLAMACPP_EMBED_CTX (default 8192 tokens)."
+        ),
+        "type": "invalid_request_error",
+        "param": "input",
+        "code": "input_too_long",
+    }})
+    .to_string()
 }
 
 /// Split a large input array across multiple engine calls of at most `batch_size` items,

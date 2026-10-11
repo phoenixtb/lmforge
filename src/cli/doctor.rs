@@ -27,7 +27,28 @@ pub async fn run(config: &LmForgeConfig) -> Result<()> {
     print_active_engine_gate(&profile, &data_dir);
     println!();
     print_runtime_hints(&profile, active);
+    print_reranker_heads(config);
     Ok(())
+}
+
+/// Installed GGUF rerankers without a usable classification head — chiefly
+/// Qwen3-Reranker pulled from the pre-0.3.0 catalog (mradermacher conversions),
+/// which llama.cpp scores as a constant. Silent when every reranker is fine.
+fn print_reranker_heads(config: &LmForgeConfig) {
+    let Ok(index) = crate::model::index::ModelIndex::load(&config.data_dir(), &config.models_dir())
+    else {
+        return;
+    };
+    let defective = crate::model::rerank_head::defective_gguf_rerankers(&index);
+    if defective.is_empty() {
+        return;
+    }
+    println!();
+    println!("Rerankers — unusable GGUF installs");
+    for (id, defect) in defective {
+        println!("  ✗ {id}: {defect}");
+        println!("    {}", crate::model::rerank_head::repull_hint(&id));
+    }
 }
 
 /// P1c hardening check: when the hardware identity records a GPU vendor, a

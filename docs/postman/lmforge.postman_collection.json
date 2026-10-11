@@ -190,7 +190,8 @@
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": { "mode": "raw", "raw": "{\n  \"model\": \"{{rerankModel}}\",\n  \"query\": \"What is quantum computing?\",\n  \"documents\": [\n    \"Quantum computers use qubits to perform computation.\",\n    \"The mitochondria is the powerhouse of the cell.\",\n    \"Superposition and entanglement enable quantum speedups.\"\n  ],\n  \"top_n\": 3,\n  \"return_documents\": true\n}" },
-            "url": { "raw": "{{baseUrl}}/v1/rerank", "host": ["{{baseUrl}}"], "path": ["v1", "rerank"] }
+            "url": { "raw": "{{baseUrl}}/v1/rerank", "host": ["{{baseUrl}}"], "path": ["v1", "rerank"] },
+            "description": "relevance_score is a relevance probability in [0, 1] on every engine; the response carries \"score_type\": \"probability\". Documents longer than the model's query+document window are truncated from the end (llama.cpp lists them in meta.truncated_documents) instead of failing the request. A reranker GGUF without a classification head answers 422 reranker_unusable."
           }
         }
       ]

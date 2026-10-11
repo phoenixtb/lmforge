@@ -20,6 +20,23 @@ pub fn build_proxy_client() -> Client {
         .expect("Failed to build proxy HTTP client")
 }
 
+/// llama-server's wording for an input that can't fit the loaded context or
+/// micro-batch (`input (N tokens) is too large to process…`, `…is larger than
+/// the max context size…`). It reports these as HTTP 500, but the cause is the
+/// caller's input, so handlers map them to 400.
+pub fn is_engine_input_too_long(engine_message: &str) -> bool {
+    engine_message.contains("too large to process")
+        || engine_message.contains("larger than the max context size")
+}
+
+/// The `error.message` of an engine error body, or the raw body.
+pub fn engine_error_message(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
+        .unwrap_or_else(|| body.to_string())
+}
+
 /// Proxy a non-streaming request to the engine backend
 pub async fn proxy_request(
     client: &Client,

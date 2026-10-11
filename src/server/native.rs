@@ -541,6 +541,32 @@ pub async fn pull_core(
 
     let succeeded = dl_handle.await.unwrap_or(false);
 
+    // A headless GGUF reranker would load and score every document the same:
+    // refuse to index it (mirrors cli/pull.rs).
+    if succeeded {
+        let caps = crate::model::index::detect_capabilities(
+            &model_dir,
+            Some(&resolved.id),
+            Some(&resolved.hf_repo),
+        );
+        if let Some(msg) = crate::model::rerank_head::pull_rejection(
+            &resolved.id,
+            &resolved.hf_repo,
+            &model_dir,
+            matches!(resolved.format, crate::model::resolver::ModelFormat::Gguf),
+            caps.reranking,
+        ) {
+            tracing::warn!(model = %resolved.id, "{msg}");
+            if let Some(tx) = &sse_tx {
+                let _ = tx
+                    .send(DownloadProgress::Failed { error: msg.clone() })
+                    .await;
+            }
+            *state.active_pull.write().await = None;
+            return Err(msg);
+        }
+    }
+
     if succeeded {
         // Update ModelIndex now that weights are on disk.
         if let Ok(mut idx) = crate::model::index::ModelIndex::load(&data_dir, &models_dir) {
